@@ -2,6 +2,7 @@ mod ast;
 mod codegen;
 mod lexer;
 mod parser;
+mod nia_std;
 mod typecheck;
 
 use std::path::PathBuf;

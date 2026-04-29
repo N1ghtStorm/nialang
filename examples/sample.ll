@@ -2,12 +2,26 @@
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "unknown-unknown-unknown"
 
+; --- nialang std ---
+@nialang.std.println.fmt = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
+
+declare i32 @printf(ptr nocapture, ...)
+
+define void @println(i32 %0) {
+entry:
+  %p = getelementptr inbounds [4 x i8], ptr @nialang.std.println.fmt, i64 0, i64 0
+  %r = call i32 (ptr, ...) @printf(ptr %p, i32 %0)
+  ret void
+}
+
 %struct.Foo = type { i32, i128 }
 
 define void @foo() {
 entry:
   %a.addr = alloca i32
   store i32 1, ptr %a.addr
+  %t0 = load i32, ptr %a.addr
+  call void @println(i32 %t0)
   ret void
 }
 
@@ -42,6 +56,11 @@ entry:
   %t7 = load %struct.Foo, ptr %s.addr
   %t8 = extractvalue %struct.Foo %t7, 0
   %t9 = add nsw i32 %t6, %t8
-  ret i32 %t9
+  call void @println(i32 %t9)
+  %t10 = load i32, ptr %y.addr
+  %t11 = load %struct.Foo, ptr %s.addr
+  %t12 = extractvalue %struct.Foo %t11, 0
+  %t13 = add nsw i32 %t10, %t12
+  ret i32 %t13
 }
 

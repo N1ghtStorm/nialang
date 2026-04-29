@@ -116,10 +116,9 @@ impl Parser {
                 _ => {
                     let e = self.parse_expr()?;
                     if matches!(self.peek(), Token::Semi) {
-                        return Err(
-                            "trailing expression must not end with ';' (use it as function tail)"
-                                .into(),
-                        );
+                        self.bump();
+                        stmts.push(Stmt::Expr(e));
+                        continue;
                     }
                     self.expect(&Token::RBrace)?;
                     return Ok(Block {

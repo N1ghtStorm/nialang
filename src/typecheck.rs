@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ast::{Expr, FnDef, Stmt, StructDef, Ty};
+use crate::nia_std::PRINTLN;
 
 pub struct FnSig {
     pub params: Vec<Ty>,
@@ -19,6 +20,11 @@ pub fn collect_sigs(
     }
     let mut fn_sigs: HashMap<String, FnSig> = HashMap::new();
     for f in fns {
+        if f.name == PRINTLN {
+            return Err(format!(
+                "function name `{PRINTLN}` is reserved for the standard library"
+            ));
+        }
         if fn_sigs
             .insert(
                 f.name.clone(),
@@ -51,17 +57,28 @@ pub fn check_fn(
         env.insert(pname.clone(), pty.clone());
     }
     for st in &f.body.stmts {
-        let Stmt::Let { name, ty: ann, init } = st;
-        let hint = ann.as_ref();
-        let t = infer_expr(init, &env, struct_fields, fn_sigs, hint)?;
-        if let Some(a) = ann {
-            if !types_equal(a, &t) {
-                return Err(format!(
-                    "let {name}: type annotation mismatch: expected {a:?}, got {t:?}"
-                ));
+        match st {
+            Stmt::Let { name, ty: ann, init } => {
+                let hint = ann.as_ref();
+                let t = infer_expr(init, &env, struct_fields, fn_sigs, hint)?;
+                if matches!(t, Ty::Unit) {
+                    return Err(format!(
+                        "let {name}: cannot bind a void value (missing return?)"
+                    ));
+                }
+                if let Some(a) = ann {
+                    if !types_equal(a, &t) {
+                        return Err(format!(
+                            "let {name}: type annotation mismatch: expected {a:?}, got {t:?}"
+                        ));
+                    }
+                }
+                env.insert(name.clone(), t);
+            }
+            Stmt::Expr(e) => {
+                infer_expr(e, &env, struct_fields, fn_sigs, None)?;
             }
         }
-        env.insert(name.clone(), t);
     }
     if let Some(ret_ty) = &f.ret {
         let tail = f
@@ -87,7 +104,7 @@ pub fn check_fn(
 
 fn types_equal(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
-        (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) => true,
+        (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) | (Ty::Unit, Ty::Unit) => true,
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         _ => false,
     }
@@ -107,6 +124,7 @@ fn infer_expr(
             Some(Ty::Struct(name)) => Err(format!(
                 "integer literal cannot satisfy struct type `{name}`"
             )),
+            Some(Ty::Unit) => Err("integer literal cannot satisfy `()`".into()),
         },
         Expr::Ident(name) => env
             .get(name)
@@ -114,13 +132,34 @@ fn infer_expr(
             .ok_or_else(|| format!("unknown variable `{name}`")),
         Expr::Add(l, r) => {
             let tl = infer_expr(l, env, structs, fns, None)?;
+            if matches!(tl, Ty::Unit) {
+                return Err("void value on the left of `+`".into());
+            }
             let tr = infer_expr(r, env, structs, fns, Some(&tl))?;
+            if matches!(tr, Ty::Unit) {
+                return Err("void value on the right of `+`".into());
+            }
             if !types_equal(&tl, &tr) {
                 return Err(format!("add operands differ: {tl:?} vs {tr:?}"));
             }
             Ok(tl)
         }
         Expr::Call { name, args } => {
+            if name == PRINTLN {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{PRINTLN}` expects exactly 1 argument (i32), got {}",
+                        args.len()
+                    ));
+                }
+                let t = infer_expr(&args[0], env, structs, fns, None)?;
+                if !matches!(t, Ty::I32) {
+                    return Err(format!(
+                        "`{PRINTLN}` expects i32, got {t:?} (cast not supported yet)"
+                    ));
+                }
+                return Ok(Ty::Unit);
+            }
             let sig = fns
                 .get(name)
                 .ok_or_else(|| format!("unknown function `{name}`"))?;
@@ -139,10 +178,10 @@ fn infer_expr(
                     ));
                 }
             }
-            sig
-                .ret
-                .clone()
-                .ok_or_else(|| format!("call `{name}`: callee has no return value"))
+            Ok(match &sig.ret {
+                Some(t) => t.clone(),
+                None => Ty::Unit,
+            })
         }
         Expr::StructLit { name, fields } => {
             let def = structs

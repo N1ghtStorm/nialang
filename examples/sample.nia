@@ -5,6 +5,7 @@ struct Foo {
 
 fn foo() {
     let a = 1;
+    println(a);
 }
 
 fn bar(a: i32, b: i32) i32 {
@@ -15,5 +16,6 @@ fn main() i32 {
     let x: i32 = 1;
     let y = bar(x, 2);
     let s = Foo { a: 3, b: 4 };
+    println(y + s.a);
     y + s.a
 }

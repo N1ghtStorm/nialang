@@ -3,6 +3,8 @@ pub enum Ty {
     I32,
     U128,
     Struct(String),
+    /// Result of a void call or `println`; not storable in `let`.
+    Unit,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +35,8 @@ pub enum Stmt {
         ty: Option<Ty>,
         init: Expr,
     },
+    /// Expression followed by `;` (e.g. `println(1);`).
+    Expr(Expr),
 }
 
 #[derive(Debug, Clone)]
