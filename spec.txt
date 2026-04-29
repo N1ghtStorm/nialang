@@ -1,0 +1,27 @@
+functions should be like this:
+
+fn foo() {
+    let a = 1;
+}
+
+fn bar(a: i32, b: i32) i32 {
+    a + b
+}
+
+-----
+
+create variable
+
+let a: i32 = 1
+
+let b = bar(a, 2)
+
+
+-------
+
+create struct:
+
+struct Foo {
+    a: i32,
+    b: u128,
+}
