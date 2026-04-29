@@ -1,0 +1,19 @@
+struct Foo {
+    a: i32,
+    b: u128,
+}
+
+fn foo() {
+    let a = 1;
+}
+
+fn bar(a: i32, b: i32) i32 {
+    a + b
+}
+
+fn main() i32 {
+    let x: i32 = 1;
+    let y = bar(x, 2);
+    let s = Foo { a: 3, b: 4 };
+    y + s.a
+}
