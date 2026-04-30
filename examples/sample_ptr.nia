@@ -1,10 +1,24 @@
 fn main() {
-    let x: i32 = 3;
-    let foo: Foo = Foo {a: x};
-    let y = &foo;
-    println(*y.a);
+    let a = ptr();
+    let b = 2;
+    println(b);
+    plus();
+    println(*a);
+}
+
+fn plus() {
+    let x = 1;
+    let y = 2;
+    let z = 3;
+
+    println(x + y + z);
 }
 
 struct Foo {
     a: i32
+}
+
+fn ptr() &i32 {
+    let a: i32 = 1;
+    &a
 }
