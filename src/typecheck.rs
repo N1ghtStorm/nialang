@@ -106,6 +106,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) | (Ty::Unit, Ty::Unit) => true,
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
+        (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         _ => false,
     }
 }
@@ -125,6 +126,7 @@ fn infer_expr(
                 "integer literal cannot satisfy struct type `{name}`"
             )),
             Some(Ty::Unit) => Err("integer literal cannot satisfy `()`".into()),
+            Some(Ty::Ptr(_)) => Err("integer literal cannot satisfy a pointer type".into()),
         },
         Expr::Ident(name) => env
             .get(name)
@@ -135,9 +137,15 @@ fn infer_expr(
             if matches!(tl, Ty::Unit) {
                 return Err("void value on the left of `+`".into());
             }
+            if matches!(tl, Ty::Ptr(_)) {
+                return Err("cannot use `+` on a pointer value".into());
+            }
             let tr = infer_expr(r, env, structs, fns, Some(&tl))?;
             if matches!(tr, Ty::Unit) {
                 return Err("void value on the right of `+`".into());
+            }
+            if matches!(tr, Ty::Ptr(_)) {
+                return Err("cannot use `+` on a pointer value".into());
             }
             if !types_equal(&tl, &tr) {
                 return Err(format!("add operands differ: {tl:?} vs {tr:?}"));
@@ -225,6 +233,22 @@ fn infer_expr(
                 .find(|(n, _)| n == fname)
                 .map(|(_, t)| t.clone())
                 .ok_or_else(|| format!("struct `{sname}` has no field `{fname}`"))
+        }
+        Expr::AddrOf(inner) => match inner.as_ref() {
+            Expr::Ident(n) => {
+                let t = env
+                    .get(n)
+                    .ok_or_else(|| format!("unknown variable `{n}` in address-of"))?;
+                Ok(Ty::Ptr(Box::new(t.clone())))
+            }
+            _ => Err("address-of is only supported for a simple variable (e.g. `&x`)".into()),
+        },
+        Expr::Deref(inner) => {
+            let ti = infer_expr(inner, env, structs, fns, None)?;
+            match ti {
+                Ty::Ptr(p) => Ok((*p).clone()),
+                _ => Err(format!("dereference requires a pointer, got {ti:?}")),
+            }
         }
     }
 }

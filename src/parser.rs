@@ -149,6 +149,11 @@ impl Parser {
     }
 
     fn parse_ty(&mut self) -> Result<Ty, String> {
+        if matches!(self.peek(), Token::Amp) {
+            self.bump();
+            let inner = self.parse_ty()?;
+            return Ok(Ty::Ptr(Box::new(inner)));
+        }
         match self.bump() {
             Token::TyI32 => Ok(Ty::I32),
             Token::TyU128 => Ok(Ty::U128),
@@ -208,21 +213,33 @@ impl Parser {
     }
 
     fn parse_atom(&mut self) -> Result<Expr, String> {
-        match self.bump() {
-            Token::Int(n) => Ok(Expr::Int(n)),
-            Token::Ident(name) => {
-                if matches!(self.peek(), Token::LBrace) {
-                    self.parse_struct_lit_tail(name)
-                } else {
-                    Ok(Expr::Ident(name))
+        match self.peek() {
+            Token::Amp => {
+                self.bump();
+                let inner = self.parse_atom()?;
+                Ok(Expr::AddrOf(Box::new(inner)))
+            }
+            Token::Star => {
+                self.bump();
+                let inner = self.parse_atom()?;
+                Ok(Expr::Deref(Box::new(inner)))
+            }
+            _ => match self.bump() {
+                Token::Int(n) => Ok(Expr::Int(n)),
+                Token::Ident(name) => {
+                    if matches!(self.peek(), Token::LBrace) {
+                        self.parse_struct_lit_tail(name)
+                    } else {
+                        Ok(Expr::Ident(name))
+                    }
                 }
-            }
-            Token::LParen => {
-                let inner = self.parse_expr()?;
-                self.expect(&Token::RParen)?;
-                Ok(inner)
-            }
-            other => Err(format!("unexpected token in expression: {other:?}")),
+                Token::LParen => {
+                    let inner = self.parse_expr()?;
+                    self.expect(&Token::RParen)?;
+                    Ok(inner)
+                }
+                other => Err(format!("unexpected token in expression: {other:?}")),
+            },
         }
     }
 
@@ -256,6 +273,18 @@ impl Parser {
             Token::Ident(s) => Ok(s),
             other => Err(format!("expected identifier, got {other:?}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sample_ptr() {
+        let src = include_str!("../examples/sample_ptr.nia");
+        let toks = tokenize(src);
+        assert!(Parser::new(toks).parse_file().is_ok());
     }
 }
 

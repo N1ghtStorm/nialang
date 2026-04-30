@@ -3,6 +3,8 @@ pub enum Ty {
     I32,
     U128,
     Struct(String),
+    /// `&T` — LLVM opaque `ptr` to `T`.
+    Ptr(Box<Ty>),
     /// Result of a void call or `println`; not storable in `let`.
     Unit,
 }
@@ -53,4 +55,8 @@ pub enum Expr {
         fields: Vec<(String, Expr)>,
     },
     Field(Box<Expr>, String),
+    /// Address of an lvalue (currently only a local variable).
+    AddrOf(Box<Expr>),
+    /// Dereference `*e`.
+    Deref(Box<Expr>),
 }

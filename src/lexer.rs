@@ -16,6 +16,8 @@ pub enum Token {
     LBrace,
     RBrace,
     Plus,
+    Star,
+    Amp,
     Dot,
     Eq,
     TyI32,
@@ -76,6 +78,8 @@ impl<'a> Lexer<'a> {
             '{' => Token::LBrace,
             '}' => Token::RBrace,
             '+' => Token::Plus,
+            '*' => Token::Star,
+            '&' => Token::Amp,
             '.' => Token::Dot,
             '=' => Token::Eq,
             '0'..='9' => {

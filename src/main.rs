@@ -22,6 +22,16 @@ fn main() {
     }
 }
 
+#[cfg(test)]
+mod self_test {
+    #[test]
+    fn compile_sample_ptr_from_disk_like_main() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/sample_ptr.nia");
+        let src = std::fs::read_to_string(&p).unwrap();
+        super::compile_to_ll(&src).expect("full pipeline");
+    }
+}
+
 fn compile_to_ll(src: &str) -> Result<String, String> {
     let tokens = tokenize(src);
     let (structs, fns) = Parser::new(tokens).parse_file()?;
@@ -43,6 +53,7 @@ fn run() -> Result<i32, String> {
                 .to_string()
         })?
         .into();
+    let in_path = resolve_input_path(in_path)?;
     let mut out_ll: Option<PathBuf> = None;
     while let Some(a) = args.next() {
         if a == "-o" {
@@ -56,7 +67,8 @@ fn run() -> Result<i32, String> {
         }
     }
 
-    let src = std::fs::read_to_string(&in_path).map_err(|e| e.to_string())?;
+    let src = std::fs::read_to_string(&in_path)
+        .map_err(|e| format!("{}: {e}", in_path.display()))?;
     let ll = compile_to_ll(&src)?;
 
     if let Some(ref p) = out_ll {
@@ -103,6 +115,36 @@ fn run() -> Result<i32, String> {
         .code()
         .unwrap_or(if run_status.success() { 0 } else { 101 });
     Ok(code)
+}
+
+/// Relative paths: try cwd first, then `CARGO_MANIFEST_DIR` at runtime (e.g. `cargo run`), then
+/// the manifest directory baked in at compile time so `examples/foo.nia` resolves when the
+/// binary is run from another working directory.
+fn resolve_input_path(p: PathBuf) -> Result<PathBuf, String> {
+    if p.is_absolute() {
+        return Ok(p);
+    }
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let from_cwd = cwd.join(&p);
+    if from_cwd.is_file() {
+        return Ok(from_cwd);
+    }
+    if let Ok(root) = std::env::var("CARGO_MANIFEST_DIR") {
+        let q = PathBuf::from(root).join(&p);
+        if q.is_file() {
+            return Ok(q);
+        }
+    }
+    let from_build = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&p);
+    if from_build.is_file() {
+        return Ok(from_build);
+    }
+    Err(format!(
+        "could not find `{}` (tried {} and {})",
+        p.display(),
+        from_cwd.display(),
+        from_build.display()
+    ))
 }
 
 fn tmp_exe_path(tmp_dir: &std::path::Path, pid: u32, nonce: u128) -> PathBuf {

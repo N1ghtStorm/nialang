@@ -32,6 +32,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::I32 => "i32".into(),
         Ty::U128 => "i128".into(),
         Ty::Struct(n) => format!("%struct.{}", sanitize(n)),
+        Ty::Ptr(_) => "ptr".into(),
         Ty::Unit => "void".into(),
     }
 }
@@ -186,7 +187,9 @@ impl<'a> Gen<'a> {
             Expr::Int(n) => match hint {
                 Some(Ty::U128) => (Ty::U128, format!("{n}")),
                 Some(Ty::I32) | None => (Ty::I32, format!("{n}")),
-                Some(Ty::Struct(_)) | Some(Ty::Unit) => unreachable!("typechecked"),
+                Some(Ty::Struct(_)) | Some(Ty::Unit) | Some(Ty::Ptr(_)) => {
+                    unreachable!("typechecked")
+                }
             },
             Expr::Ident(name) => {
                 let (ty, ptr) = locals.get(name).expect("checked var");
@@ -213,7 +216,7 @@ impl<'a> Gen<'a> {
                     Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
                     }
-                    Ty::Struct(_) | Ty::Unit => unreachable!("add on struct"),
+                    Ty::Struct(_) | Ty::Unit | Ty::Ptr(_) => unreachable!("add on struct"),
                 }
                 (tl, format!("%{tmp}"))
             }
@@ -330,6 +333,32 @@ impl<'a> Gen<'a> {
                     .clone();
                 (fty, format!("%{tmp}"))
             }
+            Expr::AddrOf(inner) => {
+                let Expr::Ident(name) = inner.as_ref() else {
+                    unreachable!("typechecked")
+                };
+                let (ty, ptr) = locals.get(name).expect("checked var");
+                (
+                    Ty::Ptr(Box::new(ty.clone())),
+                    ptr.clone(),
+                )
+            }
+            Expr::Deref(inner) => {
+                let (ti, v) = self.emit_expr(inner, locals, None);
+                let Ty::Ptr(pointee) = ti else {
+                    unreachable!("typechecked")
+                };
+                let tmp = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = load {}, ptr {}",
+                    tmp,
+                    llvm_ty(pointee.as_ref(), self.structs),
+                    v
+                )
+                .unwrap();
+                ((*pointee).clone(), format!("%{tmp}"))
+            }
         }
     }
 }
@@ -338,6 +367,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) | (Ty::Unit, Ty::Unit) => true,
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
+        (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),
         _ => false,
     }
 }
