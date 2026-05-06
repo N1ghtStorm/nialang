@@ -1,0 +1,6 @@
+struct Foo (u8, i32, u8, u128)
+
+fn main() i32 {
+    let f = Foo(1, 42, 3, 4);
+    f.1
+}

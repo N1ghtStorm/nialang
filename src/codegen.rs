@@ -602,3 +602,68 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
 fn emit_fn(f: &FnDef, structs: &[StructDef], fn_sigs: &HashMap<String, FnSig>) -> String {
     Gen::new(structs, fn_sigs).emit_fn(f)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{Parser, tokenize};
+    use crate::typecheck::{check_fn, collect_sigs};
+
+    fn emit(src: &str) -> String {
+        let (structs, fns) = Parser::new(tokenize(src)).parse_file().expect("parse");
+        let (struct_map, fn_sigs) = collect_sigs(&structs, &fns).expect("sigs");
+        for f in &fns {
+            check_fn(f, &struct_map, &fn_sigs).expect("typecheck");
+        }
+        emit_module(&structs, &fns, &fn_sigs)
+    }
+
+    #[test]
+    fn codegen_contains_if_branching() {
+        let ll = emit(include_str!("../examples/tests/ok_if_return.nia"));
+        assert!(ll.contains("br i1"));
+        assert!(ll.contains("if.then."));
+    }
+
+    #[test]
+    fn codegen_contains_tuple_struct_ops() {
+        let ll = emit(include_str!("../examples/tests/ok_tuple_struct.nia"));
+        assert!(ll.contains("insertvalue %struct.Foo"));
+        assert!(ll.contains("extractvalue %struct.Foo"));
+    }
+
+    #[test]
+    fn codegen_contains_print_for_primitives() {
+        let ll = emit(include_str!("../examples/tests/ok_print_primitives.nia"));
+        assert!(ll.contains("@printf"));
+        assert!(ll.contains("nialang.std.fmt"));
+    }
+
+    #[test]
+    fn codegen_pointer_load_present() {
+        let ll = emit(include_str!("../examples/tests/ok_pointers.nia"));
+        assert!(ll.contains("load i32, ptr"));
+        assert!(ll.contains("define i32 @id_ptr"));
+    }
+
+    #[test]
+    fn codegen_named_struct_type_decl_present() {
+        let ll = emit(include_str!("../examples/tests/ok_struct_named.nia"));
+        assert!(ll.contains("%struct.Bar = type"));
+    }
+
+    #[test]
+    fn codegen_tuple_named_mix_contains_pair_and_boxed() {
+        let ll = emit(include_str!("../examples/tests/ok_tuple_named_mix.nia"));
+        assert!(ll.contains("%struct.Pair = type"));
+        assert!(ll.contains("%struct.Boxed = type"));
+        assert!(ll.contains("extractvalue %struct.Pair"));
+    }
+
+    #[test]
+    fn codegen_nested_if_has_multiple_labels() {
+        let ll = emit(include_str!("../examples/tests/ok_nested_if.nia"));
+        let count_then = ll.matches("if.then.").count();
+        assert!(count_then >= 2, "IR:\n{ll}");
+    }
+}

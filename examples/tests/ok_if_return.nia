@@ -1,0 +1,10 @@
+fn bar(flag: bool) i32 {
+    if flag {
+        return 7
+    }
+    3
+}
+
+fn main() i32 {
+    bar(true)
+}

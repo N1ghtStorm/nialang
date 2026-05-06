@@ -372,15 +372,49 @@ impl Parser {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_sample_ptr() {
-        let src = include_str!("../examples/sample_ptr.nia");
+    fn parse_ok(src: &str) {
         let toks = tokenize(src);
-        assert!(Parser::new(toks).parse_file().is_ok());
+        let r = Parser::new(toks).parse_file();
+        assert!(r.is_ok(), "{r:?}");
     }
 
     #[test]
-    fn parse_if_return_bool() {
+    fn parse_fixture_minimal() {
+        parse_ok(include_str!("../examples/tests/ok_minimal.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_if_return() {
+        parse_ok(include_str!("../examples/tests/ok_if_return.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_tuple_struct() {
+        parse_ok(include_str!("../examples/tests/ok_tuple_struct.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_named_struct() {
+        parse_ok(include_str!("../examples/tests/ok_struct_named.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_pointers() {
+        parse_ok(include_str!("../examples/tests/ok_pointers.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_nested_if() {
+        parse_ok(include_str!("../examples/tests/ok_nested_if.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_tuple_named_mix() {
+        parse_ok(include_str!("../examples/tests/ok_tuple_named_mix.nia"));
+    }
+
+    #[test]
+    fn parse_inline_if_return_bool() {
         let src = r#"
 fn bar(foo: bool) i32 {
     if foo {
@@ -389,9 +423,7 @@ fn bar(foo: bool) i32 {
     0
 }
 "#;
-        let toks = tokenize(src);
-        let r = Parser::new(toks).parse_file();
-        assert!(r.is_ok(), "{r:?}");
+        parse_ok(src);
     }
 
     #[test]
@@ -403,9 +435,31 @@ fn main() i32 {
     f.1
 }
 "#;
+        parse_ok(src);
+    }
+
+    #[test]
+    fn parse_rejects_bad_tuple_struct() {
+        let src = "struct Foo (u8, i32";
         let toks = tokenize(src);
         let r = Parser::new(toks).parse_file();
-        assert!(r.is_ok(), "{r:?}");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn parse_rejects_missing_struct_colon() {
+        let src = "struct A { x i32 }";
+        let toks = tokenize(src);
+        let r = Parser::new(toks).parse_file();
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn parse_rejects_unclosed_block() {
+        let src = "fn main() i32 { let a = 1;";
+        let toks = tokenize(src);
+        let r = Parser::new(toks).parse_file();
+        assert!(r.is_err());
     }
 }
 

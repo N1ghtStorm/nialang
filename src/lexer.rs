@@ -142,3 +142,99 @@ impl<'a> Lexer<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn collect(src: &str) -> Vec<Token> {
+        let mut l = Lexer::new(src);
+        let mut out = Vec::new();
+        loop {
+            let t = l.next_token();
+            if matches!(t, Token::Eof) {
+                break;
+            }
+            out.push(t);
+        }
+        out
+    }
+
+    #[test]
+    fn lex_keywords_and_types() {
+        let src = "fn let struct if return true false i8 u8 i16 u16 i32 i64 u64 i128 isize usize u128 bool";
+        let toks = collect(src);
+        assert_eq!(
+            toks,
+            vec![
+                Token::Fn,
+                Token::Let,
+                Token::Struct,
+                Token::If,
+                Token::Return,
+                Token::Bool(true),
+                Token::Bool(false),
+                Token::TyI8,
+                Token::TyU8,
+                Token::TyI16,
+                Token::TyU16,
+                Token::TyI32,
+                Token::TyI64,
+                Token::TyU64,
+                Token::TyI128,
+                Token::TyIsize,
+                Token::TyUsize,
+                Token::TyU128,
+                Token::TyBool,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_symbols_and_comments() {
+        let src = "a: b, c; ( ) { } + * & . = // comment\n42";
+        let toks = collect(src);
+        assert_eq!(
+            toks,
+            vec![
+                Token::Ident("a".into()),
+                Token::Colon,
+                Token::Ident("b".into()),
+                Token::Comma,
+                Token::Ident("c".into()),
+                Token::Semi,
+                Token::LParen,
+                Token::RParen,
+                Token::LBrace,
+                Token::RBrace,
+                Token::Plus,
+                Token::Star,
+                Token::Amp,
+                Token::Dot,
+                Token::Eq,
+                Token::Int(42),
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_multiline_comments_whitespace_and_identifiers() {
+        let src = "\n  // skip\nfoo\n// skip2\nbar_1";
+        let toks = collect(src);
+        assert_eq!(
+            toks,
+            vec![Token::Ident("foo".into()), Token::Ident("bar_1".into())]
+        );
+    }
+
+    #[test]
+    fn lex_unknown_char_stops_token_stream() {
+        let src = "let x = 1 @ 2";
+        let toks = collect(src);
+        // Current lexer behavior returns EOF on unknown char.
+        assert_eq!(
+            toks,
+            vec![Token::Let, Token::Ident("x".into()), Token::Eq, Token::Int(1)]
+        );
+    }
+}

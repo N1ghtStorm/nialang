@@ -1,0 +1,9 @@
+fn id_ptr(p: &i32) i32 {
+    *p
+}
+
+fn main() i32 {
+    let x: i32 = 9;
+    let p = &x;
+    id_ptr(p)
+}

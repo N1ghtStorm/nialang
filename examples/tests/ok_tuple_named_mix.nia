@@ -1,0 +1,11 @@
+struct Pair (i32, i32)
+struct Boxed {
+    p: Pair,
+    v: i32
+}
+
+fn main() i32 {
+    let p = Pair(5, 8);
+    let b = Boxed { p: p, v: 13 };
+    b.p.1
+}

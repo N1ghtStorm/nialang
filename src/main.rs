@@ -24,11 +24,47 @@ fn main() {
 
 #[cfg(test)]
 mod self_test {
-    #[test]
-    fn compile_sample_ptr_from_disk_like_main() {
-        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/sample_ptr.nia");
+    fn compile_fixture(path: &str) {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
         let src = std::fs::read_to_string(&p).unwrap();
         super::compile_to_ll(&src).expect("full pipeline");
+    }
+
+    #[test]
+    fn compile_fixtures_pipeline() {
+        compile_fixture("examples/tests/ok_minimal.nia");
+        compile_fixture("examples/tests/ok_if_return.nia");
+        compile_fixture("examples/tests/ok_tuple_struct.nia");
+        compile_fixture("examples/tests/ok_struct_named.nia");
+        compile_fixture("examples/tests/ok_print_primitives.nia");
+        compile_fixture("examples/tests/ok_pointers.nia");
+        compile_fixture("examples/tests/ok_nested_if.nia");
+        compile_fixture("examples/tests/ok_tuple_named_mix.nia");
+    }
+
+    #[test]
+    fn compile_fixture_with_error() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/tests/err_type_mismatch.nia");
+        let src = std::fs::read_to_string(&p).unwrap();
+        let r = super::compile_to_ll(&src);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn compile_multiple_error_fixtures() {
+        let err_files = [
+            "examples/tests/err_type_mismatch.nia",
+            "examples/tests/err_type_add_bool.nia",
+            "examples/tests/err_type_if_non_bool.nia",
+            "examples/tests/err_type_tuple_with_named_literal.nia",
+        ];
+        for f in err_files {
+            let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f);
+            let src = std::fs::read_to_string(&p).unwrap();
+            let r = super::compile_to_ll(&src);
+            assert!(r.is_err(), "fixture unexpectedly compiled: {f}");
+        }
     }
 }
 

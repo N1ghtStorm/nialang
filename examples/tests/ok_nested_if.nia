@@ -1,0 +1,13 @@
+fn f(a: bool, b: bool) i32 {
+    if a {
+        if b {
+            return 11
+        }
+        return 7
+    }
+    3
+}
+
+fn main() i32 {
+    f(true, false)
+}

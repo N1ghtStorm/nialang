@@ -365,3 +365,104 @@ fn check_stmt(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{Parser, tokenize};
+
+    fn parse(src: &str) -> (Vec<StructDef>, Vec<FnDef>) {
+        Parser::new(tokenize(src)).parse_file().expect("parse success")
+    }
+
+    fn check_all(src: &str) -> Result<(), String> {
+        let (structs, fns) = parse(src);
+        let (struct_map, fn_sigs) = collect_sigs(&structs, &fns)?;
+        for f in &fns {
+            check_fn(f, &struct_map, &fn_sigs)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn typecheck_ok_fixtures() {
+        let ok_files = [
+            include_str!("../examples/tests/ok_minimal.nia"),
+            include_str!("../examples/tests/ok_if_return.nia"),
+            include_str!("../examples/tests/ok_tuple_struct.nia"),
+            include_str!("../examples/tests/ok_struct_named.nia"),
+            include_str!("../examples/tests/ok_print_primitives.nia"),
+            include_str!("../examples/tests/ok_pointers.nia"),
+            include_str!("../examples/tests/ok_nested_if.nia"),
+            include_str!("../examples/tests/ok_tuple_named_mix.nia"),
+        ];
+        for src in ok_files {
+            let r = check_all(src);
+            assert!(r.is_ok(), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn typecheck_detects_mismatch_fixture() {
+        let src = include_str!("../examples/tests/err_type_mismatch.nia");
+        let r = check_all(src);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn typecheck_detects_add_bool_fixture() {
+        let src = include_str!("../examples/tests/err_type_add_bool.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_detects_if_non_bool_fixture() {
+        let src = include_str!("../examples/tests/err_type_if_non_bool.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_detects_tuple_named_literal_fixture() {
+        let src = include_str!("../examples/tests/err_type_tuple_with_named_literal.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_wrong_tuple_arity() {
+        let src = r#"
+struct Foo (u8, i32)
+fn main() i32 {
+    let f = Foo(1);
+    f.1
+}
+"#;
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_return_in_void_fn() {
+        let src = r#"
+fn f() {
+    return 1
+}
+"#;
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_deref_non_pointer() {
+        let src = r#"
+fn main() i32 {
+    let a: i32 = 1;
+    *a
+}
+"#;
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+}
