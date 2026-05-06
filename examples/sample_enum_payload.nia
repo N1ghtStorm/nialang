@@ -13,6 +13,9 @@ fn code(e: Event) i32 {
 }
 
 fn main() i32 {
+    println(Event::Quit);
+    println(Event::Resize(5, 6));
+    println(Event::Move { x: 1, y: 2 });
     println(code(Event::Quit));
     println(code(Event::Resize(5, 6)));
     println(code(Event::Move { x: 1, y: 2 }));

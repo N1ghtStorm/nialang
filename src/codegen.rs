@@ -28,6 +28,7 @@ pub fn emit_module(
     out.push_str("target triple = \"unknown-unknown-unknown\"\n\n");
     out.push_str(crate::nia_std::llvm_prelude());
     out.push_str(&emit_struct_print_constants(structs));
+    out.push_str(&emit_enum_print_constants(enums));
 
     for s in structs {
         out.push_str(&struct_type_decl(s));
@@ -73,6 +74,62 @@ fn struct_field_key_symbol(sname: &str, fname: &str) -> String {
         sanitize(sname),
         sanitize(fname)
     )
+}
+
+fn enum_variant_prefix_symbol(ename: &str, vname: &str) -> String {
+    format!(
+        "nialang.std.txt.enumprefix.{}.{}",
+        sanitize(ename),
+        sanitize(vname)
+    )
+}
+
+fn enum_struct_field_key_symbol(ename: &str, vname: &str, fname: &str) -> String {
+    format!(
+        "nialang.std.txt.enumjson.{}.{}.{}",
+        sanitize(ename),
+        sanitize(vname),
+        sanitize(fname)
+    )
+}
+
+/// Global `Variant: ` strings and JSON keys for enum struct-variant fields (for `println`).
+fn emit_enum_print_constants(enums: &[EnumDef]) -> String {
+    let mut out = String::new();
+    for e in enums {
+        for v in &e.variants {
+            let prefix = format!("{}: ", v.name);
+            let bytes = prefix.as_bytes();
+            let sz = bytes.len() + 1;
+            let lit = llvm_c_escape(bytes);
+            let sym = enum_variant_prefix_symbol(&e.name, &v.name);
+            writeln!(
+                out,
+                "@{} = private unnamed_addr constant [{} x i8] c\"{}\\00\", align 1",
+                sym, sz, lit
+            )
+            .unwrap();
+            if let EnumVariantFields::Struct(fs) = &v.fields {
+                for (fname, _) in fs {
+                    let key = format!("\"{}\": ", fname);
+                    let bytes = key.as_bytes();
+                    let sz = bytes.len() + 1;
+                    let lit = llvm_c_escape(bytes);
+                    let sym = enum_struct_field_key_symbol(&e.name, &v.name, fname);
+                    writeln!(
+                        out,
+                        "@{} = private unnamed_addr constant [{} x i8] c\"{}\\00\", align 1",
+                        sym, sz, lit
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
 }
 
 /// Emits global string constants for named-struct JSON key rendering.
@@ -534,6 +591,140 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Prints enum as `Variant: <payload>` (unit: `Variant: ()` with newline when requested).
+    fn emit_print_enum(&mut self, ename: &str, ev: &str, newline: bool) {
+        let edef = self.enums.iter().find(|e| e.name == ename).expect("typechecked");
+        let enum_ll = format!("%enum.{}", sanitize(ename));
+        let tag = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 0",
+            tag, enum_ll, ev
+        )
+        .unwrap();
+        let default_lbl = self.fresh_label("println.enum.default");
+        let cont_lbl = self.fresh_label("println.enum.cont");
+        let arm_lbls: Vec<String> = edef
+            .variants
+            .iter()
+            .map(|_| self.fresh_label("println.enum.arm"))
+            .collect();
+        writeln!(self.out, "  switch i32 %{}, label %{} [", tag, default_lbl).unwrap();
+        for (i, _) in edef.variants.iter().enumerate() {
+            writeln!(self.out, "    i32 {}, label %{}", i as i32, arm_lbls[i]).unwrap();
+        }
+        writeln!(self.out, "  ]").unwrap();
+        writeln!(self.out, "{}:", default_lbl).unwrap();
+        writeln!(self.out, "  unreachable").unwrap();
+
+        for (i, vdef) in edef.variants.iter().enumerate() {
+            writeln!(self.out, "{}:", arm_lbls[i]).unwrap();
+            let sym = enum_variant_prefix_symbol(ename, &vdef.name);
+            let prefix = format!("{}: ", vdef.name);
+            let prefix_len = prefix.as_bytes().len() + 1;
+            self.emit_printf_text_dynamic(&sym, prefix_len);
+            let payload_idx = i + 1;
+            match &vdef.fields {
+                EnumVariantFields::Unit => {
+                    self.emit_printf_text("nialang.std.txt.tuple_open", 2);
+                    if newline {
+                        self.emit_printf_text("nialang.std.txt.tuple_close_ln", 3);
+                    } else {
+                        self.emit_printf_text("nialang.std.txt.tuple_close", 2);
+                    }
+                }
+                EnumVariantFields::Tuple(ts) if ts.len() == 1 => {
+                    let pl = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        pl, enum_ll, ev, payload_idx
+                    )
+                    .unwrap();
+                    self.emit_print_value(&ts[0], &format!("%{pl}"), newline);
+                }
+                EnumVariantFields::Tuple(ts) => {
+                    let pl = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        pl, enum_ll, ev, payload_idx
+                    )
+                    .unwrap();
+                    let payload_ll = {
+                        let inner = ts
+                            .iter()
+                            .map(|t| llvm_ty(t, self.structs))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{{ {inner} }}")
+                    };
+                    self.emit_printf_text("nialang.std.txt.tuple_open", 2);
+                    for j in 0..ts.len() {
+                        if j > 0 {
+                            self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+                        }
+                        let fv = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = extractvalue {} %{}, {}",
+                            fv, payload_ll, pl, j
+                        )
+                        .unwrap();
+                        self.emit_print_value(&ts[j], &format!("%{fv}"), false);
+                    }
+                    if newline {
+                        self.emit_printf_text("nialang.std.txt.tuple_close_ln", 3);
+                    } else {
+                        self.emit_printf_text("nialang.std.txt.tuple_close", 2);
+                    }
+                }
+                EnumVariantFields::Struct(fs) => {
+                    let pl = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        pl, enum_ll, ev, payload_idx
+                    )
+                    .unwrap();
+                    let payload_ll = {
+                        let inner = fs
+                            .iter()
+                            .map(|(_, t)| llvm_ty(t, self.structs))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{{ {inner} }}")
+                    };
+                    self.emit_printf_text("nialang.std.txt.obj_open", 2);
+                    for (j, (fname, fty)) in fs.iter().enumerate() {
+                        if j > 0 {
+                            self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+                        }
+                        let ksym = enum_struct_field_key_symbol(ename, &vdef.name, fname);
+                        let key = format!("\"{}\": ", fname);
+                        let key_sz = key.as_bytes().len() + 1;
+                        self.emit_printf_text_dynamic(&ksym, key_sz);
+                        let fv = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = extractvalue {} %{}, {}",
+                            fv, payload_ll, pl, j
+                        )
+                        .unwrap();
+                        self.emit_print_value(fty, &format!("%{fv}"), false);
+                    }
+                    if newline {
+                        self.emit_printf_text("nialang.std.txt.obj_close_ln", 3);
+                    } else {
+                        self.emit_printf_text("nialang.std.txt.obj_close", 2);
+                    }
+                }
+            }
+            writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        }
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
     /// Recursive dispatcher for printable value lowering.
     ///
     /// Keeps all `println` formatting behavior in one place and ensures nested
@@ -545,6 +736,9 @@ impl<'a> Gen<'a> {
             }
             Ty::Struct(sname) => {
                 self.emit_print_struct(sname, v, newline);
+            }
+            Ty::Enum(ename) => {
+                self.emit_print_enum(ename, v, newline);
             }
             _ => self.emit_print_primitive(ty, v, newline),
         }
@@ -1589,5 +1783,13 @@ mod tests {
         let ll = emit(include_str!("../examples/tests/ok_enum_payload_match.nia"));
         assert!(ll.contains("%enum.Value = type"), "IR:\n{ll}");
         assert!(ll.contains("extractvalue %enum.Value"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_println_enum_emits_prefix_constants_and_switch() {
+        let ll = emit(include_str!("../examples/tests/ok_print_enum.nia"));
+        assert!(ll.contains("nialang.std.txt.enumprefix.Color.Red"), "IR:\n{ll}");
+        assert!(ll.contains("nialang.std.txt.enumprefix.Msg.Point"), "IR:\n{ll}");
+        assert!(ll.contains("println.enum.arm"), "IR:\n{ll}");
     }
 }

@@ -52,6 +52,7 @@ mod self_test {
             "examples/tests/ok_ptr_write.nia",
             "examples/tests/ok_enum_match.nia",
             "examples/tests/ok_enum_payload_match.nia",
+            "examples/tests/ok_print_enum.nia",
         ];
         for f in files {
             compile_fixture_ok(f);

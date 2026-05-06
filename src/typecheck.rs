@@ -225,21 +225,26 @@ fn is_primitive_ty(t: &Ty) -> bool {
 
 /// Public printable-type predicate used for builtin `println`.
 ///
-/// Includes recursive composites such as arrays/structs of printable fields and pointers.
-fn is_printable_ty(t: &Ty, structs: &HashMap<String, StructDef>) -> bool {
+/// Includes recursive composites such as arrays/structs/enums of printable fields and pointers.
+fn is_printable_ty(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+) -> bool {
     let mut seen = HashSet::new();
-    is_printable_ty_inner(t, structs, &mut seen)
+    is_printable_ty_inner(t, structs, enums, &mut seen)
 }
 
 /// Recursive implementation for printable-type checks with cycle protection.
 fn is_printable_ty_inner(
     t: &Ty,
     structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
     seen: &mut HashSet<String>,
 ) -> bool {
     match t {
         x if is_primitive_ty(x) => true,
-        Ty::Array(elem, _) => is_printable_ty_inner(elem, structs, seen),
+        Ty::Array(elem, _) => is_printable_ty_inner(elem, structs, enums, seen),
         Ty::Ptr(_) => true,
         Ty::Struct(name) => {
             if !seen.insert(name.clone()) {
@@ -251,8 +256,28 @@ fn is_printable_ty_inner(
             let ok = def
                 .fields
                 .iter()
-                .all(|(_, ft)| is_printable_ty_inner(ft, structs, seen));
+                .all(|(_, ft)| is_printable_ty_inner(ft, structs, enums, seen));
             seen.remove(name);
+            ok
+        }
+        Ty::Enum(name) => {
+            let key = format!("enum:{name}");
+            if !seen.insert(key.clone()) {
+                return true;
+            }
+            let Some(edef) = enums.get(name) else {
+                return false;
+            };
+            let ok = edef.variants.iter().all(|v| match &v.fields {
+                crate::ast::EnumVariantFields::Unit => true,
+                crate::ast::EnumVariantFields::Tuple(ts) => ts
+                    .iter()
+                    .all(|ft| is_printable_ty_inner(ft, structs, enums, seen)),
+                crate::ast::EnumVariantFields::Struct(fs) => fs
+                    .iter()
+                    .all(|(_, ft)| is_printable_ty_inner(ft, structs, enums, seen)),
+            });
+            seen.remove(&key);
             ok
         }
         _ => false,
@@ -334,7 +359,7 @@ fn infer_expr(
                     ));
                 }
                 let t = infer_expr(&args[0], env, structs, enums, fns, None)?;
-                if !is_printable_ty(&t, structs) {
+                if !is_printable_ty(&t, structs, enums) {
                     return Err(format!(
                         "`{PRINTLN}` expects printable type, got {t:?}"
                     ));
@@ -860,6 +885,7 @@ mod tests {
             include_str!("../examples/tests/ok_ptr_write.nia"),
             include_str!("../examples/tests/ok_enum_match.nia"),
             include_str!("../examples/tests/ok_enum_payload_match.nia"),
+            include_str!("../examples/tests/ok_print_enum.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);

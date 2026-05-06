@@ -1,0 +1,17 @@
+enum Color { Red, Green, Blue }
+
+enum Msg {
+    Empty,
+    Num(i32),
+    Pair(i32, i32),
+    Point { x: i32, y: i32 },
+}
+
+fn main() i32 {
+    println(Color::Red);
+    println(Msg::Empty);
+    println(Msg::Num(42));
+    println(Msg::Pair(1, 2));
+    println(Msg::Point { x: 3, y: 4 });
+    0
+}
