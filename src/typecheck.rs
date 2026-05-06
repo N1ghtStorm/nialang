@@ -14,7 +14,10 @@ pub fn collect_sigs(
 ) -> Result<(HashMap<String, Vec<(String, Ty)>>, HashMap<String, FnSig>), String> {
     let mut struct_fields: HashMap<String, Vec<(String, Ty)>> = HashMap::new();
     for s in structs {
-        if struct_fields.insert(s.name.clone(), s.fields.clone()).is_some() {
+        if struct_fields
+            .insert(s.name.clone(), s.fields.clone())
+            .is_some()
+        {
             return Err(format!("duplicate struct {}", s.name));
         }
     }
@@ -83,10 +86,9 @@ pub fn check_fn(
 
 fn types_equal(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
-        (Ty::I32, Ty::I32)
-        | (Ty::U128, Ty::U128)
-        | (Ty::Bool, Ty::Bool)
-        | (Ty::Unit, Ty::Unit) => true,
+        (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) | (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) => {
+            true
+        }
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         _ => false,
@@ -221,8 +223,7 @@ fn infer_expr(
             let def = structs
                 .get(&sname)
                 .ok_or_else(|| format!("unknown struct `{sname}`"))?;
-            def
-                .iter()
+            def.iter()
                 .find(|(n, _)| n == fname)
                 .map(|(_, t)| t.clone())
                 .ok_or_else(|| format!("struct `{sname}` has no field `{fname}`"))
@@ -254,7 +255,11 @@ fn check_stmt(
     fn_ret: Option<&Ty>,
 ) -> Result<(), String> {
     match st {
-        Stmt::Let { name, ty: ann, init } => {
+        Stmt::Let {
+            name,
+            ty: ann,
+            init,
+        } => {
             let hint = ann.as_ref();
             let t = infer_expr(init, env, struct_fields, fn_sigs, hint)?;
             if matches!(t, Ty::Unit) {
