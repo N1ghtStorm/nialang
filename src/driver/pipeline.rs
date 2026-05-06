@@ -6,6 +6,21 @@ use crate::backend::codegen;
 use crate::frontend::parser::{tokenize, Parser};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
 
+/// Compiles nialang source text into one textual LLVM IR module.
+///
+/// ## What this function guarantees
+/// - Returns IR only after the source passes *all* frontend and semantic checks.
+/// - Fails fast on the first error and returns a human-readable message.
+/// - Produces backend input that is already type-consistent.
+///
+/// ## Internal stages (in strict order)
+/// 1. **Lexing**: converts text into tokens.
+/// 2. **Parsing**: builds AST (`structs`, `fns`) from token stream.
+/// 3. **Signature collection**: builds global symbol tables and validates duplicates.
+/// 4. **Type checking**: validates each function body against collected signatures.
+/// 5. **Code generation**: lowers validated AST to LLVM IR text.
+///
+/// Each stage depends on previous output, so failures are intentionally not aggregated.
 pub fn compile_to_ll(src: &str) -> Result<String, String> {
     let tokens = tokenize(src);
     let (structs, fns) = Parser::new(tokens).parse_file()?;
@@ -16,6 +31,22 @@ pub fn compile_to_ll(src: &str) -> Result<String, String> {
     Ok(codegen::emit_module(&structs, &fns, &fn_sigs))
 }
 
+/// High-level CLI execution pipeline used by `main`.
+///
+/// ## Supported CLI shape
+/// `nialang <file.nia> [-o out.ll]`
+///
+/// ## Behavior
+/// - Resolves input path robustly for `cargo run` and direct binary usage.
+/// - Compiles `.nia` source into LLVM IR.
+/// - Optionally dumps generated IR to disk when `-o` is provided.
+/// - Invokes `clang` to produce a temporary native executable.
+/// - Runs that executable and returns *its* exit status to caller.
+/// - Removes temporary artifacts (`.ll` and executable) best-effort.
+///
+/// ## Errors
+/// Returns descriptive errors for bad CLI flags, read/write failures, missing clang,
+/// clang compile failures, and runtime launch failures.
 pub fn run_cli() -> Result<i32, String> {
     let mut args = std::env::args().skip(1);
     let in_path: PathBuf = args
@@ -41,6 +72,7 @@ pub fn run_cli() -> Result<i32, String> {
         }
     }
 
+    // Read the input program after path resolution, so diagnostics include final path.
     let src = std::fs::read_to_string(&in_path)
         .map_err(|e| format!("{}: {e}", in_path.display()))?;
     let ll = compile_to_ll(&src)?;
@@ -50,6 +82,7 @@ pub fn run_cli() -> Result<i32, String> {
         eprintln!("wrote {}", p.display());
     }
 
+    // Use pid + timestamp nonce to avoid tmp filename collisions between runs.
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
@@ -61,6 +94,7 @@ pub fn run_cli() -> Result<i32, String> {
 
     std::fs::write(&tmp_ll, &ll).map_err(|e| e.to_string())?;
 
+    // Compile generated IR into a native executable via system clang.
     let clang_ok = Command::new("clang")
         .arg(&tmp_ll)
         .arg("-o")
@@ -78,6 +112,7 @@ pub fn run_cli() -> Result<i32, String> {
         return Err("clang failed to compile the generated LLVM IR".into());
     }
 
+    // Execute produced binary and propagate its status code back to the caller.
     let run_status = Command::new(&tmp_exe)
         .status()
         .map_err(|e| format!("failed to run compiled program: {e}"))?;
@@ -91,9 +126,17 @@ pub fn run_cli() -> Result<i32, String> {
     Ok(code)
 }
 
-/// Relative paths: try cwd first, then `CARGO_MANIFEST_DIR` at runtime (e.g. `cargo run`), then
-/// the manifest directory baked in at compile time so `examples/foo.nia` resolves when the
-/// binary is run from another working directory.
+/// Resolves user-supplied input file path to an existing file.
+///
+/// Resolution strategy for **relative** paths:
+/// 1. Current working directory.
+/// 2. Runtime `CARGO_MANIFEST_DIR` (common when launched via `cargo run`).
+/// 3. Compile-time `env!("CARGO_MANIFEST_DIR")` fallback.
+///
+/// Absolute paths are returned unchanged.
+///
+/// This keeps `examples/foo.nia` usable even when the process cwd differs from
+/// repository root.
 pub fn resolve_input_path(p: PathBuf) -> Result<PathBuf, String> {
     if p.is_absolute() {
         return Ok(p);
@@ -121,6 +164,10 @@ pub fn resolve_input_path(p: PathBuf) -> Result<PathBuf, String> {
     ))
 }
 
+/// Builds temporary executable file path for current platform.
+///
+/// The name includes process id and nonce to reduce collisions between concurrent runs.
+/// Uses `.exe` suffix on Windows and no suffix on Unix-like systems.
 fn tmp_exe_path(tmp_dir: &std::path::Path, pid: u32, nonce: u128) -> PathBuf {
     if cfg!(windows) {
         tmp_dir.join(format!("nialang-{pid}-{nonce}-run.exe"))

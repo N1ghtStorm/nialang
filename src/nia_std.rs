@@ -3,6 +3,11 @@
 pub const PRINTLN: &str = "println";
 
 /// LLVM IR prelude used by builtin `println` codegen.
+///
+/// Contains:
+/// - all static format strings/text fragments used by generated `printf` calls,
+/// - external declaration of `printf`.
+/// The returned string is embedded at the top of every generated module.
 pub fn llvm_prelude() -> &'static str {
     r#"; --- nialang std ---
 @nialang.std.fmt.i32 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1

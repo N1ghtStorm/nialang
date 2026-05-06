@@ -8,6 +8,18 @@ pub struct FnSig {
     pub ret: Option<Ty>,
 }
 
+/// Builds global symbol tables used by later typechecking passes.
+///
+/// ## Outputs
+/// - `struct_map`: struct name -> full `StructDef`
+/// - `fn_sigs`: function name -> parameter/return signature
+///
+/// ## Validations in this stage
+/// - rejects duplicate struct names,
+/// - rejects duplicate function names,
+/// - reserves builtin name `println` (user code cannot redefine it).
+///
+/// This pass is intentionally shallow: it does not typecheck function bodies.
 pub fn collect_sigs(
     structs: &[StructDef],
     fns: &[FnDef],
@@ -41,6 +53,15 @@ pub fn collect_sigs(
     Ok((struct_map, fn_sigs))
 }
 
+/// Typechecks one function against global symbol tables.
+///
+/// ## Responsibilities
+/// - seeds local env with parameter types,
+/// - validates each statement in order (mutating local env),
+/// - validates tail expression for non-void functions,
+/// - rejects trailing expression in void functions.
+///
+/// Returns final local environment (useful for tests/debugging).
 pub fn check_fn(
     f: &FnDef,
     struct_fields: &HashMap<String, StructDef>,
@@ -81,6 +102,7 @@ pub fn check_fn(
     Ok(env)
 }
 
+/// Structural type equality used by semantic checks and assertions.
 fn types_equal(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::I8, Ty::I8)
@@ -103,6 +125,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
     }
 }
 
+/// Returns whether type is one of supported integer primitives.
 fn is_integer_ty(t: &Ty) -> bool {
     matches!(
         t,
@@ -120,15 +143,20 @@ fn is_integer_ty(t: &Ty) -> bool {
     )
 }
 
+/// Returns whether type is a primitive printable scalar (`int` or `bool`).
 fn is_primitive_ty(t: &Ty) -> bool {
     is_integer_ty(t) || matches!(t, Ty::Bool)
 }
 
+/// Public printable-type predicate used for builtin `println`.
+///
+/// Includes recursive composites such as arrays/structs of printable fields and pointers.
 fn is_printable_ty(t: &Ty, structs: &HashMap<String, StructDef>) -> bool {
     let mut seen = HashSet::new();
     is_printable_ty_inner(t, structs, &mut seen)
 }
 
+/// Recursive implementation for printable-type checks with cycle protection.
 fn is_printable_ty_inner(
     t: &Ty,
     structs: &HashMap<String, StructDef>,
@@ -156,6 +184,17 @@ fn is_printable_ty_inner(
     }
 }
 
+/// Infers and validates expression type under current context.
+///
+/// ## Inputs
+/// - `env`: local variable type environment
+/// - `structs` / `fns`: global symbol tables
+/// - `hint`: optional expected type from surrounding context
+///
+/// ## Notes
+/// - Integer literals use `hint` for width/sign selection.
+/// - Builtin `println` is treated as a special-case call and returns `Ty::Unit`.
+/// - Function/struct constructor calls validate arity and per-arg compatibility.
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -386,6 +425,10 @@ fn infer_expr(
     }
 }
 
+/// Typechecks one statement and updates local env for following statements.
+///
+/// Statement order matters: `let` bindings become available only after they are checked.
+/// `return` checks against function declared return type.
 fn check_stmt(
     st: &Stmt,
     env: &mut HashMap<String, Ty>,

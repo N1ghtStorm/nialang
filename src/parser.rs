@@ -7,14 +7,17 @@ pub struct Parser {
 }
 
 impl Parser {
+    /// Builds parser over a pre-tokenized stream.
     pub fn new(tokens: Vec<Token>) -> Self {
         Self { tokens, pos: 0 }
     }
 
+    /// Returns current token without consuming it.
     fn peek(&self) -> &Token {
         self.tokens.get(self.pos).unwrap_or(&Token::Eof)
     }
 
+    /// Consumes and returns current token, or `Eof` when stream is exhausted.
     fn bump(&mut self) -> Token {
         let t = self.tokens.get(self.pos).cloned().unwrap_or(Token::Eof);
         if self.pos < self.tokens.len() {
@@ -23,6 +26,7 @@ impl Parser {
         t
     }
 
+    /// Consumes one token and validates that it matches `want`.
     fn expect(&mut self, want: &Token) -> Result<(), String> {
         let got = self.bump();
         if &got == want {
@@ -32,6 +36,15 @@ impl Parser {
         }
     }
 
+    /// Parses a complete source file into `(structs, functions)`.
+    ///
+    /// ## Grammar contract
+    /// Top-level accepts only:
+    /// - `struct ...`
+    /// - `fn ...`
+    ///
+    /// Any other token at top level is a hard parse error. This strictness keeps
+    /// recovery and diagnostics simple for a small language.
     pub fn parse_file(mut self) -> Result<(Vec<StructDef>, Vec<FnDef>), String> {
         let mut structs = Vec::new();
         let mut fns = Vec::new();
@@ -49,6 +62,12 @@ impl Parser {
         Ok((structs, fns))
     }
 
+    /// Parses struct declaration in one of two forms:
+    /// - named-field: `struct S { a: T, b: U }`
+    /// - tuple: `struct S (T, U, ...)`
+    ///
+    /// Tuple fields are stored with synthetic names `"0"`, `"1"`, ... so field
+    /// access can reuse common field machinery.
     fn parse_struct(&mut self) -> Result<StructDef, String> {
         self.expect(&Token::Struct)?;
         let name = self.expect_ident()?;
@@ -105,6 +124,11 @@ impl Parser {
         }
     }
 
+    /// Parses function declaration: name, params, optional return type, and body.
+    ///
+    /// Return type is omitted for `void` functions:
+    /// - `fn foo() { ... }` => no explicit return type
+    /// - `fn foo() i32 { ... }` => typed return
     fn parse_fn(&mut self) -> Result<FnDef, String> {
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
@@ -139,6 +163,13 @@ impl Parser {
         })
     }
 
+    /// Parses `{ ... }` block with statements and optional tail expression.
+    ///
+    /// ## Tail rule
+    /// Final expression without `;` becomes `Block.tail`.
+    /// This is used as function return value when function has explicit return type.
+    ///
+    /// Expressions ending with `;` are lowered to `Stmt::Expr`.
     fn parse_block(&mut self) -> Result<Block, String> {
         self.expect(&Token::LBrace)?;
         let mut stmts = Vec::new();
@@ -174,6 +205,7 @@ impl Parser {
         }
     }
 
+    /// Parses `let` statement with optional explicit type annotation.
     fn parse_let_stmt(&mut self) -> Result<Stmt, String> {
         self.expect(&Token::Let)?;
         let name = self.expect_ident()?;
@@ -192,6 +224,7 @@ impl Parser {
         Ok(Stmt::Let { name, ty, init })
     }
 
+    /// Parses `if <cond> { ... }` statement.
     fn parse_if_stmt(&mut self) -> Result<Stmt, String> {
         self.expect(&Token::If)?;
         let cond = self.parse_if_cond()?;
@@ -199,6 +232,14 @@ impl Parser {
         Ok(Stmt::If { cond, then_block })
     }
 
+    /// Parses restricted condition grammar for `if`.
+    ///
+    /// Restriction intentionally avoids ambiguity between:
+    /// - `if Foo { ... }` (condition `Foo`)
+    /// - `Foo { ... }` (struct literal syntax)
+    ///
+    /// The parser accepts a narrow condition subset and delegates richer semantic
+    /// validation to type checking.
     fn parse_if_cond(&mut self) -> Result<Expr, String> {
         // Keep `if foo { ... }` unambiguous with struct literals `Foo { ... }`.
         match self.bump() {
@@ -216,6 +257,7 @@ impl Parser {
         }
     }
 
+    /// Parses `return <expr>` statement with optional trailing semicolon.
     fn parse_return_stmt(&mut self) -> Result<Stmt, String> {
         self.expect(&Token::Return)?;
         let e = self.parse_expr()?;
@@ -225,6 +267,16 @@ impl Parser {
         Ok(Stmt::Return(e))
     }
 
+    /// Parses type grammar.
+    ///
+    /// Supported forms:
+    /// - primitives (`i32`, `bool`, ...)
+    /// - struct names (`MyStruct`)
+    /// - pointers (`&T`)
+    /// - fixed arrays (`[T; N]`)
+    ///
+    /// Pointer and array forms are recursive, so nested types like `&[i32; 4]`
+    /// parse naturally.
     fn parse_ty(&mut self) -> Result<Ty, String> {
         if matches!(self.peek(), Token::Amp) {
             self.bump();
@@ -260,10 +312,12 @@ impl Parser {
         }
     }
 
+    /// Expression entrypoint (currently delegates to additive precedence level).
     fn parse_expr(&mut self) -> Result<Expr, String> {
         self.parse_add()
     }
 
+    /// Parses left-associative `+` chains.
     fn parse_add(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_suffix_chain()?;
         while matches!(self.peek(), Token::Plus) {
@@ -274,6 +328,14 @@ impl Parser {
         Ok(left)
     }
 
+    /// Parses postfix expression chain with left-to-right folding.
+    ///
+    /// Handles:
+    /// - calls: `foo(a, b)`
+    /// - field access: `x.y` / tuple index field `x.0`
+    /// - indexing: `arr[i]`
+    ///
+    /// This function is where "primary expression + suffixes" gets normalized.
     fn parse_suffix_chain(&mut self) -> Result<Expr, String> {
         let mut e = self.parse_atom()?;
         loop {
@@ -320,6 +382,10 @@ impl Parser {
         Ok(e)
     }
 
+    /// Parses expression atoms (base terms before postfix chaining).
+    ///
+    /// Includes literals, identifiers, parenthesized expressions, unary pointer ops,
+    /// and array literals. Struct literals start here too after identifier lookahead.
     fn parse_atom(&mut self) -> Result<Expr, String> {
         match self.peek() {
             Token::Amp => {
@@ -356,6 +422,7 @@ impl Parser {
         }
     }
 
+    /// Parses named struct literal body after consuming struct identifier.
     fn parse_struct_lit_tail(&mut self, struct_name: String) -> Result<Expr, String> {
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
@@ -381,6 +448,7 @@ impl Parser {
         })
     }
 
+    /// Parses array literal body after consuming opening bracket.
     fn parse_array_lit_tail(&mut self) -> Result<Expr, String> {
         let mut elems = Vec::new();
         if !matches!(self.peek(), Token::RBracket) {
@@ -402,6 +470,7 @@ impl Parser {
         Ok(Expr::ArrayLit(elems))
     }
 
+    /// Consumes and returns identifier token.
     fn expect_ident(&mut self) -> Result<String, String> {
         match self.bump() {
             Token::Ident(s) => Ok(s),
@@ -414,6 +483,7 @@ impl Parser {
 mod tests {
     use super::*;
 
+    /// Shared parser assertion helper for fixtures and inline snippets.
     fn parse_ok(src: &str) {
         let toks = tokenize(src);
         let r = Parser::new(toks).parse_file();
@@ -533,6 +603,7 @@ fn main() i32 {
 }
 
 pub fn tokenize(input: &str) -> Vec<Token> {
+    // Turn lexer stream into parser-friendly vector and drop explicit EOF token.
     let mut l = crate::lexer::Lexer::new(input);
     let mut v = Vec::new();
     loop {

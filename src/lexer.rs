@@ -45,12 +45,20 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
+    /// Creates a lexer over the provided source text.
+    ///
+    /// The lexer is a simple single-pass scanner with one-token lookahead
+    /// implemented via `Peekable<Chars>`.
     pub fn new(input: &'a str) -> Self {
         Self {
             src: input.chars().peekable(),
         }
     }
 
+    /// Consumes whitespace and line comments (`// ...`) before tokenization.
+    ///
+    /// This method loops until it reaches a character that can start a real token.
+    /// Comments are skipped up to, but not including, the newline terminator.
     fn skip_ws_and_comments(&mut self) {
         loop {
             match self.src.peek() {
@@ -79,6 +87,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Produces the next token from input stream.
+    ///
+    /// ## Current behavior details
+    /// - Skips whitespace/comments first.
+    /// - Parses decimal integers only.
+    /// - Parses identifiers/keywords with ASCII alnum + `_` rule.
+    /// - On unknown characters returns `Token::Eof` (simple fail-stop behavior).
+    ///
+    /// Integer parsing uses saturating arithmetic to avoid panics for huge literals.
     pub fn next_token(&mut self) -> Token {
         self.skip_ws_and_comments();
         let Some(c) = self.src.next() else {
@@ -151,6 +168,7 @@ impl<'a> Lexer<'a> {
 mod tests {
     use super::*;
 
+    /// Test helper that tokenizes full input (excluding EOF marker).
     fn collect(src: &str) -> Vec<Token> {
         let mut l = Lexer::new(src);
         let mut out = Vec::new();
@@ -165,6 +183,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies all supported keywords and primitive type names are recognized.
     fn lex_keywords_and_types() {
         let src = "fn let struct if return true false i8 u8 i16 u16 i32 i64 u64 i128 isize usize u128 bool";
         let toks = collect(src);
@@ -195,6 +214,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies punctuation/operator tokens and comment skipping behavior.
     fn lex_symbols_and_comments() {
         let src = "a: b, c; ( ) { } [ ] + * & . = // comment\n42";
         let toks = collect(src);
@@ -224,6 +244,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies mixed whitespace/comments with multiple identifier tokens.
     fn lex_multiline_comments_whitespace_and_identifiers() {
         let src = "\n  // skip\nfoo\n// skip2\nbar_1";
         let toks = collect(src);
@@ -234,6 +255,7 @@ mod tests {
     }
 
     #[test]
+    /// Documents current fallback behavior for unknown characters (`@` => EOF).
     fn lex_unknown_char_stops_token_stream() {
         let src = "let x = 1 @ 2";
         let toks = collect(src);

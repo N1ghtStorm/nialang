@@ -5,6 +5,17 @@ use crate::ast::{Expr, FnDef, Stmt, StructDef, Ty};
 use crate::nia_std::PRINTLN;
 use crate::typecheck::FnSig;
 
+/// Emits complete textual LLVM module from already-validated AST.
+///
+/// ## Preconditions
+/// Input program is expected to be successfully typechecked; codegen uses that
+/// invariant and contains `unreachable!` branches for impossible typed states.
+///
+/// ## Emission order
+/// 1. Target header.
+/// 2. Std prelude (`printf` declaration and text/format globals).
+/// 3. Struct LLVM type declarations.
+/// 4. Function definitions.
 pub fn emit_module(
     structs: &[StructDef],
     fns: &[FnDef],
@@ -32,6 +43,9 @@ pub fn emit_module(
     out
 }
 
+/// Escapes arbitrary bytes into LLVM `c"..."` literal form.
+///
+/// Printable ASCII is emitted directly, while control/non-ASCII bytes are emitted as `\XX`.
 fn llvm_c_escape(bytes: &[u8]) -> String {
     let mut s = String::new();
     for &b in bytes {
@@ -47,6 +61,7 @@ fn llvm_c_escape(bytes: &[u8]) -> String {
     s
 }
 
+/// Produces unique global symbol name for named-struct JSON key fragment.
 fn struct_field_key_symbol(sname: &str, fname: &str) -> String {
     format!(
         "nialang.std.txt.json.key.{}.{}",
@@ -55,6 +70,7 @@ fn struct_field_key_symbol(sname: &str, fname: &str) -> String {
     )
 }
 
+/// Emits global string constants for named-struct JSON key rendering.
 fn emit_struct_print_constants(structs: &[StructDef]) -> String {
     let mut out = String::new();
     for s in structs.iter().filter(|s| !s.is_tuple) {
@@ -78,6 +94,7 @@ fn emit_struct_print_constants(structs: &[StructDef]) -> String {
     out
 }
 
+/// Maps high-level nialang type into LLVM IR textual type.
 fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
     match t {
         Ty::I8 => "i8".into(),
@@ -99,6 +116,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
     }
 }
 
+/// Emits LLVM `%struct.Name = type { ... }` declaration.
 fn struct_type_decl(s: &StructDef) -> String {
     let parts: Vec<String> = s.fields.iter().map(|(_, t)| llvm_ty(t, &[])).collect();
     format!(
@@ -108,6 +126,7 @@ fn struct_type_decl(s: &StructDef) -> String {
     )
 }
 
+/// Sanitizes user-defined names for safe LLVM symbol usage.
 fn sanitize(s: &str) -> String {
     s.chars()
         .map(|c| {
@@ -130,6 +149,7 @@ struct Gen<'a> {
 }
 
 impl<'a> Gen<'a> {
+    /// Constructs function-level codegen state.
     fn new(structs: &'a [StructDef], fn_sigs: &'a HashMap<String, FnSig>) -> Self {
         Self {
             structs,
@@ -141,18 +161,21 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Allocates fresh SSA temporary id.
     fn fresh(&mut self) -> String {
         let n = self.tmp;
         self.tmp += 1;
         format!("t{n}")
     }
 
+    /// Allocates fresh basic-block label id.
     fn fresh_label(&mut self, prefix: &str) -> String {
         let n = self.lbl;
         self.lbl += 1;
         format!("{prefix}.{n}")
     }
 
+    /// Emits pointer to first byte of global string constant.
     fn fmt_ptr(&mut self, sym: &str, size: u32) -> String {
         let tmp = self.fresh();
         writeln!(
@@ -164,19 +187,29 @@ impl<'a> Gen<'a> {
         format!("%{tmp}")
     }
 
+    /// Emits plain `printf` call for constant text fragment.
     fn emit_printf_text(&mut self, sym: &str, size: u32) {
         let p = self.fmt_ptr(sym, size);
         writeln!(self.out, "  call i32 (ptr, ...) @printf(ptr {})", p).unwrap();
     }
 
+    /// Convenience wrapper for dynamic known-at-runtime `usize` sizes.
     fn emit_printf_text_dynamic(&mut self, sym: &str, size: usize) {
         self.emit_printf_text(sym, size as u32);
     }
 
+    /// Looks up struct definition by source-level name.
     fn struct_def(&self, name: &str) -> Option<&StructDef> {
         self.structs.iter().find(|s| s.name == name)
     }
 
+    /// Emits primitive scalar printing (`int`, `bool`, pointer) with optional newline.
+    ///
+    /// This function centralizes ABI-sensitive formatting:
+    /// - sign/zero extension for small integers,
+    /// - `%lld`/`%llu` for 64-bit lanes,
+    /// - split hi/lo printing for 128-bit values,
+    /// - `ptrtoint` for pointer hex output.
     fn emit_print_primitive(&mut self, ty: &Ty, v: &str, newline: bool) {
         match ty {
             Ty::I8 => {
@@ -341,6 +374,10 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Emits array printing in `[a, b, c]` style with optional trailing newline.
+    ///
+    /// Elements are extracted using `extractvalue` and recursively rendered
+    /// via `emit_print_value`, so nested printable composites are supported.
     fn emit_print_array(&mut self, elem_ty: &Ty, n: usize, arr_v: &str, newline: bool) {
         self.emit_printf_text("nialang.std.txt.arr_open", 2);
         for i in 0..n {
@@ -364,6 +401,12 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Emits struct printing in two source-level forms:
+    /// - named structs -> JSON-like object form (`{"x": 1, "y": 2}`)
+    /// - tuple structs -> tuple form (`(1, 2)`)
+    ///
+    /// Field values are pulled from aggregate SSA value via `extractvalue` and then
+    /// recursively rendered according to each field type.
     fn emit_print_struct(&mut self, sname: &str, struct_v: &str, newline: bool) {
         let sdef = self.struct_def(sname).expect("typechecked struct");
         let is_tuple = sdef.is_tuple;
@@ -417,6 +460,10 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Recursive dispatcher for printable value lowering.
+    ///
+    /// Keeps all `println` formatting behavior in one place and ensures nested
+    /// composites (array/struct of array/struct/primitive/pointer) print consistently.
     fn emit_print_value(&mut self, ty: &Ty, v: &str, newline: bool) {
         match ty {
             Ty::Array(elem, n) => {
@@ -429,6 +476,7 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Resolves numeric field index for named/tuple field access codegen.
     fn struct_idx(&self, sname: &str, field: &str) -> Option<u32> {
         let s = self.structs.iter().find(|s| s.name == sname)?;
         s.fields
@@ -437,6 +485,14 @@ impl<'a> Gen<'a> {
             .map(|i| i as u32)
     }
 
+    /// Emits one full LLVM function definition.
+    ///
+    /// ## Strategy
+    /// - materialize params into stack slots for uniform local-variable handling,
+    /// - lower statements in order, supporting early termination on `return`,
+    /// - emit implicit final return from block tail for non-void functions.
+    ///
+    /// The function body is emitted in SSA-with-stack-slots style (simple and explicit).
     fn emit_fn(mut self, f: &FnDef) -> String {
         self.out.clear();
         let ret_ll = match &f.ret {
@@ -459,6 +515,8 @@ impl<'a> Gen<'a> {
         .unwrap();
         writeln!(self.out, "entry:").unwrap();
 
+        // Allocate and initialize stack slots for all parameters to unify load/store path
+        // with local variables.
         let mut local_ptr: HashMap<String, (Ty, String)> = HashMap::new();
         for (pname, pty) in f.params.iter() {
             let ps = sanitize(pname);
@@ -505,6 +563,10 @@ impl<'a> Gen<'a> {
         self.out
     }
 
+    /// Emits one statement into current function body.
+    ///
+    /// `locals` maps source names to `(type, stack_ptr)` and is cloned for `if` branch
+    /// lowering to keep branch-local mutations isolated.
     fn emit_stmt(
         &mut self,
         st: &Stmt,
@@ -570,6 +632,11 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Emits expression and returns `(type, value)` where value is either:
+    /// - immediate literal text, or
+    /// - SSA reference like `%t7`.
+    ///
+    /// Caller decides whether returned value should be stored, returned, printed, etc.
     fn emit_expr(
         &mut self,
         e: &Expr,
@@ -858,6 +925,7 @@ impl<'a> Gen<'a> {
     }
 }
 
+/// Lightweight type compatibility used by codegen assertions.
 fn types_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::I8, Ty::I8)
@@ -880,6 +948,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
     }
 }
 
+/// Convenience wrapper creating fresh generator per function.
 fn emit_fn(f: &FnDef, structs: &[StructDef], fn_sigs: &HashMap<String, FnSig>) -> String {
     Gen::new(structs, fn_sigs).emit_fn(f)
 }

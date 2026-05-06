@@ -9,6 +9,11 @@ mod parser;
 mod semantics;
 mod typecheck;
 
+/// Entrypoint of the compiler executable.
+///
+/// Delegates all real CLI work to `driver::pipeline::run_cli`, then mirrors the
+/// compiled program exit code back to the operating system. Any compilation/runtime
+/// failure is printed to stderr and returned as process exit code `1`.
 fn main() {
     match driver::pipeline::run_cli() {
         Ok(code) => std::process::exit(code),
@@ -21,6 +26,8 @@ fn main() {
 
 #[cfg(test)]
 mod self_test {
+    /// Helper used by integration-like unit tests:
+    /// reads a fixture file and runs the full compile pipeline on it.
     fn compile_fixture_ok(path: &str) {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
         let src = std::fs::read_to_string(&p).unwrap();
@@ -28,6 +35,7 @@ mod self_test {
     }
 
     #[test]
+    /// Ensures a representative set of valid language fixtures still compiles end-to-end.
     fn compile_fixtures_pipeline() {
         let files = [
             "examples/tests/ok_minimal.nia",
@@ -47,6 +55,7 @@ mod self_test {
     }
 
     #[test]
+    /// Ensures known-invalid fixtures fail during the compile pipeline.
     fn compile_multiple_error_fixtures() {
         let err_files = [
             "examples/tests/err_type_mismatch.nia",
@@ -64,6 +73,7 @@ mod self_test {
     }
 
     #[test]
+    /// Verifies that relative fixture paths are discoverable by path resolver logic.
     fn resolve_input_path_works_for_existing_relative_fixture() {
         let p = std::path::PathBuf::from("examples/tests/ok_minimal.nia");
         let r = crate::driver::pipeline::resolve_input_path(p);
