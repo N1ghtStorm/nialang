@@ -536,6 +536,11 @@ mod tests {
     }
 
     #[test]
+    fn parse_fixture_alloc_heap() {
+        parse_ok(include_str!("../examples/tests/ok_alloc_heap.nia"));
+    }
+
+    #[test]
     fn parse_array_type_and_literal() {
         parse_ok(include_str!("../examples/tests/ok_array.nia"));
     }

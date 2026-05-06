@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::ast::{Expr, FnDef, Stmt, StructDef, Ty};
-use crate::nia_std::PRINTLN;
+use crate::nia_std::{ALLOC, DEALLOC, PRINTLN, REALLOC};
 use crate::typecheck::FnSig;
 
 /// Emits complete textual LLVM module from already-validated AST.
@@ -201,6 +201,20 @@ impl<'a> Gen<'a> {
     /// Looks up struct definition by source-level name.
     fn struct_def(&self, name: &str) -> Option<&StructDef> {
         self.structs.iter().find(|s| s.name == name)
+    }
+
+    fn emit_sizeof_i64(&mut self, ty: &Ty) -> String {
+        let ty_ll = llvm_ty(ty, self.structs);
+        let gep = self.fresh();
+        let sz = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr {}, ptr null, i64 1",
+            gep, ty_ll
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = ptrtoint ptr %{} to i64", sz, gep).unwrap();
+        format!("%{sz}")
     }
 
     /// Emits primitive scalar printing (`int`, `bool`, pointer) with optional newline.
@@ -714,6 +728,51 @@ impl<'a> Gen<'a> {
                     self.emit_print_value(&at, &av, true);
                     return (Ty::Unit, String::new());
                 }
+                if name == ALLOC {
+                    let (at, av) = self.emit_expr(&args[0], locals, None);
+                    let sz = self.emit_sizeof_i64(&at);
+                    let raw = self.fresh();
+                    writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", raw, sz).unwrap();
+                    writeln!(
+                        self.out,
+                        "  store {} {}, ptr %{}",
+                        llvm_ty(&at, self.structs),
+                        av,
+                        raw
+                    )
+                    .unwrap();
+                    return (Ty::Ptr(Box::new(at)), format!("%{raw}"));
+                }
+                if name == DEALLOC {
+                    let (_, pv) = self.emit_expr(&args[0], locals, None);
+                    writeln!(self.out, "  call void @free(ptr {})", pv).unwrap();
+                    return (Ty::Unit, String::new());
+                }
+                if name == REALLOC {
+                    let (pt, pv) = self.emit_expr(&args[0], locals, None);
+                    let Ty::Ptr(pointee) = pt else {
+                        unreachable!("typechecked")
+                    };
+                    let (vt, vv) = self.emit_expr(&args[1], locals, Some(&pointee));
+                    debug_assert!(types_match(&vt, &pointee));
+                    let sz = self.emit_sizeof_i64(&pointee);
+                    let raw = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = call ptr @realloc(ptr {}, i64 {})",
+                        raw, pv, sz
+                    )
+                    .unwrap();
+                    writeln!(
+                        self.out,
+                        "  store {} {}, ptr %{}",
+                        llvm_ty(&pointee, self.structs),
+                        vv,
+                        raw
+                    )
+                    .unwrap();
+                    return (Ty::Ptr(pointee), format!("%{raw}"));
+                }
                 if let Some(sdef) = self.structs.iter().find(|s| s.name == *name && s.is_tuple) {
                     let llvm_st = format!("%struct.{}", sanitize(name));
                     let mut agg = "poison".to_string();
@@ -1046,5 +1105,13 @@ mod tests {
         assert!(ll.contains("nialang.std.txt.tuple_open"), "IR:\n{ll}");
         assert!(ll.contains("nialang.std.fmt.ptrhex"), "IR:\n{ll}");
         assert!(ll.contains("ptrtoint ptr"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_alloc_realloc_dealloc_calls_present() {
+        let ll = emit(include_str!("../examples/tests/ok_alloc_heap.nia"));
+        assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
+        assert!(ll.contains("call ptr @realloc"), "IR:\n{ll}");
+        assert!(ll.contains("call void @free"), "IR:\n{ll}");
     }
 }

@@ -1,0 +1,17 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() i32 {
+    let n: &i32 = alloc(10);
+    println(*n);
+    let n = realloc(n, 77);
+    println(*n);
+    dealloc(n);
+
+    let p: &Point = alloc(Point { x: 1, y: 2 });
+    println(*p);
+    dealloc(p);
+    0
+}

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Expr, FnDef, Stmt, StructDef, Ty};
-use crate::nia_std::PRINTLN;
+use crate::nia_std::{ALLOC, DEALLOC, PRINTLN, REALLOC};
 
 pub struct FnSig {
     pub params: Vec<Ty>,
@@ -32,9 +32,10 @@ pub fn collect_sigs(
     }
     let mut fn_sigs: HashMap<String, FnSig> = HashMap::new();
     for f in fns {
-        if f.name == PRINTLN {
+        if f.name == PRINTLN || f.name == ALLOC || f.name == DEALLOC || f.name == REALLOC {
             return Err(format!(
-                "function name `{PRINTLN}` is reserved for the standard library"
+                "function name `{}` is reserved for the standard library",
+                f.name
             ));
         }
         if fn_sigs
@@ -264,6 +265,48 @@ fn infer_expr(
                     ));
                 }
                 return Ok(Ty::Unit);
+            }
+            if name == ALLOC {
+                if args.len() != 1 {
+                    return Err(format!("`{ALLOC}` expects exactly 1 argument, got {}", args.len()));
+                }
+                let t = infer_expr(&args[0], env, structs, fns, None)?;
+                if matches!(t, Ty::Unit) {
+                    return Err(format!("`{ALLOC}` cannot allocate `()`"));
+                }
+                return Ok(Ty::Ptr(Box::new(t)));
+            }
+            if name == DEALLOC {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{DEALLOC}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let t = infer_expr(&args[0], env, structs, fns, None)?;
+                if !matches!(t, Ty::Ptr(_)) {
+                    return Err(format!("`{DEALLOC}` expects a pointer, got {t:?}"));
+                }
+                return Ok(Ty::Unit);
+            }
+            if name == REALLOC {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "`{REALLOC}` expects exactly 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let pt = infer_expr(&args[0], env, structs, fns, None)?;
+                let Ty::Ptr(pointee) = pt else {
+                    return Err(format!("`{REALLOC}` first argument must be pointer, got {pt:?}"));
+                };
+                let vt = infer_expr(&args[1], env, structs, fns, Some(&pointee))?;
+                if !types_equal(&vt, &pointee) {
+                    return Err(format!(
+                        "`{REALLOC}` value type mismatch: expected {pointee:?}, got {vt:?}"
+                    ));
+                }
+                return Ok(Ty::Ptr(pointee));
             }
             if let Some(def) = structs.get(name) {
                 if !def.is_tuple {
@@ -522,6 +565,7 @@ mod tests {
             include_str!("../examples/tests/ok_array_index.nia"),
             include_str!("../examples/tests/ok_print_array.nia"),
             include_str!("../examples/tests/ok_print_structs.nia"),
+            include_str!("../examples/tests/ok_alloc_heap.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);

@@ -1,6 +1,9 @@
 //! Built-in "std" surface: `println` is always available (reserved name).
 
 pub const PRINTLN: &str = "println";
+pub const ALLOC: &str = "alloc";
+pub const DEALLOC: &str = "dealloc";
+pub const REALLOC: &str = "realloc";
 
 /// LLVM IR prelude used by builtin `println` codegen.
 ///
@@ -34,6 +37,9 @@ pub fn llvm_prelude() -> &'static str {
 @nialang.std.txt.tuple_close_ln = private unnamed_addr constant [3 x i8] c")\0A\00", align 1
 
 declare i32 @printf(ptr nocapture, ...)
+declare ptr @malloc(i64)
+declare void @free(ptr)
+declare ptr @realloc(ptr, i64)
 
 "#
 }

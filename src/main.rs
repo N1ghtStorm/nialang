@@ -48,6 +48,7 @@ mod self_test {
             "examples/tests/ok_tuple_named_mix.nia",
             "examples/tests/ok_array.nia",
             "examples/tests/ok_array_index.nia",
+            "examples/tests/ok_alloc_heap.nia",
         ];
         for f in files {
             compile_fixture_ok(f);
