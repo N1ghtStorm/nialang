@@ -122,6 +122,10 @@ fn is_integer_ty(t: &Ty) -> bool {
     )
 }
 
+fn is_primitive_ty(t: &Ty) -> bool {
+    is_integer_ty(t) || matches!(t, Ty::Bool)
+}
+
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -179,14 +183,14 @@ fn infer_expr(
             if name == PRINTLN {
                 if args.len() != 1 {
                     return Err(format!(
-                        "`{PRINTLN}` expects exactly 1 argument (i32), got {}",
+                        "`{PRINTLN}` expects exactly 1 primitive argument, got {}",
                         args.len()
                     ));
                 }
                 let t = infer_expr(&args[0], env, structs, fns, None)?;
-                if !matches!(t, Ty::I32) {
+                if !is_primitive_ty(&t) {
                     return Err(format!(
-                        "`{PRINTLN}` expects i32, got {t:?} (cast not supported yet)"
+                        "`{PRINTLN}` expects primitive type, got {t:?}"
                     ));
                 }
                 return Ok(Ty::Unit);

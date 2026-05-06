@@ -22,6 +22,7 @@ fn main() i32 {
     let h: i128 = 3000000;
     let i: isize = 42;
     let j: usize = 43;
+    let k: bool = true;
 
     let packed = AllPrimitives {
         i8v: a,
@@ -36,6 +37,17 @@ fn main() i32 {
         usizev: j
     };
 
+    println(a);
+    println(b);
+    println(c);
+    println(d);
+    println(e);
+    println(f);
+    println(g);
+    println(h);
+    println(i);
+    println(j);
+    println(k);
     println(packed.i32v);
     packed.i32v
 }

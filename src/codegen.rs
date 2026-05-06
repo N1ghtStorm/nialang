@@ -105,6 +105,120 @@ impl<'a> Gen<'a> {
         format!("{prefix}.{n}")
     }
 
+    fn fmt_ptr(&mut self, sym: &str, size: u32) -> String {
+        let tmp = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds [{} x i8], ptr @{}, i64 0, i64 0",
+            tmp, size, sym
+        )
+        .unwrap();
+        format!("%{tmp}")
+    }
+
+    fn emit_println_primitive(&mut self, ty: &Ty, v: &str) {
+        match ty {
+            Ty::I8 => {
+                let t = self.fresh();
+                let p = self.fmt_ptr("nialang.std.fmt.i32", 4);
+                writeln!(self.out, "  %{} = sext i8 {} to i32", t, v).unwrap();
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i32 %{})",
+                    p, t
+                )
+                .unwrap();
+            }
+            Ty::U8 => {
+                let t = self.fresh();
+                let p = self.fmt_ptr("nialang.std.fmt.u32", 4);
+                writeln!(self.out, "  %{} = zext i8 {} to i32", t, v).unwrap();
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i32 %{})",
+                    p, t
+                )
+                .unwrap();
+            }
+            Ty::I16 => {
+                let t = self.fresh();
+                let p = self.fmt_ptr("nialang.std.fmt.i32", 4);
+                writeln!(self.out, "  %{} = sext i16 {} to i32", t, v).unwrap();
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i32 %{})",
+                    p, t
+                )
+                .unwrap();
+            }
+            Ty::U16 => {
+                let t = self.fresh();
+                let p = self.fmt_ptr("nialang.std.fmt.u32", 4);
+                writeln!(self.out, "  %{} = zext i16 {} to i32", t, v).unwrap();
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i32 %{})",
+                    p, t
+                )
+                .unwrap();
+            }
+            Ty::I32 => {
+                let p = self.fmt_ptr("nialang.std.fmt.i32", 4);
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i32 {})",
+                    p, v
+                )
+                .unwrap();
+            }
+            Ty::I64 | Ty::Isize => {
+                let p = self.fmt_ptr("nialang.std.fmt.i64", 6);
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i64 {})",
+                    p, v
+                )
+                .unwrap();
+            }
+            Ty::U64 | Ty::Usize => {
+                let p = self.fmt_ptr("nialang.std.fmt.u64", 6);
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i64 {})",
+                    p, v
+                )
+                .unwrap();
+            }
+            Ty::Bool => {
+                let t = self.fresh();
+                let p = self.fmt_ptr("nialang.std.fmt.u32", 4);
+                writeln!(self.out, "  %{} = zext i1 {} to i32", t, v).unwrap();
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i32 %{})",
+                    p, t
+                )
+                .unwrap();
+            }
+            Ty::I128 | Ty::U128 => {
+                let p = self.fmt_ptr("nialang.std.fmt.i128hex", 18);
+                let hi128 = self.fresh();
+                let hi64 = self.fresh();
+                let lo64 = self.fresh();
+                writeln!(self.out, "  %{} = lshr i128 {}, 64", hi128, v).unwrap();
+                writeln!(self.out, "  %{} = trunc i128 %{} to i64", hi64, hi128).unwrap();
+                writeln!(self.out, "  %{} = trunc i128 {} to i64", lo64, v).unwrap();
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i64 %{}, i64 %{})",
+                    p, hi64, lo64
+                )
+                .unwrap();
+            }
+            Ty::Struct(_) | Ty::Ptr(_) | Ty::Unit => unreachable!("typechecked"),
+        }
+    }
+
     fn struct_idx(&self, sname: &str, field: &str) -> Option<u32> {
         let s = self.structs.iter().find(|s| s.name == sname)?;
         s.fields
@@ -315,9 +429,8 @@ impl<'a> Gen<'a> {
             }
             Expr::Call { name, args } => {
                 if name == PRINTLN {
-                    let (at, av) = self.emit_expr(&args[0], locals, Some(&Ty::I32));
-                    debug_assert!(matches!(at, Ty::I32));
-                    writeln!(self.out, "  call void @println(i32 {av})").unwrap();
+                    let (at, av) = self.emit_expr(&args[0], locals, None);
+                    self.emit_println_primitive(&at, &av);
                     return (Ty::Unit, String::new());
                 }
                 let sig = self.fn_sigs.get(name).expect("unknown fn");
