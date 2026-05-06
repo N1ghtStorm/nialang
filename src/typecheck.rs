@@ -1,11 +1,39 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{Expr, FnDef, Stmt, StructDef, Ty};
+use crate::ast::{EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty};
 use crate::nia_std::{ALLOC, DEALLOC, PRINTLN, REALLOC};
 
 pub struct FnSig {
     pub params: Vec<Ty>,
     pub ret: Option<Ty>,
+}
+
+fn normalize_ty(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+) -> Result<Ty, String> {
+    match t {
+        Ty::Struct(name) => {
+            if enums.contains_key(name) {
+                Ok(Ty::Enum(name.clone()))
+            } else if structs.contains_key(name) {
+                Ok(Ty::Struct(name.clone()))
+            } else {
+                Err(format!("unknown type `{name}`"))
+            }
+        }
+        Ty::Ptr(inner) => Ok(Ty::Ptr(Box::new(normalize_ty(inner, structs, enums)?))),
+        Ty::Array(elem, n) => Ok(Ty::Array(Box::new(normalize_ty(elem, structs, enums)?), *n)),
+        other => Ok(other.clone()),
+    }
+}
+
+fn enum_variant<'a>(edef: &'a EnumDef, variant: &str) -> Option<&'a EnumVariantFields> {
+    edef.variants
+        .iter()
+        .find(|v| v.name == variant)
+        .map(|v| &v.fields)
 }
 
 /// Builds global symbol tables used by later typechecking passes.
@@ -22,14 +50,51 @@ pub struct FnSig {
 /// This pass is intentionally shallow: it does not typecheck function bodies.
 pub fn collect_sigs(
     structs: &[StructDef],
+    enums: &[EnumDef],
     fns: &[FnDef],
-) -> Result<(HashMap<String, StructDef>, HashMap<String, FnSig>), String> {
+) -> Result<(HashMap<String, StructDef>, HashMap<String, EnumDef>, HashMap<String, FnSig>), String>
+{
     let mut struct_map: HashMap<String, StructDef> = HashMap::new();
     for s in structs {
         if struct_map.insert(s.name.clone(), s.clone()).is_some() {
             return Err(format!("duplicate struct {}", s.name));
         }
     }
+    let mut enum_map: HashMap<String, EnumDef> = HashMap::new();
+    for e in enums {
+        if struct_map.contains_key(&e.name) {
+            return Err(format!("duplicate type name {}", e.name));
+        }
+        if enum_map.insert(e.name.clone(), e.clone()).is_some() {
+            return Err(format!("duplicate enum {}", e.name));
+        }
+    }
+    let mut normalized_structs = struct_map.clone();
+    let mut normalized_enums = enum_map.clone();
+    for e in normalized_enums.values_mut() {
+        for v in &mut e.variants {
+            match &mut v.fields {
+                EnumVariantFields::Unit => {}
+                EnumVariantFields::Tuple(ts) => {
+                    for t in ts {
+                        *t = normalize_ty(t, &struct_map, &enum_map)?;
+                    }
+                }
+                EnumVariantFields::Struct(fs) => {
+                    for (_, t) in fs {
+                        *t = normalize_ty(t, &struct_map, &enum_map)?;
+                    }
+                }
+            }
+        }
+    }
+
+    for s in normalized_structs.values_mut() {
+        for (_, t) in &mut s.fields {
+            *t = normalize_ty(t, &struct_map, &enum_map)?;
+        }
+    }
+
     let mut fn_sigs: HashMap<String, FnSig> = HashMap::new();
     for f in fns {
         if f.name == PRINTLN || f.name == ALLOC || f.name == DEALLOC || f.name == REALLOC {
@@ -42,8 +107,15 @@ pub fn collect_sigs(
             .insert(
                 f.name.clone(),
                 FnSig {
-                    params: f.params.iter().map(|(_, t)| t.clone()).collect(),
-                    ret: f.ret.clone(),
+                    params: f
+                        .params
+                        .iter()
+                        .map(|(_, t)| normalize_ty(t, &struct_map, &enum_map))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    ret: match &f.ret {
+                        Some(t) => Some(normalize_ty(t, &struct_map, &enum_map)?),
+                        None => None,
+                    },
                 },
             )
             .is_some()
@@ -51,7 +123,7 @@ pub fn collect_sigs(
             return Err(format!("duplicate function {}", f.name));
         }
     }
-    Ok((struct_map, fn_sigs))
+    Ok((normalized_structs, normalized_enums, fn_sigs))
 }
 
 /// Typechecks one function against global symbol tables.
@@ -66,6 +138,7 @@ pub fn collect_sigs(
 pub fn check_fn(
     f: &FnDef,
     struct_fields: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
     fn_sigs: &HashMap<String, FnSig>,
 ) -> Result<HashMap<String, Ty>, String> {
     let sig = fn_sigs
@@ -75,11 +148,11 @@ pub fn check_fn(
         return Err("internal param len mismatch".into());
     }
     let mut env: HashMap<String, Ty> = HashMap::new();
-    for ((pname, pty), _) in f.params.iter().zip(&sig.params) {
+    for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
         env.insert(pname.clone(), pty.clone());
     }
     for st in &f.body.stmts {
-        check_stmt(st, &mut env, struct_fields, fn_sigs, f.ret.as_ref())?;
+        check_stmt(st, &mut env, struct_fields, enums, fn_sigs, f.ret.as_ref())?;
     }
     if let Some(ret_ty) = &f.ret {
         let tail = f
@@ -87,7 +160,7 @@ pub fn check_fn(
             .tail
             .as_ref()
             .ok_or_else(|| format!("function {} must end with an expression", f.name))?;
-        let t = infer_expr(tail, &env, struct_fields, fn_sigs, Some(ret_ty))?;
+        let t = infer_expr(tail, &env, struct_fields, enums, fn_sigs, Some(ret_ty))?;
         if !types_equal(ret_ty, &t) {
             return Err(format!(
                 "function {} return type mismatch: expected {ret_ty:?}, got {t:?}",
@@ -121,6 +194,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_equal(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
+        (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         _ => false,
     }
@@ -200,6 +274,7 @@ fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
     structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
     fns: &HashMap<String, FnSig>,
     hint: Option<&Ty>,
 ) -> Result<Ty, String> {
@@ -225,7 +300,7 @@ fn infer_expr(
             .cloned()
             .ok_or_else(|| format!("unknown variable `{name}`")),
         Expr::Add(l, r) => {
-            let tl = infer_expr(l, env, structs, fns, None)?;
+            let tl = infer_expr(l, env, structs, enums, fns, None)?;
             if matches!(tl, Ty::Unit) {
                 return Err("void value on the left of `+`".into());
             }
@@ -235,7 +310,7 @@ fn infer_expr(
             if !is_integer_ty(&tl) {
                 return Err(format!("cannot use `+` on non-integer type {tl:?}"));
             }
-            let tr = infer_expr(r, env, structs, fns, Some(&tl))?;
+            let tr = infer_expr(r, env, structs, enums, fns, Some(&tl))?;
             if matches!(tr, Ty::Unit) {
                 return Err("void value on the right of `+`".into());
             }
@@ -258,7 +333,7 @@ fn infer_expr(
                         args.len()
                     ));
                 }
-                let t = infer_expr(&args[0], env, structs, fns, None)?;
+                let t = infer_expr(&args[0], env, structs, enums, fns, None)?;
                 if !is_printable_ty(&t, structs) {
                     return Err(format!(
                         "`{PRINTLN}` expects printable type, got {t:?}"
@@ -270,7 +345,7 @@ fn infer_expr(
                 if args.len() != 1 {
                     return Err(format!("`{ALLOC}` expects exactly 1 argument, got {}", args.len()));
                 }
-                let t = infer_expr(&args[0], env, structs, fns, None)?;
+                let t = infer_expr(&args[0], env, structs, enums, fns, None)?;
                 if matches!(t, Ty::Unit) {
                     return Err(format!("`{ALLOC}` cannot allocate `()`"));
                 }
@@ -283,7 +358,7 @@ fn infer_expr(
                         args.len()
                     ));
                 }
-                let t = infer_expr(&args[0], env, structs, fns, None)?;
+                let t = infer_expr(&args[0], env, structs, enums, fns, None)?;
                 if !matches!(t, Ty::Ptr(_)) {
                     return Err(format!("`{DEALLOC}` expects a pointer, got {t:?}"));
                 }
@@ -296,11 +371,11 @@ fn infer_expr(
                         args.len()
                     ));
                 }
-                let pt = infer_expr(&args[0], env, structs, fns, None)?;
+                let pt = infer_expr(&args[0], env, structs, enums, fns, None)?;
                 let Ty::Ptr(pointee) = pt else {
                     return Err(format!("`{REALLOC}` first argument must be pointer, got {pt:?}"));
                 };
-                let vt = infer_expr(&args[1], env, structs, fns, Some(&pointee))?;
+                let vt = infer_expr(&args[1], env, structs, enums, fns, Some(&pointee))?;
                 if !types_equal(&vt, &pointee) {
                     return Err(format!(
                         "`{REALLOC}` value type mismatch: expected {pointee:?}, got {vt:?}"
@@ -322,7 +397,7 @@ fn infer_expr(
                     ));
                 }
                 for (a, (_, ft)) in args.iter().zip(&def.fields) {
-                    let at = infer_expr(a, env, structs, fns, Some(ft))?;
+                    let at = infer_expr(a, env, structs, enums, fns, Some(ft))?;
                     if !types_equal(&at, ft) {
                         return Err(format!(
                             "tuple struct `{name}`: field type mismatch: expected {ft:?}, got {at:?}"
@@ -342,7 +417,7 @@ fn infer_expr(
                 ));
             }
             for (a, pt) in args.iter().zip(&sig.params) {
-                let at = infer_expr(a, env, structs, fns, Some(pt))?;
+                let at = infer_expr(a, env, structs, enums, fns, Some(pt))?;
                 if !types_equal(&at, pt) {
                     return Err(format!(
                         "call `{name}`: arg type mismatch: expected {pt:?}, got {at:?}"
@@ -353,6 +428,199 @@ fn infer_expr(
                 Some(t) => t.clone(),
                 None => Ty::Unit,
             })
+        }
+        Expr::EnumVariant { enum_name, variant } => {
+            let edef = enums
+                .get(enum_name)
+                .ok_or_else(|| format!("unknown enum `{enum_name}`"))?;
+            let Some(fields) = enum_variant(edef, variant) else {
+                return Err(format!(
+                    "enum `{enum_name}` has no variant `{variant}`"
+                ));
+            };
+            if !matches!(fields, EnumVariantFields::Unit) {
+                return Err(format!(
+                    "enum variant `{enum_name}::{variant}` requires payload"
+                ));
+            }
+            Ok(Ty::Enum(enum_name.clone()))
+        }
+        Expr::EnumTuple {
+            enum_name,
+            variant,
+            args,
+        } => {
+            let edef = enums
+                .get(enum_name)
+                .ok_or_else(|| format!("unknown enum `{enum_name}`"))?;
+            let Some(fields) = enum_variant(edef, variant) else {
+                return Err(format!(
+                    "enum `{enum_name}` has no variant `{variant}`"
+                ));
+            };
+            let EnumVariantFields::Tuple(ts) = fields else {
+                return Err(format!(
+                    "enum variant `{enum_name}::{variant}` is not tuple-style"
+                ));
+            };
+            if args.len() != ts.len() {
+                return Err(format!(
+                    "enum variant `{enum_name}::{variant}` expects {} args, got {}",
+                    ts.len(),
+                    args.len()
+                ));
+            }
+            for (a, t) in args.iter().zip(ts) {
+                let at = infer_expr(a, env, structs, enums, fns, Some(t))?;
+                if !types_equal(&at, t) {
+                    return Err(format!(
+                        "enum variant `{enum_name}::{variant}` arg mismatch: expected {t:?}, got {at:?}"
+                    ));
+                }
+            }
+            Ok(Ty::Enum(enum_name.clone()))
+        }
+        Expr::EnumStruct {
+            enum_name,
+            variant,
+            fields,
+        } => {
+            let edef = enums
+                .get(enum_name)
+                .ok_or_else(|| format!("unknown enum `{enum_name}`"))?;
+            let Some(vfields) = enum_variant(edef, variant) else {
+                return Err(format!(
+                    "enum `{enum_name}` has no variant `{variant}`"
+                ));
+            };
+            let EnumVariantFields::Struct(def_fields) = vfields else {
+                return Err(format!(
+                    "enum variant `{enum_name}::{variant}` is not struct-style"
+                ));
+            };
+            if fields.len() != def_fields.len() {
+                return Err(format!(
+                    "enum variant `{enum_name}::{variant}` expects {} fields, got {}",
+                    def_fields.len(),
+                    fields.len()
+                ));
+            }
+            for (fname, fty) in def_fields {
+                let Some((_, fe)) = fields.iter().find(|(n, _)| n == fname) else {
+                    return Err(format!(
+                        "enum variant `{enum_name}::{variant}` missing field `{fname}`"
+                    ));
+                };
+                let et = infer_expr(fe, env, structs, enums, fns, Some(fty))?;
+                if !types_equal(&et, fty) {
+                    return Err(format!(
+                        "enum variant `{enum_name}::{variant}` field `{fname}` mismatch: expected {fty:?}, got {et:?}"
+                    ));
+                }
+            }
+            Ok(Ty::Enum(enum_name.clone()))
+        }
+        Expr::Match { scrutinee, arms } => {
+            let st = infer_expr(scrutinee, env, structs, enums, fns, None)?;
+            let Ty::Enum(enum_name) = st else {
+                return Err("`match` scrutinee must be enum".into());
+            };
+            let edef = enums
+                .get(&enum_name)
+                .ok_or_else(|| format!("unknown enum `{enum_name}`"))?;
+            let mut seen = HashSet::new();
+            let mut out_ty: Option<Ty> = None;
+            for (pat, arm_expr) in arms {
+                let (pat_enum, pat_variant, pat_fields) = match pat {
+                    MatchPattern::Unit {
+                        enum_name,
+                        variant,
+                    } => (enum_name, variant, None),
+                    MatchPattern::Tuple {
+                        enum_name,
+                        variant,
+                        bindings,
+                    } => (enum_name, variant, Some((true, bindings))),
+                    MatchPattern::Struct {
+                        enum_name,
+                        variant,
+                        bindings,
+                    } => (enum_name, variant, Some((false, bindings))),
+                };
+                if pat_enum != &enum_name {
+                    return Err(format!(
+                        "match pattern enum mismatch: expected `{enum_name}`, got `{pat_enum}`"
+                    ));
+                }
+                let Some(vfields) = enum_variant(edef, pat_variant) else {
+                    return Err(format!("enum `{enum_name}` has no variant `{pat_variant}`"));
+                };
+                if !seen.insert(pat_variant.to_string()) {
+                    return Err(format!("duplicate match arm `{enum_name}::{pat_variant}`"));
+                }
+                let mut arm_env = env.clone();
+                match (vfields, pat_fields) {
+                    (EnumVariantFields::Unit, None) => {}
+                    (EnumVariantFields::Tuple(ts), Some((true, bindings))) => {
+                        if ts.len() != bindings.len() {
+                            return Err(format!(
+                                "match tuple pattern `{enum_name}::{pat_variant}` expects {} bindings, got {}",
+                                ts.len(),
+                                bindings.len()
+                            ));
+                        }
+                        for (b, t) in bindings.iter().zip(ts) {
+                            arm_env.insert(b.clone(), t.clone());
+                        }
+                    }
+                    (EnumVariantFields::Struct(fs), Some((false, bindings))) => {
+                        if fs.len() != bindings.len() {
+                            return Err(format!(
+                                "match struct pattern `{enum_name}::{pat_variant}` expects {} bindings, got {}",
+                                fs.len(),
+                                bindings.len()
+                            ));
+                        }
+                        for b in bindings {
+                            let Some((_, t)) = fs.iter().find(|(n, _)| n == b) else {
+                                return Err(format!(
+                                    "match struct pattern `{enum_name}::{pat_variant}` unknown field `{b}`"
+                                ));
+                            };
+                            arm_env.insert(b.clone(), t.clone());
+                        }
+                    }
+                    (EnumVariantFields::Unit, Some(_)) => {
+                        return Err(format!(
+                            "unit variant `{enum_name}::{pat_variant}` cannot bind fields"
+                        ))
+                    }
+                    (EnumVariantFields::Tuple(_), _) => {
+                        return Err(format!(
+                            "tuple variant `{enum_name}::{pat_variant}` requires tuple pattern"
+                        ))
+                    }
+                    (EnumVariantFields::Struct(_), _) => {
+                        return Err(format!(
+                            "struct variant `{enum_name}::{pat_variant}` requires struct pattern"
+                        ))
+                    }
+                }
+                let at = infer_expr(arm_expr, &arm_env, structs, enums, fns, hint)?;
+                if let Some(prev) = &out_ty {
+                    if !types_equal(prev, &at) {
+                        return Err(format!(
+                            "match arm types differ: expected {prev:?}, got {at:?}"
+                        ));
+                    }
+                } else {
+                    out_ty = Some(at);
+                }
+            }
+            if seen.len() != edef.variants.len() {
+                return Err(format!("non-exhaustive match on enum `{enum_name}`"));
+            }
+            Ok(out_ty.unwrap_or(Ty::Unit))
         }
         Expr::StructLit { name, fields } => {
             let def = structs
@@ -380,7 +648,7 @@ fn infer_expr(
                 let Some((_, fe)) = fields.iter().find(|(n, _)| n == dfn) else {
                     return Err(format!("struct `{name}` missing field `{dfn}`"));
                 };
-                let ft = infer_expr(fe, env, structs, fns, Some(dty))?;
+                let ft = infer_expr(fe, env, structs, enums, fns, Some(dty))?;
                 if !types_equal(dty, &ft) {
                     return Err(format!(
                         "struct `{name}` field `{dfn}`: expected {dty:?}, got {ft:?}"
@@ -398,7 +666,7 @@ fn infer_expr(
                     ));
                 }
                 for e in elems {
-                    let et = infer_expr(e, env, structs, fns, Some(elem_ty))?;
+                    let et = infer_expr(e, env, structs, enums, fns, Some(elem_ty))?;
                     if !types_equal(&et, elem_ty) {
                         return Err(format!(
                             "array element type mismatch: expected {elem_ty:?}, got {et:?}"
@@ -412,9 +680,9 @@ fn infer_expr(
                 let Some(first) = elems.first() else {
                     return Err("cannot infer type of empty array literal".into());
                 };
-                let first_ty = infer_expr(first, env, structs, fns, None)?;
+                let first_ty = infer_expr(first, env, structs, enums, fns, None)?;
                 for e in elems.iter().skip(1) {
-                    let et = infer_expr(e, env, structs, fns, Some(&first_ty))?;
+                    let et = infer_expr(e, env, structs, enums, fns, Some(&first_ty))?;
                     if !types_equal(&et, &first_ty) {
                         return Err(format!(
                             "array elements differ: expected {first_ty:?}, got {et:?}"
@@ -425,7 +693,7 @@ fn infer_expr(
             }
         },
         Expr::Field(obj, fname) => {
-            let bt = infer_expr(obj, env, structs, fns, None)?;
+            let bt = infer_expr(obj, env, structs, enums, fns, None)?;
             let Ty::Struct(sname) = bt else {
                 return Err("field access on non-struct".into());
             };
@@ -439,8 +707,8 @@ fn infer_expr(
                 .ok_or_else(|| format!("struct `{sname}` has no field `{fname}`"))
         }
         Expr::Index(arr, idx) => {
-            let at = infer_expr(arr, env, structs, fns, None)?;
-            let it = infer_expr(idx, env, structs, fns, Some(&Ty::I32))?;
+            let at = infer_expr(arr, env, structs, enums, fns, None)?;
+            let it = infer_expr(idx, env, structs, enums, fns, Some(&Ty::I32))?;
             if !matches!(it, Ty::I32) {
                 return Err(format!("array index must be i32, got {it:?}"));
             }
@@ -459,7 +727,7 @@ fn infer_expr(
             _ => Err("address-of is only supported for a simple variable (e.g. `&x`)".into()),
         },
         Expr::Deref(inner) => {
-            let ti = infer_expr(inner, env, structs, fns, None)?;
+            let ti = infer_expr(inner, env, structs, enums, fns, None)?;
             match ti {
                 Ty::Ptr(p) => Ok((*p).clone()),
                 _ => Err(format!("dereference requires a pointer, got {ti:?}")),
@@ -476,6 +744,7 @@ fn check_stmt(
     st: &Stmt,
     env: &mut HashMap<String, Ty>,
     struct_fields: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
     fn_sigs: &HashMap<String, FnSig>,
     fn_ret: Option<&Ty>,
 ) -> Result<(), String> {
@@ -485,15 +754,19 @@ fn check_stmt(
             ty: ann,
             init,
         } => {
-            let hint = ann.as_ref();
-            let t = infer_expr(init, env, struct_fields, fn_sigs, hint)?;
+            let ann_norm = match ann {
+                Some(t) => Some(normalize_ty(t, struct_fields, enums)?),
+                None => None,
+            };
+            let t = infer_expr(init, env, struct_fields, enums, fn_sigs, ann_norm.as_ref())?;
             if matches!(t, Ty::Unit) {
                 return Err(format!(
                     "let {name}: cannot bind a void value (missing return?)"
                 ));
             }
-            if let Some(a) = ann {
-                if !types_equal(a, &t) {
+            if let Some(a_raw) = ann {
+                let a = normalize_ty(a_raw, struct_fields, enums)?;
+                if !types_equal(&a, &t) {
                     return Err(format!(
                         "let {name}: type annotation mismatch: expected {a:?}, got {t:?}"
                     ));
@@ -502,10 +775,10 @@ fn check_stmt(
             env.insert(name.clone(), t);
         }
         Stmt::Expr(e) => {
-            infer_expr(e, env, struct_fields, fn_sigs, None)?;
+            infer_expr(e, env, struct_fields, enums, fn_sigs, None)?;
         }
         Stmt::Assign { target, value } => {
-            let tt = infer_expr(target, env, struct_fields, fn_sigs, None)?;
+            let tt = infer_expr(target, env, struct_fields, enums, fn_sigs, None)?;
             match target {
                 Expr::Ident(_) | Expr::Deref(_) => {}
                 _ => {
@@ -515,7 +788,7 @@ fn check_stmt(
                     )
                 }
             }
-            let vt = infer_expr(value, env, struct_fields, fn_sigs, Some(&tt))?;
+            let vt = infer_expr(value, env, struct_fields, enums, fn_sigs, Some(&tt))?;
             if !types_equal(&tt, &vt) {
                 return Err(format!(
                     "assignment type mismatch: target {tt:?}, value {vt:?}"
@@ -526,7 +799,7 @@ fn check_stmt(
             let Some(ret_ty) = fn_ret else {
                 return Err("`return` is not allowed in void functions".into());
             };
-            let t = infer_expr(e, env, struct_fields, fn_sigs, Some(ret_ty))?;
+            let t = infer_expr(e, env, struct_fields, enums, fn_sigs, Some(ret_ty))?;
             if !types_equal(&t, ret_ty) {
                 return Err(format!(
                     "`return` type mismatch: expected {ret_ty:?}, got {t:?}"
@@ -534,16 +807,16 @@ fn check_stmt(
             }
         }
         Stmt::If { cond, then_block } => {
-            let t = infer_expr(cond, env, struct_fields, fn_sigs, Some(&Ty::Bool))?;
+            let t = infer_expr(cond, env, struct_fields, enums, fn_sigs, Some(&Ty::Bool))?;
             if !types_equal(&t, &Ty::Bool) {
                 return Err(format!("`if` condition must be bool, got {t:?}"));
             }
             let mut then_env = env.clone();
             for st in &then_block.stmts {
-                check_stmt(st, &mut then_env, struct_fields, fn_sigs, fn_ret)?;
+                check_stmt(st, &mut then_env, struct_fields, enums, fn_sigs, fn_ret)?;
             }
             if let Some(tail) = &then_block.tail {
-                infer_expr(tail, &then_env, struct_fields, fn_sigs, None)?;
+                infer_expr(tail, &then_env, struct_fields, enums, fn_sigs, None)?;
             }
         }
     }
@@ -555,15 +828,15 @@ mod tests {
     use super::*;
     use crate::parser::{Parser, tokenize};
 
-    fn parse(src: &str) -> (Vec<StructDef>, Vec<FnDef>) {
+    fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>) {
         Parser::new(tokenize(src)).parse_file().expect("parse success")
     }
 
     fn check_all(src: &str) -> Result<(), String> {
-        let (structs, fns) = parse(src);
-        let (struct_map, fn_sigs) = collect_sigs(&structs, &fns)?;
+        let (structs, enums, fns) = parse(src);
+        let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns)?;
         for f in &fns {
-            check_fn(f, &struct_map, &fn_sigs)?;
+            check_fn(f, &struct_map, &enum_map, &fn_sigs)?;
         }
         Ok(())
     }
@@ -585,6 +858,8 @@ mod tests {
             include_str!("../examples/tests/ok_print_structs.nia"),
             include_str!("../examples/tests/ok_alloc_heap.nia"),
             include_str!("../examples/tests/ok_ptr_write.nia"),
+            include_str!("../examples/tests/ok_enum_match.nia"),
+            include_str!("../examples/tests/ok_enum_payload_match.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);

@@ -1,0 +1,15 @@
+enum State { Idle, Running, Done }
+
+fn value(s: State) i32 {
+    match s {
+        State::Idle => 0,
+        State::Running => 1,
+        State::Done => 2,
+    }
+}
+
+fn main() i32 {
+    let s = State::Running;
+    println(value(s));
+    0
+}

@@ -50,6 +50,8 @@ mod self_test {
             "examples/tests/ok_array_index.nia",
             "examples/tests/ok_alloc_heap.nia",
             "examples/tests/ok_ptr_write.nia",
+            "examples/tests/ok_enum_match.nia",
+            "examples/tests/ok_enum_payload_match.nia",
         ];
         for f in files {
             compile_fixture_ok(f);

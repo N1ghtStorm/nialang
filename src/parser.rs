@@ -1,4 +1,7 @@
-use crate::ast::{Block, Expr, FnDef, Stmt, StructDef, Ty};
+use crate::ast::{
+    Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
+    Ty,
+};
 use crate::lexer::Token;
 
 pub struct Parser {
@@ -15,6 +18,10 @@ impl Parser {
     /// Returns current token without consuming it.
     fn peek(&self) -> &Token {
         self.tokens.get(self.pos).unwrap_or(&Token::Eof)
+    }
+
+    fn peek_n(&self, n: usize) -> &Token {
+        self.tokens.get(self.pos + n).unwrap_or(&Token::Eof)
     }
 
     /// Consumes and returns current token, or `Eof` when stream is exhausted.
@@ -36,7 +43,7 @@ impl Parser {
         }
     }
 
-    /// Parses a complete source file into `(structs, functions)`.
+    /// Parses a complete source file into `(structs, enums, functions)`.
     ///
     /// ## Grammar contract
     /// Top-level accepts only:
@@ -45,13 +52,17 @@ impl Parser {
     ///
     /// Any other token at top level is a hard parse error. This strictness keeps
     /// recovery and diagnostics simple for a small language.
-    pub fn parse_file(mut self) -> Result<(Vec<StructDef>, Vec<FnDef>), String> {
+    pub fn parse_file(mut self) -> Result<(Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>), String> {
         let mut structs = Vec::new();
+        let mut enums = Vec::new();
         let mut fns = Vec::new();
         while !matches!(self.peek(), Token::Eof) {
             match self.peek().clone() {
                 Token::Struct => {
                     structs.push(self.parse_struct()?);
+                }
+                Token::Enum => {
+                    enums.push(self.parse_enum()?);
                 }
                 Token::Fn => {
                     fns.push(self.parse_fn()?);
@@ -59,7 +70,81 @@ impl Parser {
                 other => return Err(format!("unexpected token at top level: {other:?}")),
             }
         }
-        Ok((structs, fns))
+        Ok((structs, enums, fns))
+    }
+
+    fn parse_enum(&mut self) -> Result<EnumDef, String> {
+        self.expect(&Token::Enum)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        let mut variants = Vec::new();
+        if !matches!(self.peek(), Token::RBrace) {
+            loop {
+                let vname = self.expect_ident()?;
+                let fields = if matches!(self.peek(), Token::LParen) {
+                    self.bump();
+                    let mut elems = Vec::new();
+                    if !matches!(self.peek(), Token::RParen) {
+                        loop {
+                            elems.push(self.parse_ty()?);
+                            match self.peek() {
+                                Token::Comma => {
+                                    self.bump();
+                                    if matches!(self.peek(), Token::RParen) {
+                                        break;
+                                    }
+                                }
+                                Token::RParen => break,
+                                _ => return Err(format!("expected , or ), got {:?}", self.peek())),
+                            }
+                        }
+                    }
+                    self.expect(&Token::RParen)?;
+                    EnumVariantFields::Tuple(elems)
+                } else if matches!(self.peek(), Token::LBrace) {
+                    self.bump();
+                    let mut flds = Vec::new();
+                    if !matches!(self.peek(), Token::RBrace) {
+                        loop {
+                            let fname = self.expect_ident()?;
+                            self.expect(&Token::Colon)?;
+                            let fty = self.parse_ty()?;
+                            flds.push((fname, fty));
+                            match self.peek() {
+                                Token::Comma => {
+                                    self.bump();
+                                    if matches!(self.peek(), Token::RBrace) {
+                                        break;
+                                    }
+                                }
+                                Token::RBrace => break,
+                                _ => return Err(format!("expected , or }}, got {:?}", self.peek())),
+                            }
+                        }
+                    }
+                    self.expect(&Token::RBrace)?;
+                    EnumVariantFields::Struct(flds)
+                } else {
+                    EnumVariantFields::Unit
+                };
+                variants.push(EnumVariantDef {
+                    name: vname,
+                    fields,
+                });
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                        if matches!(self.peek(), Token::RBrace) {
+                            break;
+                        }
+                    }
+                    Token::RBrace => break,
+                    _ => return Err(format!("expected , or }}, got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(EnumDef { name, variants })
     }
 
     /// Parses struct declaration in one of two forms:
@@ -395,6 +480,7 @@ impl Parser {
     /// and array literals. Struct literals start here too after identifier lookahead.
     fn parse_atom(&mut self) -> Result<Expr, String> {
         match self.peek() {
+            Token::Match => self.parse_match_expr(),
             Token::Amp => {
                 self.bump();
                 let inner = self.parse_atom()?;
@@ -413,6 +499,77 @@ impl Parser {
                 Token::Int(n) => Ok(Expr::Int(n)),
                 Token::Bool(b) => Ok(Expr::Bool(b)),
                 Token::Ident(name) => {
+                    if matches!(self.peek(), Token::DoubleColon) {
+                        self.bump();
+                        let variant = self.expect_ident()?;
+                        if matches!(self.peek(), Token::LParen) {
+                            self.bump();
+                            let mut args = Vec::new();
+                            if !matches!(self.peek(), Token::RParen) {
+                                loop {
+                                    args.push(self.parse_expr()?);
+                                    match self.peek() {
+                                        Token::Comma => {
+                                            self.bump();
+                                            if matches!(self.peek(), Token::RParen) {
+                                                break;
+                                            }
+                                        }
+                                        Token::RParen => break,
+                                        _ => {
+                                            return Err(format!(
+                                                "expected , or ), got {:?}",
+                                                self.peek()
+                                            ))
+                                        }
+                                    }
+                                }
+                            }
+                            self.expect(&Token::RParen)?;
+                            return Ok(Expr::EnumTuple {
+                                enum_name: name,
+                                variant,
+                                args,
+                            });
+                        }
+                        if matches!(self.peek(), Token::LBrace) {
+                            self.bump();
+                            let mut fields = Vec::new();
+                            if !matches!(self.peek(), Token::RBrace) {
+                                loop {
+                                    let fname = self.expect_ident()?;
+                                    self.expect(&Token::Colon)?;
+                                    let fe = self.parse_expr()?;
+                                    fields.push((fname, fe));
+                                    match self.peek() {
+                                        Token::Comma => {
+                                            self.bump();
+                                            if matches!(self.peek(), Token::RBrace) {
+                                                break;
+                                            }
+                                        }
+                                        Token::RBrace => break,
+                                        _ => {
+                                            return Err(format!(
+                                                "expected , or }}, got {:?}",
+                                                self.peek()
+                                            ))
+                                        }
+                                    }
+                                }
+                            }
+                            self.expect(&Token::RBrace)?;
+                            return Ok(Expr::EnumStruct {
+                                enum_name: name,
+                                variant,
+                                fields,
+                            });
+                        }
+                        return Ok(Expr::EnumVariant {
+                            enum_name: name,
+                            variant,
+                        });
+                    }
                     if matches!(self.peek(), Token::LBrace) {
                         self.parse_struct_lit_tail(name)
                     } else {
@@ -484,6 +641,86 @@ impl Parser {
             other => Err(format!("expected identifier, got {other:?}")),
         }
     }
+
+    fn parse_match_expr(&mut self) -> Result<Expr, String> {
+        self.expect(&Token::Match)?;
+        let scrutinee = if matches!(self.peek(), Token::Ident(_))
+            && matches!(self.peek_n(1), Token::LBrace)
+        {
+            Expr::Ident(self.expect_ident()?)
+        } else {
+            self.parse_expr()?
+        };
+        self.expect(&Token::LBrace)?;
+        let mut arms = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            let enum_name = self.expect_ident()?;
+            self.expect(&Token::DoubleColon)?;
+            let variant = self.expect_ident()?;
+            let pat = if matches!(self.peek(), Token::LParen) {
+                self.bump();
+                let mut bindings = Vec::new();
+                if !matches!(self.peek(), Token::RParen) {
+                    loop {
+                        bindings.push(self.expect_ident()?);
+                        match self.peek() {
+                            Token::Comma => {
+                                self.bump();
+                                if matches!(self.peek(), Token::RParen) {
+                                    break;
+                                }
+                            }
+                            Token::RParen => break,
+                            _ => return Err(format!("expected , or ), got {:?}", self.peek())),
+                        }
+                    }
+                }
+                self.expect(&Token::RParen)?;
+                MatchPattern::Tuple {
+                    enum_name,
+                    variant,
+                    bindings,
+                }
+            } else if matches!(self.peek(), Token::LBrace) {
+                self.bump();
+                let mut bindings = Vec::new();
+                if !matches!(self.peek(), Token::RBrace) {
+                    loop {
+                        bindings.push(self.expect_ident()?);
+                        match self.peek() {
+                            Token::Comma => {
+                                self.bump();
+                                if matches!(self.peek(), Token::RBrace) {
+                                    break;
+                                }
+                            }
+                            Token::RBrace => break,
+                            _ => return Err(format!("expected , or }}, got {:?}", self.peek())),
+                        }
+                    }
+                }
+                self.expect(&Token::RBrace)?;
+                MatchPattern::Struct {
+                    enum_name,
+                    variant,
+                    bindings,
+                }
+            } else {
+                MatchPattern::Unit { enum_name, variant }
+            };
+            self.expect(&Token::FatArrow)?;
+            let arm_expr = self.parse_expr()?;
+            arms.push((pat, arm_expr));
+            if matches!(self.peek(), Token::Comma) {
+                self.bump();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(Expr::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -550,6 +787,16 @@ mod tests {
     #[test]
     fn parse_fixture_ptr_write() {
         parse_ok(include_str!("../examples/tests/ok_ptr_write.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_enum_match() {
+        parse_ok(include_str!("../examples/tests/ok_enum_match.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_enum_payload_match() {
+        parse_ok(include_str!("../examples/tests/ok_enum_payload_match.nia"));
     }
 
     #[test]

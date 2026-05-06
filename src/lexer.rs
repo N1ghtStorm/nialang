@@ -6,7 +6,9 @@ pub enum Token {
     Fn,
     Let,
     Struct,
+    Enum,
     If,
+    Match,
     Return,
     Ident(String),
     Int(i128),
@@ -24,6 +26,8 @@ pub enum Token {
     Star,
     Amp,
     Dot,
+    DoubleColon,
+    FatArrow,
     Eq,
     TyI8,
     TyU8,
@@ -102,6 +106,10 @@ impl<'a> Lexer<'a> {
             return Token::Eof;
         };
         match c {
+            ':' if matches!(self.src.peek(), Some(':')) => {
+                self.src.next();
+                Token::DoubleColon
+            }
             ':' => Token::Colon,
             ',' => Token::Comma,
             ';' => Token::Semi,
@@ -115,6 +123,10 @@ impl<'a> Lexer<'a> {
             '*' => Token::Star,
             '&' => Token::Amp,
             '.' => Token::Dot,
+            '=' if matches!(self.src.peek(), Some('>')) => {
+                self.src.next();
+                Token::FatArrow
+            }
             '=' => Token::Eq,
             '0'..='9' => {
                 let mut n = (c as u8 - b'0') as i128;
@@ -140,7 +152,9 @@ impl<'a> Lexer<'a> {
                     "fn" => Token::Fn,
                     "let" => Token::Let,
                     "struct" => Token::Struct,
+                    "enum" => Token::Enum,
                     "if" => Token::If,
+                    "match" => Token::Match,
                     "return" => Token::Return,
                     "true" => Token::Bool(true),
                     "false" => Token::Bool(false),

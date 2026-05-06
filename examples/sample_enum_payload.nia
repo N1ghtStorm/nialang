@@ -1,0 +1,20 @@
+enum Event {
+    Quit,
+    Resize(i32, i32),
+    Move { x: i32, y: i32 },
+}
+
+fn code(e: Event) i32 {
+    match e {
+        Event::Quit => 0,
+        Event::Resize(w, h) => w + h,
+        Event::Move { x, y } => x + y,
+    }
+}
+
+fn main() i32 {
+    println(code(Event::Quit));
+    println(code(Event::Resize(5, 6)));
+    println(code(Event::Move { x: 1, y: 2 }));
+    0
+}

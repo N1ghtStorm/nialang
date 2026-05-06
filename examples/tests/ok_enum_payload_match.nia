@@ -1,0 +1,20 @@
+enum Value {
+    Int(i32),
+    Pair(i32, i32),
+    Point { x: i32, y: i32 },
+}
+
+fn eval(v: Value) i32 {
+    match v {
+        Value::Int(n) => n,
+        Value::Pair(a, b) => a + b,
+        Value::Point { x, y } => x + y,
+    }
+}
+
+fn main() i32 {
+    println(eval(Value::Int(7)));
+    println(eval(Value::Pair(3, 4)));
+    println(eval(Value::Point { x: 10, y: 20 }));
+    0
+}

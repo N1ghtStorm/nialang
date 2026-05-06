@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use crate::ast::{Expr, FnDef, Stmt, StructDef, Ty};
+use crate::ast::{EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty};
 use crate::nia_std::{ALLOC, DEALLOC, PRINTLN, REALLOC};
 use crate::typecheck::FnSig;
 
@@ -18,6 +18,7 @@ use crate::typecheck::FnSig;
 /// 4. Function definitions.
 pub fn emit_module(
     structs: &[StructDef],
+    enums: &[EnumDef],
     fns: &[FnDef],
     fn_sigs: &HashMap<String, FnSig>,
 ) -> String {
@@ -32,12 +33,16 @@ pub fn emit_module(
         out.push_str(&struct_type_decl(s));
         out.push('\n');
     }
-    if !structs.is_empty() {
+    for e in enums {
+        out.push_str(&enum_type_decl(e, structs));
+        out.push('\n');
+    }
+    if !structs.is_empty() || !enums.is_empty() {
         out.push('\n');
     }
 
     for f in fns {
-        out.push_str(&emit_fn(f, structs, fn_sigs));
+        out.push_str(&emit_fn(f, structs, enums, fn_sigs));
         out.push('\n');
     }
     out
@@ -111,6 +116,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Bool => "i1".into(),
         Ty::Array(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
         Ty::Struct(n) => format!("%struct.{}", sanitize(n)),
+        Ty::Enum(n) => format!("%enum.{}", sanitize(n)),
         Ty::Ptr(_) => "ptr".into(),
         Ty::Unit => "void".into(),
     }
@@ -124,6 +130,40 @@ fn struct_type_decl(s: &StructDef) -> String {
         sanitize(&s.name),
         parts.join(", ")
     )
+}
+
+fn enum_variant_payload_ty(v: &crate::ast::EnumVariantDef, structs: &[StructDef]) -> String {
+    match &v.fields {
+        EnumVariantFields::Unit => "i8".into(),
+        EnumVariantFields::Tuple(ts) => {
+            if ts.len() == 1 {
+                llvm_ty(&ts[0], structs)
+            } else {
+                let inner = ts
+                    .iter()
+                    .map(|t| llvm_ty(t, structs))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {inner} }}")
+            }
+        }
+        EnumVariantFields::Struct(fs) => {
+            let inner = fs
+                .iter()
+                .map(|(_, t)| llvm_ty(t, structs))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {inner} }}")
+        }
+    }
+}
+
+fn enum_type_decl(e: &EnumDef, structs: &[StructDef]) -> String {
+    let mut parts = vec!["i32".to_string()];
+    for v in &e.variants {
+        parts.push(enum_variant_payload_ty(v, structs));
+    }
+    format!("%enum.{} = type {{ {} }}", sanitize(&e.name), parts.join(", "))
 }
 
 /// Sanitizes user-defined names for safe LLVM symbol usage.
@@ -141,6 +181,7 @@ fn sanitize(s: &str) -> String {
 
 struct Gen<'a> {
     structs: &'a [StructDef],
+    enums: &'a [EnumDef],
     fn_sigs: &'a HashMap<String, FnSig>,
     tmp: u32,
     lbl: u32,
@@ -150,9 +191,10 @@ struct Gen<'a> {
 
 impl<'a> Gen<'a> {
     /// Constructs function-level codegen state.
-    fn new(structs: &'a [StructDef], fn_sigs: &'a HashMap<String, FnSig>) -> Self {
+    fn new(structs: &'a [StructDef], enums: &'a [EnumDef], fn_sigs: &'a HashMap<String, FnSig>) -> Self {
         Self {
             structs,
+            enums,
             fn_sigs,
             tmp: 0,
             lbl: 0,
@@ -201,6 +243,24 @@ impl<'a> Gen<'a> {
     /// Looks up struct definition by source-level name.
     fn struct_def(&self, name: &str) -> Option<&StructDef> {
         self.structs.iter().find(|s| s.name == name)
+    }
+
+    fn enum_tag(&self, enum_name: &str, variant: &str) -> Option<i32> {
+        let e = self.enums.iter().find(|e| e.name == enum_name)?;
+        e.variants
+            .iter()
+            .position(|v| v.name == variant)
+            .map(|i| i as i32)
+    }
+
+    fn enum_variant_index(&self, enum_name: &str, variant: &str) -> Option<usize> {
+        let e = self.enums.iter().find(|e| e.name == enum_name)?;
+        e.variants.iter().position(|v| v.name == variant)
+    }
+
+    fn enum_variant_def(&self, enum_name: &str, variant: &str) -> Option<&crate::ast::EnumVariantDef> {
+        let e = self.enums.iter().find(|e| e.name == enum_name)?;
+        e.variants.iter().find(|v| v.name == variant)
     }
 
     fn emit_sizeof_i64(&mut self, ty: &Ty) -> String {
@@ -384,7 +444,7 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
             }
-            Ty::Array(_, _) | Ty::Struct(_) | Ty::Unit => unreachable!("typechecked"),
+            Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit => unreachable!("typechecked"),
         }
     }
 
@@ -509,12 +569,13 @@ impl<'a> Gen<'a> {
     /// The function body is emitted in SSA-with-stack-slots style (simple and explicit).
     fn emit_fn(mut self, f: &FnDef) -> String {
         self.out.clear();
-        let ret_ll = match &f.ret {
+        let sig = self.fn_sigs.get(&f.name).expect("typechecked sig");
+        let ret_ll = match &sig.ret {
             None => "void".into(),
             Some(t) => llvm_ty(t, self.structs),
         };
         let mut params = Vec::new();
-        for (pname, pty) in f.params.iter() {
+        for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
             let ll = llvm_ty(pty, self.structs);
             let ps = sanitize(pname);
             params.push(format!("{ll} %{ps}"));
@@ -532,7 +593,7 @@ impl<'a> Gen<'a> {
         // Allocate and initialize stack slots for all parameters to unify load/store path
         // with local variables.
         let mut local_ptr: HashMap<String, (Ty, String)> = HashMap::new();
-        for (pname, pty) in f.params.iter() {
+        for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
             let ps = sanitize(pname);
             let ptr = format!("%{ps}.addr");
             writeln!(
@@ -553,7 +614,7 @@ impl<'a> Gen<'a> {
         }
 
         for st in &f.body.stmts {
-            self.emit_stmt(st, &mut local_ptr, f.ret.as_ref());
+            self.emit_stmt(st, &mut local_ptr, sig.ret.as_ref());
             if self.terminated {
                 break;
             }
@@ -564,7 +625,7 @@ impl<'a> Gen<'a> {
             return self.out;
         }
 
-        if let Some(ret_ty) = &f.ret {
+        if let Some(ret_ty) = &sig.ret {
             let tail = f.body.tail.as_ref().unwrap();
             let (t, v) = self.emit_expr(tail, &local_ptr, Some(ret_ty));
             debug_assert!(types_match(&t, ret_ty));
@@ -684,6 +745,7 @@ impl<'a> Gen<'a> {
                 Some(Ty::Usize) => (Ty::Usize, format!("{n}")),
                 Some(Ty::U128) => (Ty::U128, format!("{n}")),
                 Some(Ty::Struct(_))
+                | Some(Ty::Enum(_))
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
                 | Some(Ty::Bool)
@@ -729,7 +791,7 @@ impl<'a> Gen<'a> {
                     Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
                     }
-                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
                         unreachable!("add on non-numeric")
                     }
                 }
@@ -876,6 +938,365 @@ impl<'a> Gen<'a> {
                 let loadt = self.fresh();
                 writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, tmp).unwrap();
                 (Ty::Struct(sname), format!("%{loadt}"))
+            }
+            Expr::EnumVariant { enum_name, variant } => {
+                let tag = self.enum_tag(enum_name, variant).expect("typechecked enum variant");
+                let enum_ll = format!("%enum.{}", sanitize(enum_name));
+                let idx = self
+                    .enum_variant_index(enum_name, variant)
+                    .expect("typechecked enum idx");
+                let vdef = self
+                    .enum_variant_def(enum_name, variant)
+                    .expect("typechecked enum variant")
+                    .clone();
+                let payload_ll = enum_variant_payload_ty(&vdef, self.structs);
+                let with_tag = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = insertvalue {} poison, i32 {}, 0",
+                    with_tag, enum_ll, tag
+                )
+                .unwrap();
+                let with_payload = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = insertvalue {} %{}, {} zeroinitializer, {}",
+                    with_payload,
+                    enum_ll,
+                    with_tag,
+                    payload_ll,
+                    idx + 1
+                )
+                .unwrap();
+                (Ty::Enum(enum_name.clone()), format!("%{with_payload}"))
+            }
+            Expr::EnumTuple {
+                enum_name,
+                variant,
+                args,
+            } => {
+                let tag = self.enum_tag(enum_name, variant).expect("typechecked enum variant");
+                let idx = self
+                    .enum_variant_index(enum_name, variant)
+                    .expect("typechecked enum idx");
+                let vdef = self
+                    .enum_variant_def(enum_name, variant)
+                    .expect("typechecked enum variant")
+                    .clone();
+                let EnumVariantFields::Tuple(ts) = vdef.fields else {
+                    unreachable!("typechecked tuple variant")
+                };
+                let enum_ll = format!("%enum.{}", sanitize(enum_name));
+                let with_tag = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = insertvalue {} poison, i32 {}, 0",
+                    with_tag, enum_ll, tag
+                )
+                .unwrap();
+                let payload_val = if ts.len() == 1 {
+                    let (_, v) = self.emit_expr(&args[0], locals, Some(&ts[0]));
+                    (llvm_ty(&ts[0], self.structs), v)
+                } else {
+                    let payload_ll = if ts.len() == 1 {
+                        llvm_ty(&ts[0], self.structs)
+                    } else {
+                        let inner = ts
+                            .iter()
+                            .map(|t| llvm_ty(t, self.structs))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{{ {inner} }}")
+                    };
+                    let mut agg = "poison".to_string();
+                    for (i, (a, t)) in args.iter().zip(ts.iter()).enumerate() {
+                        let (_, av) = self.emit_expr(a, locals, Some(t));
+                        let tmp = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = insertvalue {} {}, {} {}, {}",
+                            tmp,
+                            payload_ll,
+                            agg,
+                            llvm_ty(t, self.structs),
+                            av,
+                            i
+                        )
+                        .unwrap();
+                        agg = format!("%{tmp}");
+                    }
+                    (payload_ll, agg)
+                };
+                let out = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = insertvalue {} %{}, {} {}, {}",
+                    out,
+                    enum_ll,
+                    with_tag,
+                    payload_val.0,
+                    payload_val.1,
+                    idx + 1
+                )
+                .unwrap();
+                (Ty::Enum(enum_name.clone()), format!("%{out}"))
+            }
+            Expr::EnumStruct {
+                enum_name,
+                variant,
+                fields,
+            } => {
+                let tag = self.enum_tag(enum_name, variant).expect("typechecked enum variant");
+                let idx = self
+                    .enum_variant_index(enum_name, variant)
+                    .expect("typechecked enum idx");
+                let vdef = self
+                    .enum_variant_def(enum_name, variant)
+                    .expect("typechecked enum variant")
+                    .clone();
+                let EnumVariantFields::Struct(fs) = vdef.fields else {
+                    unreachable!("typechecked struct variant")
+                };
+                let enum_ll = format!("%enum.{}", sanitize(enum_name));
+                let with_tag = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = insertvalue {} poison, i32 {}, 0",
+                    with_tag, enum_ll, tag
+                )
+                .unwrap();
+                let payload_ll = {
+                    let inner = fs
+                        .iter()
+                        .map(|(_, t)| llvm_ty(t, self.structs))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{{ {inner} }}")
+                };
+                let mut agg = "poison".to_string();
+                for (i, (fname, fty)) in fs.iter().enumerate() {
+                    let (_, fe) = fields.iter().find(|(n, _)| n == fname).expect("typechecked");
+                    let (_, fv) = self.emit_expr(fe, locals, Some(fty));
+                    let tmp = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = insertvalue {} {}, {} {}, {}",
+                        tmp,
+                        payload_ll,
+                        agg,
+                        llvm_ty(fty, self.structs),
+                        fv,
+                        i
+                    )
+                    .unwrap();
+                    agg = format!("%{tmp}");
+                }
+                let out = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = insertvalue {} %{}, {} {}, {}",
+                    out,
+                    enum_ll,
+                    with_tag,
+                    payload_ll,
+                    agg,
+                    idx + 1
+                )
+                .unwrap();
+                (Ty::Enum(enum_name.clone()), format!("%{out}"))
+            }
+            Expr::Match { scrutinee, arms } => {
+                let (st, sv) = self.emit_expr(scrutinee, locals, None);
+                let Ty::Enum(enum_name) = st else {
+                    unreachable!("typechecked match enum")
+                };
+                let tag_tmp = self.fresh();
+                let enum_ll = format!("%enum.{}", sanitize(&enum_name));
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {} {}, 0",
+                    tag_tmp, enum_ll, sv
+                )
+                .unwrap();
+                let cont_lbl = self.fresh_label("match.cont");
+                let default_lbl = self.fresh_label("match.default");
+                let mut arm_labels = Vec::new();
+                for _ in arms {
+                    arm_labels.push(self.fresh_label("match.arm"));
+                }
+                writeln!(self.out, "  switch i32 %{}, label %{} [", tag_tmp, default_lbl).unwrap();
+                for ((pat, _), lbl) in arms.iter().zip(&arm_labels) {
+                    let variant = match pat {
+                        MatchPattern::Unit { variant, .. } => variant,
+                        MatchPattern::Tuple { variant, .. } => variant,
+                        MatchPattern::Struct { variant, .. } => variant,
+                    };
+                    let tag = self.enum_tag(&enum_name, variant).expect("typechecked enum tag");
+                    writeln!(self.out, "    i32 {}, label %{}", tag, lbl).unwrap();
+                }
+                writeln!(self.out, "  ]").unwrap();
+                writeln!(self.out, "{}:", default_lbl).unwrap();
+                writeln!(self.out, "  unreachable").unwrap();
+
+                let mut arm_vals: Vec<(String, String)> = Vec::new();
+                let mut out_ty: Option<Ty> = None;
+                for ((pat, arm_expr), lbl) in arms.iter().zip(&arm_labels) {
+                    writeln!(self.out, "{}:", lbl).unwrap();
+                    let mut arm_locals = locals.clone();
+                    let variant = match pat {
+                        MatchPattern::Unit { variant, .. } => variant,
+                        MatchPattern::Tuple { variant, .. } => variant,
+                        MatchPattern::Struct { variant, .. } => variant,
+                    };
+                    let vidx = self
+                        .enum_variant_index(&enum_name, variant)
+                        .expect("typechecked enum idx");
+                    let vdef = self
+                        .enum_variant_def(&enum_name, variant)
+                        .expect("typechecked enum variant")
+                        .clone();
+                    match (pat, vdef.fields) {
+                        (MatchPattern::Unit { .. }, EnumVariantFields::Unit) => {}
+                        (
+                            MatchPattern::Tuple { bindings, .. },
+                            EnumVariantFields::Tuple(ts),
+                        ) => {
+                            let payload_ll = if ts.len() == 1 {
+                                llvm_ty(&ts[0], self.structs)
+                            } else {
+                                let inner = ts
+                                    .iter()
+                                    .map(|t| llvm_ty(t, self.structs))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                format!("{{ {inner} }}")
+                            };
+                            let pl = self.fresh();
+                            writeln!(
+                                self.out,
+                                "  %{} = extractvalue {} {}, {}",
+                                pl, enum_ll, sv, vidx + 1
+                            )
+                            .unwrap();
+                            if ts.len() == 1 {
+                                let ptr = format!("%{}.addr", sanitize(&bindings[0]));
+                                writeln!(
+                                    self.out,
+                                    "  {} = alloca {}",
+                                    ptr,
+                                    llvm_ty(&ts[0], self.structs)
+                                )
+                                .unwrap();
+                                writeln!(
+                                    self.out,
+                                    "  store {} %{}, ptr {}",
+                                    llvm_ty(&ts[0], self.structs),
+                                    pl,
+                                    ptr
+                                )
+                                .unwrap();
+                                arm_locals.insert(bindings[0].clone(), (ts[0].clone(), ptr));
+                            } else {
+                                for (i, (b, t)) in bindings.iter().zip(ts.iter()).enumerate() {
+                                    let ev = self.fresh();
+                                    writeln!(
+                                        self.out,
+                                        "  %{} = extractvalue {} %{}, {}",
+                                        ev, payload_ll, pl, i
+                                    )
+                                    .unwrap();
+                                    let ptr = format!("%{}.addr", sanitize(b));
+                                    writeln!(
+                                        self.out,
+                                        "  {} = alloca {}",
+                                        ptr,
+                                        llvm_ty(t, self.structs)
+                                    )
+                                    .unwrap();
+                                    writeln!(
+                                        self.out,
+                                        "  store {} %{}, ptr {}",
+                                        llvm_ty(t, self.structs),
+                                        ev,
+                                        ptr
+                                    )
+                                    .unwrap();
+                                    arm_locals.insert(b.clone(), (t.clone(), ptr));
+                                }
+                            }
+                        }
+                        (
+                            MatchPattern::Struct { bindings, .. },
+                            EnumVariantFields::Struct(fs),
+                        ) => {
+                            let payload_ll = {
+                                let inner = fs
+                                    .iter()
+                                    .map(|(_, t)| llvm_ty(t, self.structs))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                format!("{{ {inner} }}")
+                            };
+                            let pl = self.fresh();
+                            writeln!(
+                                self.out,
+                                "  %{} = extractvalue {} {}, {}",
+                                pl, enum_ll, sv, vidx + 1
+                            )
+                            .unwrap();
+                            for b in bindings {
+                                let (i, (_, t)) = fs
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, (n, _))| n == b)
+                                    .expect("typechecked field");
+                                let ev = self.fresh();
+                                writeln!(
+                                    self.out,
+                                    "  %{} = extractvalue {} %{}, {}",
+                                    ev, payload_ll, pl, i
+                                )
+                                .unwrap();
+                                let ptr = format!("%{}.addr", sanitize(b));
+                                writeln!(self.out, "  {} = alloca {}", ptr, llvm_ty(t, self.structs))
+                                    .unwrap();
+                                writeln!(
+                                    self.out,
+                                    "  store {} %{}, ptr {}",
+                                    llvm_ty(t, self.structs),
+                                    ev,
+                                    ptr
+                                )
+                                .unwrap();
+                                arm_locals.insert(b.clone(), (t.clone(), ptr));
+                            }
+                        }
+                        _ => unreachable!("typechecked pattern kind"),
+                    }
+                    let (at, av) = self.emit_expr(arm_expr, &arm_locals, hint);
+                    if !matches!(at, Ty::Unit) {
+                        arm_vals.push((av.clone(), lbl.clone()));
+                    }
+                    if out_ty.is_none() {
+                        out_ty = Some(at.clone());
+                    }
+                    writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+                }
+                writeln!(self.out, "{}:", cont_lbl).unwrap();
+                let out_ty = out_ty.expect("typechecked non-empty match");
+                if matches!(out_ty, Ty::Unit) {
+                    (Ty::Unit, String::new())
+                } else {
+                    let phi = self.fresh();
+                    let ll = llvm_ty(&out_ty, self.structs);
+                    let incoming = arm_vals
+                        .iter()
+                        .map(|(v, l)| format!("[ {}, %{} ]", v, l))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(self.out, "  %{} = phi {} {}", phi, ll, incoming).unwrap();
+                    (out_ty, format!("%{phi}"))
+                }
             }
             Expr::ArrayLit(elems) => {
                 let (elem_ty, n) = match hint {
@@ -1036,14 +1457,15 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_match(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
+        (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),
         _ => false,
     }
 }
 
 /// Convenience wrapper creating fresh generator per function.
-fn emit_fn(f: &FnDef, structs: &[StructDef], fn_sigs: &HashMap<String, FnSig>) -> String {
-    Gen::new(structs, fn_sigs).emit_fn(f)
+fn emit_fn(f: &FnDef, structs: &[StructDef], enums: &[EnumDef], fn_sigs: &HashMap<String, FnSig>) -> String {
+    Gen::new(structs, enums, fn_sigs).emit_fn(f)
 }
 
 #[cfg(test)]
@@ -1053,12 +1475,12 @@ mod tests {
     use crate::typecheck::{check_fn, collect_sigs};
 
     fn emit(src: &str) -> String {
-        let (structs, fns) = Parser::new(tokenize(src)).parse_file().expect("parse");
-        let (struct_map, fn_sigs) = collect_sigs(&structs, &fns).expect("sigs");
+        let (structs, enums, fns) = Parser::new(tokenize(src)).parse_file().expect("parse");
+        let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns).expect("sigs");
         for f in &fns {
-            check_fn(f, &struct_map, &fn_sigs).expect("typecheck");
+            check_fn(f, &struct_map, &enum_map, &fn_sigs).expect("typecheck");
         }
-        emit_module(&structs, &fns, &fn_sigs)
+        emit_module(&structs, &enums, &fns, &fn_sigs)
     }
 
     #[test]
@@ -1153,5 +1575,19 @@ mod tests {
     fn codegen_pointer_write_emits_store_through_ptr() {
         let ll = emit(include_str!("../examples/tests/ok_ptr_write.nia"));
         assert!(ll.contains("store i32 99, ptr %"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_enum_match_uses_switch() {
+        let ll = emit(include_str!("../examples/tests/ok_enum_match.nia"));
+        assert!(ll.contains("switch i32"), "IR:\n{ll}");
+        assert!(ll.contains("match.arm."), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_enum_payload_match_extracts_payloads() {
+        let ll = emit(include_str!("../examples/tests/ok_enum_payload_match.nia"));
+        assert!(ll.contains("%enum.Value = type"), "IR:\n{ll}");
+        assert!(ll.contains("extractvalue %enum.Value"), "IR:\n{ll}");
     }
 }

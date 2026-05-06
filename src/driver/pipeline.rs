@@ -23,12 +23,12 @@ use crate::semantics::typecheck::{check_fn, collect_sigs};
 /// Each stage depends on previous output, so failures are intentionally not aggregated.
 pub fn compile_to_ll(src: &str) -> Result<String, String> {
     let tokens = tokenize(src);
-    let (structs, fns) = Parser::new(tokens).parse_file()?;
-    let (struct_map, fn_sigs) = collect_sigs(&structs, &fns)?;
+    let (structs, enums, fns) = Parser::new(tokens).parse_file()?;
+    let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns)?;
     for f in &fns {
-        check_fn(f, &struct_map, &fn_sigs)?;
+        check_fn(f, &struct_map, &enum_map, &fn_sigs)?;
     }
-    Ok(codegen::emit_module(&structs, &fns, &fn_sigs))
+    Ok(codegen::emit_module(&structs, &enums, &fns, &fn_sigs))
 }
 
 /// High-level CLI execution pipeline used by `main`.

@@ -14,6 +14,7 @@ pub enum Ty {
     Bool,
     Array(Box<Ty>, usize),
     Struct(String),
+    Enum(String),
     /// `&T` — LLVM opaque `ptr` to `T`.
     Ptr(Box<Ty>),
     /// Result of a void call or `println`; not storable in `let`.
@@ -33,6 +34,43 @@ pub struct FnDef {
     pub params: Vec<(String, Ty)>,
     pub ret: Option<Ty>,
     pub body: Block,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<EnumVariantDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantDef {
+    pub name: String,
+    pub fields: EnumVariantFields,
+}
+
+#[derive(Debug, Clone)]
+pub enum EnumVariantFields {
+    Unit,
+    Tuple(Vec<Ty>),
+    Struct(Vec<(String, Ty)>),
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchPattern {
+    Unit {
+        enum_name: String,
+        variant: String,
+    },
+    Tuple {
+        enum_name: String,
+        variant: String,
+        bindings: Vec<String>,
+    },
+    Struct {
+        enum_name: String,
+        variant: String,
+        bindings: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +116,24 @@ pub enum Expr {
         fields: Vec<(String, Expr)>,
     },
     ArrayLit(Vec<Expr>),
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+    },
+    EnumTuple {
+        enum_name: String,
+        variant: String,
+        args: Vec<Expr>,
+    },
+    EnumStruct {
+        enum_name: String,
+        variant: String,
+        fields: Vec<(String, Expr)>,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<(MatchPattern, Expr)>,
+    },
     Field(Box<Expr>, String),
     Index(Box<Expr>, Box<Expr>),
     /// Address of an lvalue (currently only a local variable).
