@@ -149,6 +149,12 @@ pub fn check_fn(
     }
     let mut env: HashMap<String, Ty> = HashMap::new();
     for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
+        if env.contains_key(pname) {
+            return Err(format!(
+                "duplicate parameter `{pname}` in function `{}`",
+                f.name
+            ));
+        }
         env.insert(pname.clone(), pty.clone());
     }
     for st in &f.body.stmts {
@@ -595,6 +601,11 @@ fn infer_expr(
                             ));
                         }
                         for (b, t) in bindings.iter().zip(ts) {
+                            if arm_env.contains_key(b) {
+                                return Err(format!(
+                                    "match pattern: `{b}` is already bound (duplicate binding or shadowing is not allowed)"
+                                ));
+                            }
                             arm_env.insert(b.clone(), t.clone());
                         }
                     }
@@ -612,6 +623,11 @@ fn infer_expr(
                                     "match struct pattern `{enum_name}::{pat_variant}` unknown field `{b}`"
                                 ));
                             };
+                            if arm_env.contains_key(b) {
+                                return Err(format!(
+                                    "match pattern: `{b}` is already bound (duplicate binding or shadowing is not allowed)"
+                                ));
+                            }
                             arm_env.insert(b.clone(), t.clone());
                         }
                     }
@@ -797,6 +813,11 @@ fn check_stmt(
                     ));
                 }
             }
+            if env.contains_key(name) {
+                return Err(format!(
+                    "variable `{name}` shadows an existing binding; shadowing is not allowed"
+                ));
+            }
             env.insert(name.clone(), t);
         }
         Stmt::Expr(e) => {
@@ -924,6 +945,13 @@ mod tests {
     #[test]
     fn typecheck_detects_array_len_mismatch_fixture() {
         let src = include_str!("../examples/tests/err_array_len_mismatch.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_shadowing_let_fixture() {
+        let src = include_str!("../examples/tests/err_shadow_let.nia");
         let r = check_all(src);
         assert!(r.is_err(), "{r:?}");
     }

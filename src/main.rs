@@ -68,6 +68,7 @@ mod self_test {
             "examples/tests/err_type_if_non_bool.nia",
             "examples/tests/err_type_tuple_with_named_literal.nia",
             "examples/tests/err_array_len_mismatch.nia",
+            "examples/tests/err_shadow_let.nia",
         ];
         for f in err_files {
             let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f);

@@ -3,9 +3,9 @@ struct Pair(i32, i32)
 fn main() i32 {
     let p: &i32 = alloc(42);
     println(*p);
-    let p = realloc(p, 100);
-    println(*p);
-    dealloc(p);
+    let p2 = realloc(p, 100);
+    println(*p2);
+    dealloc(p2);
 
     let pair_ptr: &Pair = alloc(Pair(7, 9));
     println((*pair_ptr).0);

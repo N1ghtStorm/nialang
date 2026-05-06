@@ -3,13 +3,14 @@ struct Point {
     y: i32,
 }
 
+// commentary
 fn main() i32 {
     let n: &i32 = alloc(10);
     *n = 11;
     println(*n);
-    let n = realloc(n, 77);
-    println(*n);
-    dealloc(n);
+    let n2 = realloc(n, 77);
+    println(*n2);
+    dealloc(n2);
 
     let p: &Point = alloc(Point { x: 1, y: 2 });
     *p = Point { x: 5, y: 6 };
