@@ -1,0 +1,18 @@
+struct Pair(i32, i32)
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() i32 {
+    let p: Pair = Pair(1, 2);
+    println(p);
+
+    let pt: Point = Point { x: 10, y: 20 };
+    println(pt);
+
+    let a: i32 = 7;
+    let pa: &i32 = &a;
+    println(pa);
+    0
+}

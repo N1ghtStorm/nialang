@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Expr, FnDef, Stmt, StructDef, Ty};
 use crate::nia_std::PRINTLN;
@@ -124,10 +124,34 @@ fn is_primitive_ty(t: &Ty) -> bool {
     is_integer_ty(t) || matches!(t, Ty::Bool)
 }
 
-fn is_printable_ty(t: &Ty) -> bool {
+fn is_printable_ty(t: &Ty, structs: &HashMap<String, StructDef>) -> bool {
+    let mut seen = HashSet::new();
+    is_printable_ty_inner(t, structs, &mut seen)
+}
+
+fn is_printable_ty_inner(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    seen: &mut HashSet<String>,
+) -> bool {
     match t {
         x if is_primitive_ty(x) => true,
-        Ty::Array(elem, _) => is_primitive_ty(elem),
+        Ty::Array(elem, _) => is_printable_ty_inner(elem, structs, seen),
+        Ty::Ptr(_) => true,
+        Ty::Struct(name) => {
+            if !seen.insert(name.clone()) {
+                return true;
+            }
+            let Some(def) = structs.get(name) else {
+                return false;
+            };
+            let ok = def
+                .fields
+                .iter()
+                .all(|(_, ft)| is_printable_ty_inner(ft, structs, seen));
+            seen.remove(name);
+            ok
+        }
         _ => false,
     }
 }
@@ -190,14 +214,14 @@ fn infer_expr(
             if name == PRINTLN {
                 if args.len() != 1 {
                     return Err(format!(
-                        "`{PRINTLN}` expects exactly 1 primitive argument, got {}",
+                        "`{PRINTLN}` expects exactly 1 argument, got {}",
                         args.len()
                     ));
                 }
                 let t = infer_expr(&args[0], env, structs, fns, None)?;
-                if !is_printable_ty(&t) {
+                if !is_printable_ty(&t, structs) {
                     return Err(format!(
-                        "`{PRINTLN}` expects primitive or array of primitive, got {t:?}"
+                        "`{PRINTLN}` expects printable type, got {t:?}"
                     ));
                 }
                 return Ok(Ty::Unit);
@@ -454,6 +478,7 @@ mod tests {
             include_str!("../examples/tests/ok_array.nia"),
             include_str!("../examples/tests/ok_array_index.nia"),
             include_str!("../examples/tests/ok_print_array.nia"),
+            include_str!("../examples/tests/ok_print_structs.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);

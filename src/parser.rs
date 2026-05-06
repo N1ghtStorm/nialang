@@ -461,6 +461,11 @@ mod tests {
     }
 
     #[test]
+    fn parse_fixture_print_structs() {
+        parse_ok(include_str!("../examples/tests/ok_print_structs.nia"));
+    }
+
+    #[test]
     fn parse_array_type_and_literal() {
         parse_ok(include_str!("../examples/tests/ok_array.nia"));
     }

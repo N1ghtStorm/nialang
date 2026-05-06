@@ -15,6 +15,7 @@ pub fn emit_module(
     out.push_str("target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n");
     out.push_str("target triple = \"unknown-unknown-unknown\"\n\n");
     out.push_str(crate::nia_std::llvm_prelude());
+    out.push_str(&emit_struct_print_constants(structs));
 
     for s in structs {
         out.push_str(&struct_type_decl(s));
@@ -26,6 +27,52 @@ pub fn emit_module(
 
     for f in fns {
         out.push_str(&emit_fn(f, structs, fn_sigs));
+        out.push('\n');
+    }
+    out
+}
+
+fn llvm_c_escape(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for &b in bytes {
+        match b {
+            b'\\' => s.push_str("\\5C"),
+            b'"' => s.push_str("\\22"),
+            0x20..=0x7e => s.push(char::from(b)),
+            _ => {
+                let _ = write!(s, "\\{:02X}", b);
+            }
+        }
+    }
+    s
+}
+
+fn struct_field_key_symbol(sname: &str, fname: &str) -> String {
+    format!(
+        "nialang.std.txt.json.key.{}.{}",
+        sanitize(sname),
+        sanitize(fname)
+    )
+}
+
+fn emit_struct_print_constants(structs: &[StructDef]) -> String {
+    let mut out = String::new();
+    for s in structs.iter().filter(|s| !s.is_tuple) {
+        for (fname, _) in &s.fields {
+            let key = format!("\"{}\": ", fname);
+            let bytes = key.as_bytes();
+            let sz = bytes.len() + 1;
+            let lit = llvm_c_escape(bytes);
+            let sym = struct_field_key_symbol(&s.name, fname);
+            writeln!(
+                out,
+                "@{} = private unnamed_addr constant [{} x i8] c\"{}\\00\", align 1",
+                sym, sz, lit
+            )
+            .unwrap();
+        }
+    }
+    if !out.is_empty() {
         out.push('\n');
     }
     out
@@ -122,12 +169,12 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  call i32 (ptr, ...) @printf(ptr {})", p).unwrap();
     }
 
-    fn emit_println_primitive(&mut self, ty: &Ty, v: &str) {
-        self.emit_print_primitive(ty, v, true);
+    fn emit_printf_text_dynamic(&mut self, sym: &str, size: usize) {
+        self.emit_printf_text(sym, size as u32);
     }
 
-    fn emit_print_primitive_no_nl(&mut self, ty: &Ty, v: &str) {
-        self.emit_print_primitive(ty, v, false);
+    fn struct_def(&self, name: &str) -> Option<&StructDef> {
+        self.structs.iter().find(|s| s.name == name)
     }
 
     fn emit_print_primitive(&mut self, ty: &Ty, v: &str, newline: bool) {
@@ -274,11 +321,27 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
             }
-            Ty::Array(_, _) | Ty::Struct(_) | Ty::Ptr(_) | Ty::Unit => unreachable!("typechecked"),
+            Ty::Ptr(_) => {
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.ptrhex", 8)
+                } else {
+                    ("nialang.std.fmt.ptrhex.nn", 7)
+                };
+                let p = self.fmt_ptr(sym, sz);
+                let addr = self.fresh();
+                writeln!(self.out, "  %{} = ptrtoint ptr {} to i64", addr, v).unwrap();
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i64 %{})",
+                    p, addr
+                )
+                .unwrap();
+            }
+            Ty::Array(_, _) | Ty::Struct(_) | Ty::Unit => unreachable!("typechecked"),
         }
     }
 
-    fn emit_println_array(&mut self, elem_ty: &Ty, n: usize, arr_v: &str) {
+    fn emit_print_array(&mut self, elem_ty: &Ty, n: usize, arr_v: &str, newline: bool) {
         self.emit_printf_text("nialang.std.txt.arr_open", 2);
         for i in 0..n {
             if i > 0 {
@@ -292,9 +355,78 @@ impl<'a> Gen<'a> {
                 ev, llvm_arr, arr_v, i
             )
             .unwrap();
-            self.emit_print_primitive_no_nl(elem_ty, &format!("%{ev}"));
+            self.emit_print_value(elem_ty, &format!("%{ev}"), false);
         }
-        self.emit_printf_text("nialang.std.txt.arr_close_ln", 3);
+        if newline {
+            self.emit_printf_text("nialang.std.txt.arr_close_ln", 3);
+        } else {
+            self.emit_printf_text("nialang.std.txt.arr_close", 2);
+        }
+    }
+
+    fn emit_print_struct(&mut self, sname: &str, struct_v: &str, newline: bool) {
+        let sdef = self.struct_def(sname).expect("typechecked struct");
+        let is_tuple = sdef.is_tuple;
+        let fields = sdef.fields.clone();
+        if is_tuple {
+            self.emit_printf_text("nialang.std.txt.tuple_open", 2);
+            for (i, (_, fty)) in fields.iter().enumerate() {
+                if i > 0 {
+                    self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+                }
+                let fv = self.fresh();
+                let llvm_st = format!("%struct.{}", sanitize(sname));
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {} {}, {}",
+                    fv, llvm_st, struct_v, i
+                )
+                .unwrap();
+                self.emit_print_value(fty, &format!("%{fv}"), false);
+            }
+            if newline {
+                self.emit_printf_text("nialang.std.txt.tuple_close_ln", 3);
+            } else {
+                self.emit_printf_text("nialang.std.txt.tuple_close", 2);
+            }
+            return;
+        }
+
+        self.emit_printf_text("nialang.std.txt.obj_open", 2);
+        for (i, (fname, fty)) in fields.iter().enumerate() {
+            if i > 0 {
+                self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+            }
+            let key_sym = struct_field_key_symbol(sname, fname);
+            let key_sz = fname.as_bytes().len() + 5;
+            self.emit_printf_text_dynamic(&key_sym, key_sz);
+            let fv = self.fresh();
+            let llvm_st = format!("%struct.{}", sanitize(sname));
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                fv, llvm_st, struct_v, i
+            )
+            .unwrap();
+            self.emit_print_value(fty, &format!("%{fv}"), false);
+        }
+        if newline {
+            self.emit_printf_text("nialang.std.txt.obj_close_ln", 3);
+        } else {
+            self.emit_printf_text("nialang.std.txt.obj_close", 2);
+        }
+    }
+
+    fn emit_print_value(&mut self, ty: &Ty, v: &str, newline: bool) {
+        match ty {
+            Ty::Array(elem, n) => {
+                self.emit_print_array(elem, *n, v, newline);
+            }
+            Ty::Struct(sname) => {
+                self.emit_print_struct(sname, v, newline);
+            }
+            _ => self.emit_print_primitive(ty, v, newline),
+        }
     }
 
     fn struct_idx(&self, sname: &str, field: &str) -> Option<u32> {
@@ -512,10 +644,7 @@ impl<'a> Gen<'a> {
             Expr::Call { name, args } => {
                 if name == PRINTLN {
                     let (at, av) = self.emit_expr(&args[0], locals, None);
-                    match &at {
-                        Ty::Array(elem, n) => self.emit_println_array(elem, *n, &av),
-                        _ => self.emit_println_primitive(&at, &av),
-                    }
+                    self.emit_print_value(&at, &av, true);
                     return (Ty::Unit, String::new());
                 }
                 if let Some(sdef) = self.structs.iter().find(|s| s.name == *name && s.is_tuple) {
@@ -839,5 +968,14 @@ mod tests {
         assert!(ll.contains("nialang.std.txt.arr_open"), "IR:\n{ll}");
         assert!(ll.contains("nialang.std.txt.arr_sep"), "IR:\n{ll}");
         assert!(ll.contains("nialang.std.txt.arr_close_ln"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_println_structs_and_ptr_hex() {
+        let ll = emit(include_str!("../examples/tests/ok_print_structs.nia"));
+        assert!(ll.contains("nialang.std.txt.obj_open"), "IR:\n{ll}");
+        assert!(ll.contains("nialang.std.txt.tuple_open"), "IR:\n{ll}");
+        assert!(ll.contains("nialang.std.fmt.ptrhex"), "IR:\n{ll}");
+        assert!(ll.contains("ptrtoint ptr"), "IR:\n{ll}");
     }
 }
