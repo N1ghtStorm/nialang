@@ -194,7 +194,16 @@ impl Parser {
             return Ok(Ty::Ptr(Box::new(inner)));
         }
         match self.bump() {
+            Token::TyI8 => Ok(Ty::I8),
+            Token::TyU8 => Ok(Ty::U8),
+            Token::TyI16 => Ok(Ty::I16),
+            Token::TyU16 => Ok(Ty::U16),
             Token::TyI32 => Ok(Ty::I32),
+            Token::TyI64 => Ok(Ty::I64),
+            Token::TyU64 => Ok(Ty::U64),
+            Token::TyI128 => Ok(Ty::I128),
+            Token::TyIsize => Ok(Ty::Isize),
+            Token::TyUsize => Ok(Ty::Usize),
             Token::TyU128 => Ok(Ty::U128),
             Token::TyBool => Ok(Ty::Bool),
             Token::Ident(n) => Ok(Ty::Struct(n)),

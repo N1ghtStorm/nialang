@@ -33,7 +33,16 @@ pub fn emit_module(
 
 fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
     match t {
+        Ty::I8 => "i8".into(),
+        Ty::U8 => "i8".into(),
+        Ty::I16 => "i16".into(),
+        Ty::U16 => "i16".into(),
         Ty::I32 => "i32".into(),
+        Ty::I64 => "i64".into(),
+        Ty::U64 => "i64".into(),
+        Ty::I128 => "i128".into(),
+        Ty::Isize => "i64".into(),
+        Ty::Usize => "i64".into(),
         Ty::U128 => "i128".into(),
         Ty::Bool => "i1".into(),
         Ty::Struct(n) => format!("%struct.{}", sanitize(n)),
@@ -245,8 +254,17 @@ impl<'a> Gen<'a> {
     ) -> (Ty, String) {
         match e {
             Expr::Int(n) => match hint {
-                Some(Ty::U128) => (Ty::U128, format!("{n}")),
+                Some(Ty::I8) => (Ty::I8, format!("{n}")),
+                Some(Ty::U8) => (Ty::U8, format!("{n}")),
+                Some(Ty::I16) => (Ty::I16, format!("{n}")),
+                Some(Ty::U16) => (Ty::U16, format!("{n}")),
                 Some(Ty::I32) | None => (Ty::I32, format!("{n}")),
+                Some(Ty::I64) => (Ty::I64, format!("{n}")),
+                Some(Ty::U64) => (Ty::U64, format!("{n}")),
+                Some(Ty::I128) => (Ty::I128, format!("{n}")),
+                Some(Ty::Isize) => (Ty::Isize, format!("{n}")),
+                Some(Ty::Usize) => (Ty::Usize, format!("{n}")),
+                Some(Ty::U128) => (Ty::U128, format!("{n}")),
                 Some(Ty::Struct(_)) | Some(Ty::Unit) | Some(Ty::Ptr(_)) | Some(Ty::Bool) => {
                     unreachable!("typechecked")
                 }
@@ -271,8 +289,20 @@ impl<'a> Gen<'a> {
                 assert!(types_match(&tl, &tr));
                 let tmp = self.fresh();
                 match tl {
+                    Ty::I8 | Ty::U8 => {
+                        writeln!(self.out, "  %{} = add i8 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I16 | Ty::U16 => {
+                        writeln!(self.out, "  %{} = add i16 {}, {}", tmp, vl, vr).unwrap();
+                    }
                     Ty::I32 => {
                         writeln!(self.out, "  %{} = add nsw i32 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                        writeln!(self.out, "  %{} = add i64 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I128 => {
+                        writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
                     }
                     Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
@@ -409,9 +439,19 @@ impl<'a> Gen<'a> {
 
 fn types_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
-        (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) | (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) => {
-            true
-        }
+        (Ty::I8, Ty::I8)
+        | (Ty::U8, Ty::U8)
+        | (Ty::I16, Ty::I16)
+        | (Ty::U16, Ty::U16)
+        | (Ty::I32, Ty::I32)
+        | (Ty::I64, Ty::I64)
+        | (Ty::U64, Ty::U64)
+        | (Ty::I128, Ty::I128)
+        | (Ty::Isize, Ty::Isize)
+        | (Ty::Usize, Ty::Usize)
+        | (Ty::U128, Ty::U128)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Unit, Ty::Unit) => true,
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),
         _ => false,

@@ -1,0 +1,41 @@
+struct AllPrimitives {
+    i8v: i8,
+    u8v: u8,
+    i16v: i16,
+    u16v: u16,
+    i32v: i32,
+    i64v: i64,
+    u64v: u64,
+    i128v: i128,
+    isizev: isize,
+    usizev: usize
+}
+
+fn main() i32 {
+    let a: i8 = 100;
+    let b: u8 = 200;
+    let c: i16 = 30000;
+    let d: u16 = 60000;
+    let e: i32 = 10;
+    let f: i64 = 1000000;
+    let g: u64 = 2000000;
+    let h: i128 = 3000000;
+    let i: isize = 42;
+    let j: usize = 43;
+
+    let packed = AllPrimitives {
+        i8v: a,
+        u8v: b,
+        i16v: c,
+        u16v: d,
+        i32v: e,
+        i64v: f,
+        u64v: g,
+        i128v: h,
+        isizev: i,
+        usizev: j
+    };
+
+    println(packed.i32v);
+    packed.i32v
+}

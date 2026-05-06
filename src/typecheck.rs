@@ -86,13 +86,40 @@ pub fn check_fn(
 
 fn types_equal(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
-        (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) | (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) => {
-            true
-        }
+        (Ty::I8, Ty::I8)
+        | (Ty::U8, Ty::U8)
+        | (Ty::I16, Ty::I16)
+        | (Ty::U16, Ty::U16)
+        | (Ty::I32, Ty::I32)
+        | (Ty::I64, Ty::I64)
+        | (Ty::U64, Ty::U64)
+        | (Ty::I128, Ty::I128)
+        | (Ty::Isize, Ty::Isize)
+        | (Ty::Usize, Ty::Usize)
+        | (Ty::U128, Ty::U128)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Unit, Ty::Unit) => true,
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         _ => false,
     }
+}
+
+fn is_integer_ty(t: &Ty) -> bool {
+    matches!(
+        t,
+        Ty::I8
+            | Ty::U8
+            | Ty::I16
+            | Ty::U16
+            | Ty::I32
+            | Ty::I64
+            | Ty::U64
+            | Ty::I128
+            | Ty::Isize
+            | Ty::Usize
+            | Ty::U128
+    )
 }
 
 fn infer_expr(
@@ -104,14 +131,15 @@ fn infer_expr(
 ) -> Result<Ty, String> {
     match e {
         Expr::Int(_) => match hint {
-            Some(Ty::U128) => Ok(Ty::U128),
-            Some(Ty::I32) | None => Ok(Ty::I32),
+            None => Ok(Ty::I32),
+            Some(other) if is_integer_ty(other) => Ok(other.clone()),
             Some(Ty::Bool) => Err("integer literal cannot satisfy bool".into()),
             Some(Ty::Struct(name)) => Err(format!(
                 "integer literal cannot satisfy struct type `{name}`"
             )),
             Some(Ty::Unit) => Err("integer literal cannot satisfy `()`".into()),
             Some(Ty::Ptr(_)) => Err("integer literal cannot satisfy a pointer type".into()),
+            Some(other) => Err(format!("integer literal cannot satisfy {other:?}")),
         },
         Expr::Bool(_) => match hint {
             Some(Ty::Bool) | None => Ok(Ty::Bool),
@@ -129,8 +157,8 @@ fn infer_expr(
             if matches!(tl, Ty::Ptr(_)) {
                 return Err("cannot use `+` on a pointer value".into());
             }
-            if matches!(tl, Ty::Bool) {
-                return Err("cannot use `+` on a bool value".into());
+            if !is_integer_ty(&tl) {
+                return Err(format!("cannot use `+` on non-integer type {tl:?}"));
             }
             let tr = infer_expr(r, env, structs, fns, Some(&tl))?;
             if matches!(tr, Ty::Unit) {
@@ -139,8 +167,8 @@ fn infer_expr(
             if matches!(tr, Ty::Ptr(_)) {
                 return Err("cannot use `+` on a pointer value".into());
             }
-            if matches!(tr, Ty::Bool) {
-                return Err("cannot use `+` on a bool value".into());
+            if !is_integer_ty(&tr) {
+                return Err(format!("cannot use `+` on non-integer type {tr:?}"));
             }
             if !types_equal(&tl, &tr) {
                 return Err(format!("add operands differ: {tl:?} vs {tr:?}"));

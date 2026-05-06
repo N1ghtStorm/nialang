@@ -1,6 +1,15 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Ty {
+    I8,
+    U8,
+    I16,
+    U16,
     I32,
+    I64,
+    U64,
+    I128,
+    Isize,
+    Usize,
     U128,
     Bool,
     Struct(String),
