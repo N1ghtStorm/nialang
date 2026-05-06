@@ -8,6 +8,7 @@ pub enum Token {
     Struct,
     Enum,
     If,
+    While,
     For,
     In,
     Match,
@@ -161,6 +162,7 @@ impl<'a> Lexer<'a> {
                     "struct" => Token::Struct,
                     "enum" => Token::Enum,
                     "if" => Token::If,
+                    "while" => Token::While,
                     "for" => Token::For,
                     "in" => Token::In,
                     "match" => Token::Match,
@@ -233,6 +235,15 @@ mod tests {
                 Token::TyU128,
                 Token::TyBool,
             ]
+        );
+    }
+
+    #[test]
+    fn lex_while_keyword() {
+        let toks = collect("while x");
+        assert_eq!(
+            toks,
+            vec![Token::While, Token::Ident("x".into()),]
         );
     }
 

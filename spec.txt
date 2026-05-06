@@ -61,3 +61,16 @@ fn main() i32 {
 }
 
 `return` is not allowed inside the `for` body (so the compiler can lower loops to valid LLVM).
+
+---------
+
+while loop (condition uses the same restricted grammar as `if` — no bare `Type {` ambiguity):
+
+fn main() i32 {
+    let c: bool = true;
+    while c {
+        println(1);
+        c = false;
+    }
+    0
+}

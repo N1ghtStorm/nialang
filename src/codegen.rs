@@ -919,6 +919,43 @@ impl<'a> Gen<'a> {
                 self.terminated = false;
                 writeln!(self.out, "{}:", cont_lbl).unwrap();
             }
+            Stmt::While { cond, body } => {
+                if self.terminated {
+                    return;
+                }
+                let cond_lbl = self.fresh_label("while.cond");
+                let body_lbl = self.fresh_label("while.body");
+                let exit_lbl = self.fresh_label("while.exit");
+                writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+                writeln!(self.out, "{}:", cond_lbl).unwrap();
+                let (ct, cv) = self.emit_expr(cond, locals, Some(&Ty::Bool));
+                debug_assert!(matches!(ct, Ty::Bool));
+                writeln!(
+                    self.out,
+                    "  br i1 {}, label %{}, label %{}",
+                    cv, body_lbl, exit_lbl
+                )
+                .unwrap();
+
+                writeln!(self.out, "{}:", body_lbl).unwrap();
+                let mut body_locals = locals.clone();
+                self.terminated = false;
+                for st in &body.stmts {
+                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    if self.terminated {
+                        break;
+                    }
+                }
+                if !self.terminated {
+                    if let Some(tail) = &body.tail {
+                        self.emit_expr(tail, &body_locals, None);
+                    }
+                    writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+                }
+                self.terminated = false;
+                writeln!(self.out, "{}:", exit_lbl).unwrap();
+            }
             Stmt::For {
                 var,
                 start,
@@ -1924,5 +1961,13 @@ mod tests {
         assert!(ll.contains("for.header."), "IR:\n{ll}");
         assert!(ll.contains("for.latch."), "IR:\n{ll}");
         assert!(ll.contains("phi i32"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_while_emits_cond_and_backedge() {
+        let ll = emit(include_str!("../examples/tests/ok_while.nia"));
+        assert!(ll.contains("while.cond."), "IR:\n{ll}");
+        assert!(ll.contains("while.body."), "IR:\n{ll}");
+        assert!(ll.contains("while.exit."), "IR:\n{ll}");
     }
 }

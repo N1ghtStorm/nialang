@@ -54,6 +54,7 @@ mod self_test {
             "examples/tests/ok_enum_payload_match.nia",
             "examples/tests/ok_print_enum.nia",
             "examples/tests/ok_for_range.nia",
+            "examples/tests/ok_while.nia",
         ];
         for f in files {
             compile_fixture_ok(f);
@@ -72,6 +73,7 @@ mod self_test {
             "examples/tests/err_shadow_let.nia",
             "examples/tests/err_for_range_bool.nia",
             "examples/tests/err_for_return_in_for.nia",
+            "examples/tests/err_while_cond_int.nia",
         ];
         for f in err_files {
             let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f);

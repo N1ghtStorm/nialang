@@ -270,6 +270,9 @@ impl Parser {
                 Token::If => {
                     stmts.push(self.parse_if_stmt()?);
                 }
+                Token::While => {
+                    stmts.push(self.parse_while_stmt()?);
+                }
                 Token::For => {
                     stmts.push(self.parse_for_stmt()?);
                 }
@@ -325,6 +328,14 @@ impl Parser {
         let cond = self.parse_if_cond()?;
         let then_block = self.parse_block()?;
         Ok(Stmt::If { cond, then_block })
+    }
+
+    /// Parses `while <cond> { ... }` (same narrow condition grammar as `if`).
+    fn parse_while_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::While)?;
+        let cond = self.parse_if_cond()?;
+        let body = self.parse_block()?;
+        Ok(Stmt::While { cond, body })
     }
 
     /// Parses `for <ident> in <expr>..<expr> { ... }` (half-open range).
@@ -807,6 +818,11 @@ mod tests {
     #[test]
     fn parse_fixture_for_range() {
         parse_ok(include_str!("../examples/tests/ok_for_range.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_while() {
+        parse_ok(include_str!("../examples/tests/ok_while.nia"));
     }
 
     #[test]

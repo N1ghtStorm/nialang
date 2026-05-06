@@ -783,6 +783,7 @@ fn stmt_contains_return(st: &Stmt) -> bool {
     match st {
         Stmt::Return(_) => true,
         Stmt::If { then_block, .. } => block_contains_return(then_block),
+        Stmt::While { body, .. } => block_contains_return(body),
         Stmt::For { body, .. } => block_contains_return(body),
         Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } => false,
     }
@@ -880,6 +881,19 @@ fn check_stmt(
                 infer_expr(tail, &then_env, struct_fields, enums, fn_sigs, None)?;
             }
         }
+        Stmt::While { cond, body } => {
+            let t = infer_expr(cond, env, struct_fields, enums, fn_sigs, Some(&Ty::Bool))?;
+            if !types_equal(&t, &Ty::Bool) {
+                return Err(format!("`while` condition must be bool, got {t:?}"));
+            }
+            let mut body_env = env.clone();
+            for st in &body.stmts {
+                check_stmt(st, &mut body_env, struct_fields, enums, fn_sigs, fn_ret)?;
+            }
+            if let Some(tail) = &body.tail {
+                infer_expr(tail, &body_env, struct_fields, enums, fn_sigs, None)?;
+            }
+        }
         Stmt::For {
             var,
             start,
@@ -958,6 +972,7 @@ mod tests {
             include_str!("../examples/tests/ok_enum_payload_match.nia"),
             include_str!("../examples/tests/ok_print_enum.nia"),
             include_str!("../examples/tests/ok_for_range.nia"),
+            include_str!("../examples/tests/ok_while.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);
@@ -1017,6 +1032,13 @@ mod tests {
     #[test]
     fn typecheck_rejects_return_inside_for_fixture() {
         let src = include_str!("../examples/tests/err_for_return_in_for.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_while_cond_non_bool_fixture() {
+        let src = include_str!("../examples/tests/err_while_cond_int.nia");
         let r = check_all(src);
         assert!(r.is_err(), "{r:?}");
     }

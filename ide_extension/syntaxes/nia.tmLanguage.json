@@ -35,7 +35,7 @@
       }
     },
     "keywords": {
-      "match": "\\b(let|if|for|in|match|return)\\b",
+      "match": "\\b(let|if|while|for|in|match|return)\\b",
       "name": "keyword.control.nia"
     },
     "decl-keywords": {
@@ -59,7 +59,7 @@
       "name": "entity.name.type.nia"
     },
     "function-call": {
-      "match": "\\b(?!fn|let|if|for|in|match|return|struct|enum|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|println|alloc|dealloc|realloc)([a-z_][\\w]*)(?=\\s*\\()",
+      "match": "\\b(?!fn|let|if|while|for|in|match|return|struct|enum|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|println|alloc|dealloc|realloc)([a-z_][\\w]*)(?=\\s*\\()",
       "captures": {
         "1": { "name": "entity.name.function.call.nia" }
       }
@@ -109,7 +109,7 @@
       ]
     },
     "identifiers": {
-      "match": "\\b(?!fn|let|if|for|in|match|return|struct|enum|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|println|alloc|dealloc|realloc)([a-z_][\\w]*)\\b",
+      "match": "\\b(?!fn|let|if|while|for|in|match|return|struct|enum|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|println|alloc|dealloc|realloc)([a-z_][\\w]*)\\b",
       "captures": {
         "1": { "name": "variable.other.nia" }
       }
