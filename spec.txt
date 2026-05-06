@@ -36,3 +36,9 @@ fn bar(foo: bool) i32 {
     }
     0
 }
+
+----------
+
+tuple struct example:
+
+struct Foo (u8, i32, u8, u128)

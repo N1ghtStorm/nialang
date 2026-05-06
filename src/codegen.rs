@@ -433,6 +433,34 @@ impl<'a> Gen<'a> {
                     self.emit_println_primitive(&at, &av);
                     return (Ty::Unit, String::new());
                 }
+                if let Some(sdef) = self.structs.iter().find(|s| s.name == *name && s.is_tuple) {
+                    let llvm_st = format!("%struct.{}", sanitize(name));
+                    let mut agg = "poison".to_string();
+                    for (i, (_, fty)) in sdef.fields.iter().enumerate() {
+                        let (at, av) = self.emit_expr(&args[i], locals, Some(fty));
+                        debug_assert!(types_match(&at, fty));
+                        let tmp = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = insertvalue {} {}, {} {}, {}",
+                            tmp,
+                            llvm_st,
+                            agg,
+                            llvm_ty(&at, self.structs),
+                            av,
+                            i
+                        )
+                        .unwrap();
+                        agg = format!("%{tmp}");
+                    }
+                    let sname = name.clone();
+                    let tmp = self.fresh();
+                    writeln!(self.out, "  %{} = alloca {}", tmp, llvm_st).unwrap();
+                    writeln!(self.out, "  store {} {}, ptr %{}", llvm_st, agg, tmp).unwrap();
+                    let loadt = self.fresh();
+                    writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, tmp).unwrap();
+                    return (Ty::Struct(sname), format!("%{loadt}"));
+                }
                 let sig = self.fn_sigs.get(name).expect("unknown fn");
                 let mut arg_strs = Vec::new();
                 for (a, pt) in args.iter().zip(&sig.params) {

@@ -52,19 +52,57 @@ impl Parser {
     fn parse_struct(&mut self) -> Result<StructDef, String> {
         self.expect(&Token::Struct)?;
         let name = self.expect_ident()?;
-        self.expect(&Token::LBrace)?;
-        let mut fields = Vec::new();
-        while !matches!(self.peek(), Token::RBrace) {
-            let fname = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            let ty = self.parse_ty()?;
-            fields.push((fname, ty));
-            if matches!(self.peek(), Token::Comma) {
-                self.bump();
+        if matches!(self.peek(), Token::LBrace) {
+            self.bump();
+            let mut fields = Vec::new();
+            while !matches!(self.peek(), Token::RBrace) {
+                let fname = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let ty = self.parse_ty()?;
+                fields.push((fname, ty));
+                if matches!(self.peek(), Token::Comma) {
+                    self.bump();
+                }
             }
+            self.expect(&Token::RBrace)?;
+            Ok(StructDef {
+                name,
+                is_tuple: false,
+                fields,
+            })
+        } else if matches!(self.peek(), Token::LParen) {
+            self.bump();
+            let mut fields = Vec::new();
+            let mut idx: usize = 0;
+            if !matches!(self.peek(), Token::RParen) {
+                loop {
+                    let ty = self.parse_ty()?;
+                    fields.push((idx.to_string(), ty));
+                    idx += 1;
+                    match self.peek() {
+                        Token::Comma => {
+                            self.bump();
+                            if matches!(self.peek(), Token::RParen) {
+                                break;
+                            }
+                        }
+                        Token::RParen => break,
+                        _ => return Err(format!("expected , or ), got {:?}", self.peek())),
+                    }
+                }
+            }
+            self.expect(&Token::RParen)?;
+            Ok(StructDef {
+                name,
+                is_tuple: true,
+                fields,
+            })
+        } else {
+            Err(format!(
+                "expected `{{` or `(` after struct name, got {:?}",
+                self.peek()
+            ))
         }
-        self.expect(&Token::RBrace)?;
-        Ok(StructDef { name, fields })
     }
 
     fn parse_fn(&mut self) -> Result<FnDef, String> {
@@ -252,7 +290,11 @@ impl Parser {
                 }
                 Token::Dot => {
                     self.bump();
-                    let field = self.expect_ident()?;
+                    let field = match self.bump() {
+                        Token::Ident(s) => s,
+                        Token::Int(n) => n.to_string(),
+                        other => return Err(format!("expected field name or index, got {other:?}")),
+                    };
                     e = Expr::Field(Box::new(e), field);
                 }
                 _ => break,
@@ -345,6 +387,20 @@ fn bar(foo: bool) i32 {
         return 1
     }
     0
+}
+"#;
+        let toks = tokenize(src);
+        let r = Parser::new(toks).parse_file();
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn parse_tuple_struct_and_index_field() {
+        let src = r#"
+struct Foo (u8, i32, u8, u128)
+fn main() i32 {
+    let f = Foo(1, 2, 3, 4);
+    f.1
 }
 "#;
         let toks = tokenize(src);

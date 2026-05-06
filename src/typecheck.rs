@@ -11,13 +11,10 @@ pub struct FnSig {
 pub fn collect_sigs(
     structs: &[StructDef],
     fns: &[FnDef],
-) -> Result<(HashMap<String, Vec<(String, Ty)>>, HashMap<String, FnSig>), String> {
-    let mut struct_fields: HashMap<String, Vec<(String, Ty)>> = HashMap::new();
+) -> Result<(HashMap<String, StructDef>, HashMap<String, FnSig>), String> {
+    let mut struct_map: HashMap<String, StructDef> = HashMap::new();
     for s in structs {
-        if struct_fields
-            .insert(s.name.clone(), s.fields.clone())
-            .is_some()
-        {
+        if struct_map.insert(s.name.clone(), s.clone()).is_some() {
             return Err(format!("duplicate struct {}", s.name));
         }
     }
@@ -41,12 +38,12 @@ pub fn collect_sigs(
             return Err(format!("duplicate function {}", f.name));
         }
     }
-    Ok((struct_fields, fn_sigs))
+    Ok((struct_map, fn_sigs))
 }
 
 pub fn check_fn(
     f: &FnDef,
-    struct_fields: &HashMap<String, Vec<(String, Ty)>>,
+    struct_fields: &HashMap<String, StructDef>,
     fn_sigs: &HashMap<String, FnSig>,
 ) -> Result<HashMap<String, Ty>, String> {
     let sig = fn_sigs
@@ -129,7 +126,7 @@ fn is_primitive_ty(t: &Ty) -> bool {
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
-    structs: &HashMap<String, Vec<(String, Ty)>>,
+    structs: &HashMap<String, StructDef>,
     fns: &HashMap<String, FnSig>,
     hint: Option<&Ty>,
 ) -> Result<Ty, String> {
@@ -195,6 +192,29 @@ fn infer_expr(
                 }
                 return Ok(Ty::Unit);
             }
+            if let Some(def) = structs.get(name) {
+                if !def.is_tuple {
+                    return Err(format!(
+                        "`{name}` is a named-field struct; use `{name} {{ ... }}` literal syntax"
+                    ));
+                }
+                if args.len() != def.fields.len() {
+                    return Err(format!(
+                        "tuple struct `{name}`: expected {} args, got {}",
+                        def.fields.len(),
+                        args.len()
+                    ));
+                }
+                for (a, (_, ft)) in args.iter().zip(&def.fields) {
+                    let at = infer_expr(a, env, structs, fns, Some(ft))?;
+                    if !types_equal(&at, ft) {
+                        return Err(format!(
+                            "tuple struct `{name}`: field type mismatch: expected {ft:?}, got {at:?}"
+                        ));
+                    }
+                }
+                return Ok(Ty::Struct(name.clone()));
+            }
             let sig = fns
                 .get(name)
                 .ok_or_else(|| format!("unknown function `{name}`"))?;
@@ -222,19 +242,25 @@ fn infer_expr(
             let def = structs
                 .get(name)
                 .ok_or_else(|| format!("unknown struct `{name}`"))?;
+            let def_fields = &def.fields;
+            if def.is_tuple {
+                return Err(format!(
+                    "tuple struct `{name}` must use constructor syntax `{name}(...)`"
+                ));
+            }
             for (fname, _) in fields {
-                if !def.iter().any(|(n, _)| n == fname) {
+                if !def_fields.iter().any(|(n, _)| n == fname) {
                     return Err(format!("struct `{name}` has no field `{fname}`"));
                 }
             }
-            if fields.len() != def.len() {
+            if fields.len() != def_fields.len() {
                 return Err(format!(
                     "struct `{name}` literal: expected {} fields, got {}",
-                    def.len(),
+                    def_fields.len(),
                     fields.len()
                 ));
             }
-            for (dfn, dty) in def {
+            for (dfn, dty) in def_fields {
                 let Some((_, fe)) = fields.iter().find(|(n, _)| n == dfn) else {
                     return Err(format!("struct `{name}` missing field `{dfn}`"));
                 };
@@ -255,7 +281,8 @@ fn infer_expr(
             let def = structs
                 .get(&sname)
                 .ok_or_else(|| format!("unknown struct `{sname}`"))?;
-            def.iter()
+            def.fields
+                .iter()
                 .find(|(n, _)| n == fname)
                 .map(|(_, t)| t.clone())
                 .ok_or_else(|| format!("struct `{sname}` has no field `{fname}`"))
@@ -282,7 +309,7 @@ fn infer_expr(
 fn check_stmt(
     st: &Stmt,
     env: &mut HashMap<String, Ty>,
-    struct_fields: &HashMap<String, Vec<(String, Ty)>>,
+    struct_fields: &HashMap<String, StructDef>,
     fn_sigs: &HashMap<String, FnSig>,
     fn_ret: Option<&Ty>,
 ) -> Result<(), String> {

@@ -22,6 +22,7 @@ pub enum Ty {
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
+    pub is_tuple: bool,
     pub fields: Vec<(String, Ty)>,
 }
 
