@@ -179,6 +179,14 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
     }
 }
 
+/// Signed integer types use `icmp slt` for `..` range checks; unsigned use `icmp ult`.
+fn int_ty_signed(t: &Ty) -> bool {
+    matches!(
+        t,
+        Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64 | Ty::I128 | Ty::Isize
+    )
+}
+
 /// Emits LLVM `%struct.Name = type { ... }` declaration.
 fn struct_type_decl(s: &StructDef) -> String {
     let parts: Vec<String> = s.fields.iter().map(|(_, t)| llvm_ty(t, &[])).collect();
@@ -910,6 +918,122 @@ impl<'a> Gen<'a> {
                 }
                 self.terminated = false;
                 writeln!(self.out, "{}:", cont_lbl).unwrap();
+            }
+            Stmt::For {
+                var,
+                start,
+                end,
+                body,
+            } => {
+                if self.terminated {
+                    return;
+                }
+                let pre = self.fresh_label("for.pre");
+                let header = self.fresh_label("for.header");
+                let body_lbl = self.fresh_label("for.body");
+                let latch = self.fresh_label("for.latch");
+                let exit = self.fresh_label("for.exit");
+
+                writeln!(self.out, "  br label %{}", pre).unwrap();
+                writeln!(self.out, "{}:", pre).unwrap();
+                let (t_ev, v_start) = self.emit_expr(start, locals, None);
+                let (_, v_end) = self.emit_expr(end, locals, Some(&t_ev));
+                let ll = llvm_ty(&t_ev, self.structs);
+                let var_ptr = format!("%{}.addr", sanitize(var));
+                writeln!(self.out, "  {} = alloca {}", var_ptr, ll).unwrap();
+                writeln!(self.out, "  br label %{}", header).unwrap();
+
+                writeln!(self.out, "{}:", header).unwrap();
+                let iv = self.fresh();
+                let iv_next = self.fresh();
+                let cmp = self.fresh();
+                let icmp_op = if int_ty_signed(&t_ev) {
+                    "slt"
+                } else {
+                    "ult"
+                };
+                writeln!(
+                    self.out,
+                    "  %{} = phi {} [ {}, %{} ], [ %{}, %{} ]",
+                    iv, ll, v_start, pre, iv_next, latch
+                )
+                .unwrap();
+                writeln!(
+                    self.out,
+                    "  %{} = icmp {} {} %{}, {}",
+                    cmp, icmp_op, ll, iv, v_end
+                )
+                .unwrap();
+                writeln!(
+                    self.out,
+                    "  br i1 %{}, label %{}, label %{}",
+                    cmp, body_lbl, exit
+                )
+                .unwrap();
+
+                writeln!(self.out, "{}:", body_lbl).unwrap();
+                writeln!(
+                    self.out,
+                    "  store {} %{}, ptr {}",
+                    ll, iv, var_ptr
+                )
+                .unwrap();
+                let mut body_locals = locals.clone();
+                body_locals.insert(var.clone(), (t_ev.clone(), var_ptr));
+                self.terminated = false;
+                for st in &body.stmts {
+                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    if self.terminated {
+                        break;
+                    }
+                }
+                if !self.terminated {
+                    if let Some(tail) = &body.tail {
+                        self.emit_expr(tail, &body_locals, None);
+                    }
+                    writeln!(self.out, "  br label %{}", latch).unwrap();
+                }
+                let body_term = self.terminated;
+                self.terminated = false;
+                if body_term {
+                    panic!("internal: `return` inside `for` should be rejected by typecheck");
+                }
+
+                writeln!(self.out, "{}:", latch).unwrap();
+                match &t_ev {
+                        Ty::I8 | Ty::U8 => {
+                            writeln!(self.out, "  %{} = add i8 %{}, 1", iv_next, iv).unwrap();
+                        }
+                        Ty::I16 | Ty::U16 => {
+                            writeln!(self.out, "  %{} = add i16 %{}, 1", iv_next, iv).unwrap();
+                        }
+                        Ty::I32 => {
+                            writeln!(
+                                self.out,
+                                "  %{} = add nsw i32 %{}, 1",
+                                iv_next, iv
+                            )
+                            .unwrap();
+                        }
+                        Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                            writeln!(self.out, "  %{} = add i64 %{}, 1", iv_next, iv).unwrap();
+                        }
+                        Ty::I128 => {
+                            writeln!(self.out, "  %{} = add i128 %{}, 1", iv_next, iv).unwrap();
+                        }
+                        Ty::U128 => {
+                            writeln!(self.out, "  %{} = add i128 %{}, 1", iv_next, iv).unwrap();
+                        }
+                        Ty::Array(_, _)
+                        | Ty::Struct(_)
+                        | Ty::Enum(_)
+                        | Ty::Unit
+                        | Ty::Ptr(_)
+                        | Ty::Bool => unreachable!("typechecked for range"),
+                }
+                writeln!(self.out, "  br label %{}", header).unwrap();
+
+                writeln!(self.out, "{}:", exit).unwrap();
             }
         }
     }
@@ -1791,5 +1915,14 @@ mod tests {
         assert!(ll.contains("nialang.std.txt.enumprefix.Color.Red"), "IR:\n{ll}");
         assert!(ll.contains("nialang.std.txt.enumprefix.Msg.Point"), "IR:\n{ll}");
         assert!(ll.contains("println.enum.arm"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_for_range_emits_phi_and_latch() {
+        let ll = emit(include_str!("../examples/tests/ok_for_range.nia"));
+        assert!(ll.contains("for.pre."), "IR:\n{ll}");
+        assert!(ll.contains("for.header."), "IR:\n{ll}");
+        assert!(ll.contains("for.latch."), "IR:\n{ll}");
+        assert!(ll.contains("phi i32"), "IR:\n{ll}");
     }
 }

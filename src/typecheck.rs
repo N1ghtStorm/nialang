@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty};
+use crate::ast::{
+    Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty,
+};
 use crate::nia_std::{ALLOC, DEALLOC, PRINTLN, REALLOC};
 
 pub struct FnSig {
@@ -777,6 +779,19 @@ fn infer_expr(
     }
 }
 
+fn stmt_contains_return(st: &Stmt) -> bool {
+    match st {
+        Stmt::Return(_) => true,
+        Stmt::If { then_block, .. } => block_contains_return(then_block),
+        Stmt::For { body, .. } => block_contains_return(body),
+        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } => false,
+    }
+}
+
+fn block_contains_return(b: &Block) -> bool {
+    b.stmts.iter().any(stmt_contains_return)
+}
+
 /// Typechecks one statement and updates local env for following statements.
 ///
 /// Statement order matters: `let` bindings become available only after they are checked.
@@ -865,6 +880,41 @@ fn check_stmt(
                 infer_expr(tail, &then_env, struct_fields, enums, fn_sigs, None)?;
             }
         }
+        Stmt::For {
+            var,
+            start,
+            end,
+            body,
+        } => {
+            let ts = infer_expr(start, env, struct_fields, enums, fn_sigs, None)?;
+            if !is_integer_ty(&ts) {
+                return Err(format!(
+                    "`for` range start must be an integer type, got {ts:?}"
+                ));
+            }
+            let te = infer_expr(end, env, struct_fields, enums, fn_sigs, Some(&ts))?;
+            if !types_equal(&ts, &te) {
+                return Err(format!(
+                    "`for` range end type must match start ({ts:?}), got {te:?}"
+                ));
+            }
+            if env.contains_key(var) {
+                return Err(format!(
+                    "`for` variable `{var}` shadows an existing binding; shadowing is not allowed"
+                ));
+            }
+            if block_contains_return(body) {
+                return Err("`return` is not allowed inside `for` loop bodies".into());
+            }
+            let mut body_env = env.clone();
+            body_env.insert(var.clone(), ts.clone());
+            for st in &body.stmts {
+                check_stmt(st, &mut body_env, struct_fields, enums, fn_sigs, fn_ret)?;
+            }
+            if let Some(tail) = &body.tail {
+                infer_expr(tail, &body_env, struct_fields, enums, fn_sigs, None)?;
+            }
+        }
     }
     Ok(())
 }
@@ -907,6 +957,7 @@ mod tests {
             include_str!("../examples/tests/ok_enum_match.nia"),
             include_str!("../examples/tests/ok_enum_payload_match.nia"),
             include_str!("../examples/tests/ok_print_enum.nia"),
+            include_str!("../examples/tests/ok_for_range.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);
@@ -952,6 +1003,20 @@ mod tests {
     #[test]
     fn typecheck_rejects_shadowing_let_fixture() {
         let src = include_str!("../examples/tests/err_shadow_let.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_for_range_non_integer_fixture() {
+        let src = include_str!("../examples/tests/err_for_range_bool.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_return_inside_for_fixture() {
+        let src = include_str!("../examples/tests/err_for_return_in_for.nia");
         let r = check_all(src);
         assert!(r.is_err(), "{r:?}");
     }

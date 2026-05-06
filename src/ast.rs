@@ -99,6 +99,13 @@ pub enum Stmt {
         cond: Expr,
         then_block: Block,
     },
+    /// `for name in start..end { ... }` — half-open numeric range (like Rust `..`).
+    For {
+        var: String,
+        start: Expr,
+        end: Expr,
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone)]

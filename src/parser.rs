@@ -270,6 +270,9 @@ impl Parser {
                 Token::If => {
                     stmts.push(self.parse_if_stmt()?);
                 }
+                Token::For => {
+                    stmts.push(self.parse_for_stmt()?);
+                }
                 Token::Return => {
                     stmts.push(self.parse_return_stmt()?);
                 }
@@ -322,6 +325,23 @@ impl Parser {
         let cond = self.parse_if_cond()?;
         let then_block = self.parse_block()?;
         Ok(Stmt::If { cond, then_block })
+    }
+
+    /// Parses `for <ident> in <expr>..<expr> { ... }` (half-open range).
+    fn parse_for_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::For)?;
+        let var = self.expect_ident()?;
+        self.expect(&Token::In)?;
+        let start = self.parse_expr()?;
+        self.expect(&Token::DotDot)?;
+        let end = self.parse_expr()?;
+        let body = self.parse_block()?;
+        Ok(Stmt::For {
+            var,
+            start,
+            end,
+            body,
+        })
     }
 
     /// Parses restricted condition grammar for `if`.
@@ -782,6 +802,11 @@ mod tests {
     #[test]
     fn parse_fixture_alloc_heap() {
         parse_ok(include_str!("../examples/tests/ok_alloc_heap.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_for_range() {
+        parse_ok(include_str!("../examples/tests/ok_for_range.nia"));
     }
 
     #[test]

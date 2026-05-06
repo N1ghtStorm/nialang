@@ -8,6 +8,8 @@ pub enum Token {
     Struct,
     Enum,
     If,
+    For,
+    In,
     Match,
     Return,
     Ident(String),
@@ -26,6 +28,7 @@ pub enum Token {
     Star,
     Amp,
     Dot,
+    DotDot,
     DoubleColon,
     FatArrow,
     Eq,
@@ -122,6 +125,10 @@ impl<'a> Lexer<'a> {
             '+' => Token::Plus,
             '*' => Token::Star,
             '&' => Token::Amp,
+            '.' if matches!(self.src.peek(), Some('.')) => {
+                self.src.next();
+                Token::DotDot
+            }
             '.' => Token::Dot,
             '=' if matches!(self.src.peek(), Some('>')) => {
                 self.src.next();
@@ -154,6 +161,8 @@ impl<'a> Lexer<'a> {
                     "struct" => Token::Struct,
                     "enum" => Token::Enum,
                     "if" => Token::If,
+                    "for" => Token::For,
+                    "in" => Token::In,
                     "match" => Token::Match,
                     "return" => Token::Return,
                     "true" => Token::Bool(true),
@@ -223,6 +232,23 @@ mod tests {
                 Token::TyUsize,
                 Token::TyU128,
                 Token::TyBool,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_for_in_and_dotdot() {
+        let src = "for i in 0..1";
+        let toks = collect(src);
+        assert_eq!(
+            toks,
+            vec![
+                Token::For,
+                Token::Ident("i".into()),
+                Token::In,
+                Token::Int(0),
+                Token::DotDot,
+                Token::Int(1),
             ]
         );
     }
