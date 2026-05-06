@@ -74,6 +74,7 @@ pub enum Expr {
     },
     ArrayLit(Vec<Expr>),
     Field(Box<Expr>, String),
+    Index(Box<Expr>, Box<Expr>),
     /// Address of an lvalue (currently only a local variable).
     AddrOf(Box<Expr>),
     /// Dereference `*e`.

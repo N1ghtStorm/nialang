@@ -324,6 +324,17 @@ fn infer_expr(
                 .map(|(_, t)| t.clone())
                 .ok_or_else(|| format!("struct `{sname}` has no field `{fname}`"))
         }
+        Expr::Index(arr, idx) => {
+            let at = infer_expr(arr, env, structs, fns, None)?;
+            let it = infer_expr(idx, env, structs, fns, Some(&Ty::I32))?;
+            if !matches!(it, Ty::I32) {
+                return Err(format!("array index must be i32, got {it:?}"));
+            }
+            match at {
+                Ty::Array(elem, _) => Ok((*elem).clone()),
+                other => Err(format!("indexing requires array, got {other:?}")),
+            }
+        }
         Expr::AddrOf(inner) => match inner.as_ref() {
             Expr::Ident(n) => {
                 let t = env
@@ -433,6 +444,7 @@ mod tests {
             include_str!("../examples/tests/ok_nested_if.nia"),
             include_str!("../examples/tests/ok_tuple_named_mix.nia"),
             include_str!("../examples/tests/ok_array.nia"),
+            include_str!("../examples/tests/ok_array_index.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);
@@ -471,6 +483,18 @@ mod tests {
     #[test]
     fn typecheck_detects_array_len_mismatch_fixture() {
         let src = include_str!("../examples/tests/err_array_len_mismatch.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_index_on_non_array() {
+        let src = r#"
+fn main() i32 {
+    let x: i32 = 1;
+    x[0]
+}
+"#;
         let r = check_all(src);
         assert!(r.is_err(), "{r:?}");
     }

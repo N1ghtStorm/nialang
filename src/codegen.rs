@@ -591,6 +591,37 @@ impl<'a> Gen<'a> {
                     .clone();
                 (fty, format!("%{tmp}"))
             }
+            Expr::Index(arr, idx) => {
+                let (at, av) = self.emit_expr(arr, locals, None);
+                let (it, iv) = self.emit_expr(idx, locals, Some(&Ty::I32));
+                debug_assert!(matches!(it, Ty::I32));
+                let Ty::Array(elem_ty, n) = at else {
+                    unreachable!("typechecked")
+                };
+                let llvm_arr = format!("[{} x {}]", n, llvm_ty(&elem_ty, self.structs));
+                let ptr = self.fresh();
+                writeln!(self.out, "  %{} = alloca {}", ptr, llvm_arr).unwrap();
+                writeln!(self.out, "  store {} {}, ptr %{}", llvm_arr, av, ptr).unwrap();
+                let idx64 = self.fresh();
+                writeln!(self.out, "  %{} = sext i32 {} to i64", idx64, iv).unwrap();
+                let gep = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = getelementptr inbounds {}, ptr %{}, i64 0, i64 %{}",
+                    gep, llvm_arr, ptr, idx64
+                )
+                .unwrap();
+                let val = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = load {}, ptr %{}",
+                    val,
+                    llvm_ty(&elem_ty, self.structs),
+                    gep
+                )
+                .unwrap();
+                ((*elem_ty).clone(), format!("%{val}"))
+            }
             Expr::AddrOf(inner) => {
                 let Expr::Ident(name) = inner.as_ref() else {
                     unreachable!("typechecked")
@@ -713,5 +744,12 @@ mod tests {
         let ll = emit(include_str!("../examples/tests/ok_array.nia"));
         assert!(ll.contains("[8 x i8]"), "IR:\n{ll}");
         assert!(ll.contains("insertvalue [8 x i8]"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_contains_array_index_gep() {
+        let ll = emit(include_str!("../examples/tests/ok_array_index.nia"));
+        assert!(ll.contains("getelementptr inbounds [8 x i8]"), "IR:\n{ll}");
+        assert!(ll.contains("load i8"), "IR:\n{ll}");
     }
 }

@@ -308,6 +308,12 @@ impl Parser {
                     };
                     e = Expr::Field(Box::new(e), field);
                 }
+                Token::LBracket => {
+                    self.bump();
+                    let idx = self.parse_expr()?;
+                    self.expect(&Token::RBracket)?;
+                    e = Expr::Index(Box::new(e), Box::new(idx));
+                }
                 _ => break,
             }
         }
@@ -452,6 +458,18 @@ mod tests {
     #[test]
     fn parse_array_type_and_literal() {
         parse_ok(include_str!("../examples/tests/ok_array.nia"));
+    }
+
+    #[test]
+    fn parse_array_index_expression() {
+        let src = r#"
+fn main() i32 {
+    let arr: [u8; 3] = [1, 2, 3];
+    let x: u8 = arr[1];
+    0
+}
+"#;
+        parse_ok(src);
     }
 
     #[test]
