@@ -124,6 +124,14 @@ fn is_primitive_ty(t: &Ty) -> bool {
     is_integer_ty(t) || matches!(t, Ty::Bool)
 }
 
+fn is_printable_ty(t: &Ty) -> bool {
+    match t {
+        x if is_primitive_ty(x) => true,
+        Ty::Array(elem, _) => is_primitive_ty(elem),
+        _ => false,
+    }
+}
+
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -187,9 +195,9 @@ fn infer_expr(
                     ));
                 }
                 let t = infer_expr(&args[0], env, structs, fns, None)?;
-                if !is_primitive_ty(&t) {
+                if !is_printable_ty(&t) {
                     return Err(format!(
-                        "`{PRINTLN}` expects primitive type, got {t:?}"
+                        "`{PRINTLN}` expects primitive or array of primitive, got {t:?}"
                     ));
                 }
                 return Ok(Ty::Unit);
@@ -445,6 +453,7 @@ mod tests {
             include_str!("../examples/tests/ok_tuple_named_mix.nia"),
             include_str!("../examples/tests/ok_array.nia"),
             include_str!("../examples/tests/ok_array_index.nia"),
+            include_str!("../examples/tests/ok_print_array.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);

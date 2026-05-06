@@ -1,0 +1,16 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() i32 {
+    let pts: [Point; 2] = [
+        Point { x: 10, y: 20 },
+        Point { x: 30, y: 40 },
+    ];
+    println(pts[0].x);
+    println(pts[0].y);
+    println(pts[1].x);
+    println(pts[1].y);
+    0
+}

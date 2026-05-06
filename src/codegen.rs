@@ -117,11 +117,29 @@ impl<'a> Gen<'a> {
         format!("%{tmp}")
     }
 
+    fn emit_printf_text(&mut self, sym: &str, size: u32) {
+        let p = self.fmt_ptr(sym, size);
+        writeln!(self.out, "  call i32 (ptr, ...) @printf(ptr {})", p).unwrap();
+    }
+
     fn emit_println_primitive(&mut self, ty: &Ty, v: &str) {
+        self.emit_print_primitive(ty, v, true);
+    }
+
+    fn emit_print_primitive_no_nl(&mut self, ty: &Ty, v: &str) {
+        self.emit_print_primitive(ty, v, false);
+    }
+
+    fn emit_print_primitive(&mut self, ty: &Ty, v: &str, newline: bool) {
         match ty {
             Ty::I8 => {
                 let t = self.fresh();
-                let p = self.fmt_ptr("nialang.std.fmt.i32", 4);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.i32", 4)
+                } else {
+                    ("nialang.std.fmt.i32.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 writeln!(self.out, "  %{} = sext i8 {} to i32", t, v).unwrap();
                 writeln!(
                     self.out,
@@ -132,7 +150,12 @@ impl<'a> Gen<'a> {
             }
             Ty::U8 => {
                 let t = self.fresh();
-                let p = self.fmt_ptr("nialang.std.fmt.u32", 4);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.u32", 4)
+                } else {
+                    ("nialang.std.fmt.u32.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 writeln!(self.out, "  %{} = zext i8 {} to i32", t, v).unwrap();
                 writeln!(
                     self.out,
@@ -143,7 +166,12 @@ impl<'a> Gen<'a> {
             }
             Ty::I16 => {
                 let t = self.fresh();
-                let p = self.fmt_ptr("nialang.std.fmt.i32", 4);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.i32", 4)
+                } else {
+                    ("nialang.std.fmt.i32.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 writeln!(self.out, "  %{} = sext i16 {} to i32", t, v).unwrap();
                 writeln!(
                     self.out,
@@ -154,7 +182,12 @@ impl<'a> Gen<'a> {
             }
             Ty::U16 => {
                 let t = self.fresh();
-                let p = self.fmt_ptr("nialang.std.fmt.u32", 4);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.u32", 4)
+                } else {
+                    ("nialang.std.fmt.u32.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 writeln!(self.out, "  %{} = zext i16 {} to i32", t, v).unwrap();
                 writeln!(
                     self.out,
@@ -164,7 +197,12 @@ impl<'a> Gen<'a> {
                 .unwrap();
             }
             Ty::I32 => {
-                let p = self.fmt_ptr("nialang.std.fmt.i32", 4);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.i32", 4)
+                } else {
+                    ("nialang.std.fmt.i32.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 writeln!(
                     self.out,
                     "  call i32 (ptr, ...) @printf(ptr {}, i32 {})",
@@ -173,7 +211,12 @@ impl<'a> Gen<'a> {
                 .unwrap();
             }
             Ty::I64 | Ty::Isize => {
-                let p = self.fmt_ptr("nialang.std.fmt.i64", 6);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.i64", 6)
+                } else {
+                    ("nialang.std.fmt.i64.nn", 5)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 writeln!(
                     self.out,
                     "  call i32 (ptr, ...) @printf(ptr {}, i64 {})",
@@ -182,7 +225,12 @@ impl<'a> Gen<'a> {
                 .unwrap();
             }
             Ty::U64 | Ty::Usize => {
-                let p = self.fmt_ptr("nialang.std.fmt.u64", 6);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.u64", 6)
+                } else {
+                    ("nialang.std.fmt.u64.nn", 5)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 writeln!(
                     self.out,
                     "  call i32 (ptr, ...) @printf(ptr {}, i64 {})",
@@ -192,7 +240,12 @@ impl<'a> Gen<'a> {
             }
             Ty::Bool => {
                 let t = self.fresh();
-                let p = self.fmt_ptr("nialang.std.fmt.u32", 4);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.u32", 4)
+                } else {
+                    ("nialang.std.fmt.u32.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 writeln!(self.out, "  %{} = zext i1 {} to i32", t, v).unwrap();
                 writeln!(
                     self.out,
@@ -202,7 +255,12 @@ impl<'a> Gen<'a> {
                 .unwrap();
             }
             Ty::I128 | Ty::U128 => {
-                let p = self.fmt_ptr("nialang.std.fmt.i128hex", 18);
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.i128hex", 18)
+                } else {
+                    ("nialang.std.fmt.i128hex.nn", 17)
+                };
+                let p = self.fmt_ptr(sym, sz);
                 let hi128 = self.fresh();
                 let hi64 = self.fresh();
                 let lo64 = self.fresh();
@@ -218,6 +276,25 @@ impl<'a> Gen<'a> {
             }
             Ty::Array(_, _) | Ty::Struct(_) | Ty::Ptr(_) | Ty::Unit => unreachable!("typechecked"),
         }
+    }
+
+    fn emit_println_array(&mut self, elem_ty: &Ty, n: usize, arr_v: &str) {
+        self.emit_printf_text("nialang.std.txt.arr_open", 2);
+        for i in 0..n {
+            if i > 0 {
+                self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+            }
+            let ev = self.fresh();
+            let llvm_arr = format!("[{} x {}]", n, llvm_ty(elem_ty, self.structs));
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                ev, llvm_arr, arr_v, i
+            )
+            .unwrap();
+            self.emit_print_primitive_no_nl(elem_ty, &format!("%{ev}"));
+        }
+        self.emit_printf_text("nialang.std.txt.arr_close_ln", 3);
     }
 
     fn struct_idx(&self, sname: &str, field: &str) -> Option<u32> {
@@ -435,7 +512,10 @@ impl<'a> Gen<'a> {
             Expr::Call { name, args } => {
                 if name == PRINTLN {
                     let (at, av) = self.emit_expr(&args[0], locals, None);
-                    self.emit_println_primitive(&at, &av);
+                    match &at {
+                        Ty::Array(elem, n) => self.emit_println_array(elem, *n, &av),
+                        _ => self.emit_println_primitive(&at, &av),
+                    }
                     return (Ty::Unit, String::new());
                 }
                 if let Some(sdef) = self.structs.iter().find(|s| s.name == *name && s.is_tuple) {
@@ -751,5 +831,13 @@ mod tests {
         let ll = emit(include_str!("../examples/tests/ok_array_index.nia"));
         assert!(ll.contains("getelementptr inbounds [8 x i8]"), "IR:\n{ll}");
         assert!(ll.contains("load i8"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_println_array_uses_array_text_constants() {
+        let ll = emit(include_str!("../examples/tests/ok_print_array.nia"));
+        assert!(ll.contains("nialang.std.txt.arr_open"), "IR:\n{ll}");
+        assert!(ll.contains("nialang.std.txt.arr_sep"), "IR:\n{ll}");
+        assert!(ll.contains("nialang.std.txt.arr_close_ln"), "IR:\n{ll}");
     }
 }
