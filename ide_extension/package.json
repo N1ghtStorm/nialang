@@ -1,0 +1,101 @@
+{
+  "name": "nialang",
+  "displayName": "Nia",
+  "description": "Syntax highlighting for the Nia language (.nia)",
+  "version": "0.1.1",
+  "publisher": "nialang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages"],
+  "keywords": ["nia", "nialang"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "nia",
+        "aliases": ["Nia", "nialang"],
+        "extensions": [".nia"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "nia",
+        "scopeName": "source.nia",
+        "path": "./syntaxes/nia.tmLanguage.json"
+      }
+    ],
+    "configurationDefaults": {
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": [
+              "comment.line.double-slash.nia",
+              "punctuation.definition.comment.nia"
+            ],
+            "settings": {
+              "foreground": "#5C6370",
+              "fontStyle": "italic"
+            }
+          },
+          {
+            "scope": [
+              "keyword.control.nia",
+              "keyword.declaration.nia",
+              "keyword.other.fn.nia"
+            ],
+            "settings": { "foreground": "#C678DD" }
+          },
+          {
+            "scope": "keyword.operator.fat-arrow.nia",
+            "settings": { "foreground": "#C678DD" }
+          },
+          {
+            "scope": [
+              "entity.name.function.nia",
+              "entity.name.function.call.nia",
+              "support.function.builtin.nia"
+            ],
+            "settings": { "foreground": "#61AFEF" }
+          },
+          {
+            "scope": [
+              "entity.name.type.nia",
+              "support.type.primitive.nia"
+            ],
+            "settings": { "foreground": "#56B6C2" }
+          },
+          {
+            "scope": "variable.other.nia",
+            "settings": { "foreground": "#E06C75" }
+          },
+          {
+            "scope": [
+              "constant.language.boolean.nia",
+              "constant.numeric.integer.nia"
+            ],
+            "settings": { "foreground": "#D19A66" }
+          },
+          {
+            "scope": [
+              "string.quoted.double.nia",
+              "constant.character.escape.nia"
+            ],
+            "settings": { "foreground": "#98C379" }
+          },
+          {
+            "scope": [
+              "keyword.operator.namespace.nia",
+              "keyword.operator.nia",
+              "keyword.operator.access.nia",
+              "punctuation.nia",
+              "punctuation.separator.type.nia"
+            ],
+            "settings": { "foreground": "#ABB2BF" }
+          }
+        ]
+      }
+    }
+  }
+}

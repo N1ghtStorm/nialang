@@ -1,0 +1,125 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Nia",
+  "scopeName": "source.nia",
+  "patterns": [
+    { "include": "#line-comment" },
+    { "include": "#fn-decl" },
+    { "include": "#keywords" },
+    { "include": "#decl-keywords" },
+    { "include": "#primitive-types" },
+    { "include": "#constants" },
+    { "include": "#builtins" },
+    { "include": "#type-ident" },
+    { "include": "#function-call" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#identifiers" },
+    { "include": "#strings" }
+  ],
+  "repository": {
+    "line-comment": {
+      "name": "comment.line.double-slash.nia",
+      "begin": "//",
+      "end": "$",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.comment.nia" }
+      }
+    },
+    "fn-decl": {
+      "match": "\\b(fn)\\s+([A-Za-z_][\\w]*)",
+      "captures": {
+        "1": { "name": "keyword.other.fn.nia" },
+        "2": { "name": "entity.name.function.nia" }
+      }
+    },
+    "keywords": {
+      "match": "\\b(let|if|match|return)\\b",
+      "name": "keyword.control.nia"
+    },
+    "decl-keywords": {
+      "match": "\\b(struct|enum)\\b",
+      "name": "keyword.declaration.nia"
+    },
+    "primitive-types": {
+      "match": "\\b(i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool)\\b",
+      "name": "support.type.primitive.nia"
+    },
+    "constants": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.nia"
+    },
+    "builtins": {
+      "match": "\\b(println|alloc|dealloc|realloc)\\b",
+      "name": "support.function.builtin.nia"
+    },
+    "type-ident": {
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b",
+      "name": "entity.name.type.nia"
+    },
+    "function-call": {
+      "match": "\\b(?!fn|let|if|match|return|struct|enum|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|println|alloc|dealloc|realloc)([a-z_][\\w]*)(?=\\s*\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.nia" }
+      }
+    },
+    "numbers": {
+      "match": "\\b[0-9]+\\b",
+      "name": "constant.numeric.integer.nia"
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "=>",
+          "name": "keyword.operator.fat-arrow.nia"
+        },
+        {
+          "match": "::",
+          "name": "keyword.operator.namespace.nia"
+        },
+        {
+          "match": "[=+*]",
+          "name": "keyword.operator.nia"
+        },
+        {
+          "match": "&",
+          "name": "keyword.operator.nia"
+        },
+        {
+          "match": "\\.",
+          "name": "keyword.operator.access.nia"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[\\(\\)\\[\\]\\{\\},;]",
+          "name": "punctuation.nia"
+        },
+        {
+          "match": ":(?![:])",
+          "name": "punctuation.separator.type.nia"
+        }
+      ]
+    },
+    "identifiers": {
+      "match": "\\b(?!fn|let|if|match|return|struct|enum|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|println|alloc|dealloc|realloc)([a-z_][\\w]*)\\b",
+      "captures": {
+        "1": { "name": "variable.other.nia" }
+      }
+    },
+    "strings": {
+      "name": "string.quoted.double.nia",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.nia",
+          "match": "\\\\."
+        }
+      ]
+    }
+  }
+}
