@@ -1,0 +1,12 @@
+fn bar(foo: bool) i32 {
+    if foo {
+        return 1
+    }
+    0
+}
+
+fn main() i32 {
+    let a = bar(false);
+    println(a);
+    a
+}

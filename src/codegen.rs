@@ -31,6 +31,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
     match t {
         Ty::I32 => "i32".into(),
         Ty::U128 => "i128".into(),
+        Ty::Bool => "i1".into(),
         Ty::Struct(n) => format!("%struct.{}", sanitize(n)),
         Ty::Ptr(_) => "ptr".into(),
         Ty::Unit => "void".into(),
@@ -66,7 +67,9 @@ struct Gen<'a> {
     structs: &'a [StructDef],
     fn_sigs: &'a HashMap<String, FnSig>,
     tmp: u32,
+    lbl: u32,
     out: String,
+    terminated: bool,
 }
 
 impl<'a> Gen<'a> {
@@ -75,7 +78,9 @@ impl<'a> Gen<'a> {
             structs,
             fn_sigs,
             tmp: 0,
+            lbl: 0,
             out: String::new(),
+            terminated: false,
         }
     }
 
@@ -83,6 +88,12 @@ impl<'a> Gen<'a> {
         let n = self.tmp;
         self.tmp += 1;
         format!("t{n}")
+    }
+
+    fn fresh_label(&mut self, prefix: &str) -> String {
+        let n = self.lbl;
+        self.lbl += 1;
+        format!("{prefix}.{n}")
     }
 
     fn struct_idx(&self, sname: &str, field: &str) -> Option<u32> {
@@ -137,25 +148,15 @@ impl<'a> Gen<'a> {
         }
 
         for st in &f.body.stmts {
-            match st {
-                Stmt::Let { name, ty, init } => {
-                    let (t, v) = self.emit_expr(init, &local_ptr, ty.as_ref());
-                    let ptr = format!("%{}.addr", sanitize(name));
-                    writeln!(self.out, "  {} = alloca {}", ptr, llvm_ty(&t, self.structs)).unwrap();
-                    writeln!(
-                        self.out,
-                        "  store {} {}, ptr {}",
-                        llvm_ty(&t, self.structs),
-                        v,
-                        ptr
-                    )
-                    .unwrap();
-                    local_ptr.insert(name.clone(), (t, ptr));
-                }
-                Stmt::Expr(e) => {
-                    self.emit_expr(e, &local_ptr, None);
-                }
+            self.emit_stmt(st, &mut local_ptr, f.ret.as_ref());
+            if self.terminated {
+                break;
             }
+        }
+
+        if self.terminated {
+            writeln!(self.out, "}}").unwrap();
+            return self.out;
         }
 
         if let Some(ret_ty) = &f.ret {
@@ -177,6 +178,71 @@ impl<'a> Gen<'a> {
         self.out
     }
 
+    fn emit_stmt(
+        &mut self,
+        st: &Stmt,
+        locals: &mut HashMap<String, (Ty, String)>,
+        fn_ret: Option<&Ty>,
+    ) {
+        match st {
+            Stmt::Let { name, ty, init } => {
+                let (t, v) = self.emit_expr(init, locals, ty.as_ref());
+                let ptr = format!("%{}.addr", sanitize(name));
+                writeln!(self.out, "  {} = alloca {}", ptr, llvm_ty(&t, self.structs)).unwrap();
+                writeln!(
+                    self.out,
+                    "  store {} {}, ptr {}",
+                    llvm_ty(&t, self.structs),
+                    v,
+                    ptr
+                )
+                .unwrap();
+                locals.insert(name.clone(), (t, ptr));
+            }
+            Stmt::Expr(e) => {
+                self.emit_expr(e, locals, None);
+            }
+            Stmt::Return(e) => {
+                let Some(ret_ty) = fn_ret else {
+                    unreachable!("typechecked")
+                };
+                let (t, v) = self.emit_expr(e, locals, Some(ret_ty));
+                debug_assert!(types_match(&t, ret_ty));
+                writeln!(self.out, "  ret {} {}", llvm_ty(ret_ty, self.structs), v).unwrap();
+                self.terminated = true;
+            }
+            Stmt::If { cond, then_block } => {
+                let (ct, cv) = self.emit_expr(cond, locals, Some(&Ty::Bool));
+                debug_assert!(matches!(ct, Ty::Bool));
+                let then_lbl = self.fresh_label("if.then");
+                let cont_lbl = self.fresh_label("if.cont");
+                writeln!(
+                    self.out,
+                    "  br i1 {}, label %{}, label %{}",
+                    cv, then_lbl, cont_lbl
+                )
+                .unwrap();
+                writeln!(self.out, "{}:", then_lbl).unwrap();
+                let mut then_locals = locals.clone();
+                self.terminated = false;
+                for st in &then_block.stmts {
+                    self.emit_stmt(st, &mut then_locals, fn_ret);
+                    if self.terminated {
+                        break;
+                    }
+                }
+                if !self.terminated {
+                    if let Some(tail) = &then_block.tail {
+                        self.emit_expr(tail, &then_locals, None);
+                    }
+                    writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+                }
+                self.terminated = false;
+                writeln!(self.out, "{}:", cont_lbl).unwrap();
+            }
+        }
+    }
+
     fn emit_expr(
         &mut self,
         e: &Expr,
@@ -187,10 +253,11 @@ impl<'a> Gen<'a> {
             Expr::Int(n) => match hint {
                 Some(Ty::U128) => (Ty::U128, format!("{n}")),
                 Some(Ty::I32) | None => (Ty::I32, format!("{n}")),
-                Some(Ty::Struct(_)) | Some(Ty::Unit) | Some(Ty::Ptr(_)) => {
+                Some(Ty::Struct(_)) | Some(Ty::Unit) | Some(Ty::Ptr(_)) | Some(Ty::Bool) => {
                     unreachable!("typechecked")
                 }
             },
+            Expr::Bool(b) => (Ty::Bool, if *b { "1".into() } else { "0".into() }),
             Expr::Ident(name) => {
                 let (ty, ptr) = locals.get(name).expect("checked var");
                 let tmp = self.fresh();
@@ -216,7 +283,9 @@ impl<'a> Gen<'a> {
                     Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
                     }
-                    Ty::Struct(_) | Ty::Unit | Ty::Ptr(_) => unreachable!("add on struct"),
+                    Ty::Struct(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                        unreachable!("add on non-numeric")
+                    }
                 }
                 (tl, format!("%{tmp}"))
             }
@@ -365,7 +434,10 @@ impl<'a> Gen<'a> {
 
 fn types_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
-        (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) | (Ty::Unit, Ty::Unit) => true,
+        (Ty::I32, Ty::I32)
+        | (Ty::U128, Ty::U128)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Unit, Ty::Unit) => true,
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),
         _ => false,

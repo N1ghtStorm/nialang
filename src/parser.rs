@@ -113,6 +113,12 @@ impl Parser {
                 Token::Let => {
                     stmts.push(self.parse_let_stmt()?);
                 }
+                Token::If => {
+                    stmts.push(self.parse_if_stmt()?);
+                }
+                Token::Return => {
+                    stmts.push(self.parse_return_stmt()?);
+                }
                 _ => {
                     let e = self.parse_expr()?;
                     if matches!(self.peek(), Token::Semi) {
@@ -148,6 +154,39 @@ impl Parser {
         Ok(Stmt::Let { name, ty, init })
     }
 
+    fn parse_if_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::If)?;
+        let cond = self.parse_if_cond()?;
+        let then_block = self.parse_block()?;
+        Ok(Stmt::If { cond, then_block })
+    }
+
+    fn parse_if_cond(&mut self) -> Result<Expr, String> {
+        // Keep `if foo { ... }` unambiguous with struct literals `Foo { ... }`.
+        match self.bump() {
+            Token::Ident(n) => Ok(Expr::Ident(n)),
+            Token::Bool(b) => Ok(Expr::Bool(b)),
+            Token::Int(n) => Ok(Expr::Int(n)),
+            Token::LParen => {
+                let e = self.parse_expr()?;
+                self.expect(&Token::RParen)?;
+                Ok(e)
+            }
+            Token::Amp => Ok(Expr::AddrOf(Box::new(self.parse_atom()?))),
+            Token::Star => Ok(Expr::Deref(Box::new(self.parse_atom()?))),
+            other => Err(format!("unexpected token in if condition: {other:?}")),
+        }
+    }
+
+    fn parse_return_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Return)?;
+        let e = self.parse_expr()?;
+        if matches!(self.peek(), Token::Semi) {
+            self.bump();
+        }
+        Ok(Stmt::Return(e))
+    }
+
     fn parse_ty(&mut self) -> Result<Ty, String> {
         if matches!(self.peek(), Token::Amp) {
             self.bump();
@@ -157,6 +196,7 @@ impl Parser {
         match self.bump() {
             Token::TyI32 => Ok(Ty::I32),
             Token::TyU128 => Ok(Ty::U128),
+            Token::TyBool => Ok(Ty::Bool),
             Token::Ident(n) => Ok(Ty::Struct(n)),
             other => Err(format!("expected type, got {other:?}")),
         }
@@ -226,6 +266,7 @@ impl Parser {
             }
             _ => match self.bump() {
                 Token::Int(n) => Ok(Expr::Int(n)),
+                Token::Bool(b) => Ok(Expr::Bool(b)),
                 Token::Ident(name) => {
                     if matches!(self.peek(), Token::LBrace) {
                         self.parse_struct_lit_tail(name)
@@ -285,6 +326,21 @@ mod tests {
         let src = include_str!("../examples/sample_ptr.nia");
         let toks = tokenize(src);
         assert!(Parser::new(toks).parse_file().is_ok());
+    }
+
+    #[test]
+    fn parse_if_return_bool() {
+        let src = r#"
+fn bar(foo: bool) i32 {
+    if foo {
+        return 1
+    }
+    0
+}
+"#;
+        let toks = tokenize(src);
+        let r = Parser::new(toks).parse_file();
+        assert!(r.is_ok(), "{r:?}");
     }
 }
 

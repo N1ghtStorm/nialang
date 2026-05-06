@@ -6,8 +6,11 @@ pub enum Token {
     Fn,
     Let,
     Struct,
+    If,
+    Return,
     Ident(String),
     Int(i128),
+    Bool(bool),
     Colon,
     Comma,
     Semi,
@@ -22,6 +25,7 @@ pub enum Token {
     Eq,
     TyI32,
     TyU128,
+    TyBool,
     Eof,
 }
 
@@ -106,8 +110,13 @@ impl<'a> Lexer<'a> {
                     "fn" => Token::Fn,
                     "let" => Token::Let,
                     "struct" => Token::Struct,
+                    "if" => Token::If,
+                    "return" => Token::Return,
+                    "true" => Token::Bool(true),
+                    "false" => Token::Bool(false),
                     "i32" => Token::TyI32,
                     "u128" => Token::TyU128,
+                    "bool" => Token::TyBool,
                     _ => Token::Ident(s),
                 }
             }

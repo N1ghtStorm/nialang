@@ -57,28 +57,7 @@ pub fn check_fn(
         env.insert(pname.clone(), pty.clone());
     }
     for st in &f.body.stmts {
-        match st {
-            Stmt::Let { name, ty: ann, init } => {
-                let hint = ann.as_ref();
-                let t = infer_expr(init, &env, struct_fields, fn_sigs, hint)?;
-                if matches!(t, Ty::Unit) {
-                    return Err(format!(
-                        "let {name}: cannot bind a void value (missing return?)"
-                    ));
-                }
-                if let Some(a) = ann {
-                    if !types_equal(a, &t) {
-                        return Err(format!(
-                            "let {name}: type annotation mismatch: expected {a:?}, got {t:?}"
-                        ));
-                    }
-                }
-                env.insert(name.clone(), t);
-            }
-            Stmt::Expr(e) => {
-                infer_expr(e, &env, struct_fields, fn_sigs, None)?;
-            }
-        }
+        check_stmt(st, &mut env, struct_fields, fn_sigs, f.ret.as_ref())?;
     }
     if let Some(ret_ty) = &f.ret {
         let tail = f
@@ -104,7 +83,10 @@ pub fn check_fn(
 
 fn types_equal(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
-        (Ty::I32, Ty::I32) | (Ty::U128, Ty::U128) | (Ty::Unit, Ty::Unit) => true,
+        (Ty::I32, Ty::I32)
+        | (Ty::U128, Ty::U128)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Unit, Ty::Unit) => true,
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         _ => false,
@@ -122,11 +104,16 @@ fn infer_expr(
         Expr::Int(_) => match hint {
             Some(Ty::U128) => Ok(Ty::U128),
             Some(Ty::I32) | None => Ok(Ty::I32),
+            Some(Ty::Bool) => Err("integer literal cannot satisfy bool".into()),
             Some(Ty::Struct(name)) => Err(format!(
                 "integer literal cannot satisfy struct type `{name}`"
             )),
             Some(Ty::Unit) => Err("integer literal cannot satisfy `()`".into()),
             Some(Ty::Ptr(_)) => Err("integer literal cannot satisfy a pointer type".into()),
+        },
+        Expr::Bool(_) => match hint {
+            Some(Ty::Bool) | None => Ok(Ty::Bool),
+            Some(other) => Err(format!("bool literal cannot satisfy {other:?}")),
         },
         Expr::Ident(name) => env
             .get(name)
@@ -140,12 +127,18 @@ fn infer_expr(
             if matches!(tl, Ty::Ptr(_)) {
                 return Err("cannot use `+` on a pointer value".into());
             }
+            if matches!(tl, Ty::Bool) {
+                return Err("cannot use `+` on a bool value".into());
+            }
             let tr = infer_expr(r, env, structs, fns, Some(&tl))?;
             if matches!(tr, Ty::Unit) {
                 return Err("void value on the right of `+`".into());
             }
             if matches!(tr, Ty::Ptr(_)) {
                 return Err("cannot use `+` on a pointer value".into());
+            }
+            if matches!(tr, Ty::Bool) {
+                return Err("cannot use `+` on a bool value".into());
             }
             if !types_equal(&tl, &tr) {
                 return Err(format!("add operands differ: {tl:?} vs {tr:?}"));
@@ -251,4 +244,60 @@ fn infer_expr(
             }
         }
     }
+}
+
+fn check_stmt(
+    st: &Stmt,
+    env: &mut HashMap<String, Ty>,
+    struct_fields: &HashMap<String, Vec<(String, Ty)>>,
+    fn_sigs: &HashMap<String, FnSig>,
+    fn_ret: Option<&Ty>,
+) -> Result<(), String> {
+    match st {
+        Stmt::Let { name, ty: ann, init } => {
+            let hint = ann.as_ref();
+            let t = infer_expr(init, env, struct_fields, fn_sigs, hint)?;
+            if matches!(t, Ty::Unit) {
+                return Err(format!(
+                    "let {name}: cannot bind a void value (missing return?)"
+                ));
+            }
+            if let Some(a) = ann {
+                if !types_equal(a, &t) {
+                    return Err(format!(
+                        "let {name}: type annotation mismatch: expected {a:?}, got {t:?}"
+                    ));
+                }
+            }
+            env.insert(name.clone(), t);
+        }
+        Stmt::Expr(e) => {
+            infer_expr(e, env, struct_fields, fn_sigs, None)?;
+        }
+        Stmt::Return(e) => {
+            let Some(ret_ty) = fn_ret else {
+                return Err("`return` is not allowed in void functions".into());
+            };
+            let t = infer_expr(e, env, struct_fields, fn_sigs, Some(ret_ty))?;
+            if !types_equal(&t, ret_ty) {
+                return Err(format!(
+                    "`return` type mismatch: expected {ret_ty:?}, got {t:?}"
+                ));
+            }
+        }
+        Stmt::If { cond, then_block } => {
+            let t = infer_expr(cond, env, struct_fields, fn_sigs, Some(&Ty::Bool))?;
+            if !types_equal(&t, &Ty::Bool) {
+                return Err(format!("`if` condition must be bool, got {t:?}"));
+            }
+            let mut then_env = env.clone();
+            for st in &then_block.stmts {
+                check_stmt(st, &mut then_env, struct_fields, fn_sigs, fn_ret)?;
+            }
+            if let Some(tail) = &then_block.tail {
+                infer_expr(tail, &then_env, struct_fields, fn_sigs, None)?;
+            }
+        }
+    }
+    Ok(())
 }

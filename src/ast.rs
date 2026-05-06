@@ -2,6 +2,7 @@
 pub enum Ty {
     I32,
     U128,
+    Bool,
     Struct(String),
     /// `&T` — LLVM opaque `ptr` to `T`.
     Ptr(Box<Ty>),
@@ -39,11 +40,17 @@ pub enum Stmt {
     },
     /// Expression followed by `;` (e.g. `println(1);`).
     Expr(Expr),
+    Return(Expr),
+    If {
+        cond: Expr,
+        then_block: Block,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum Expr {
     Int(i128),
+    Bool(bool),
     Ident(String),
     Add(Box<Expr>, Box<Expr>),
     Call {

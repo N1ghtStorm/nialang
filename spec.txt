@@ -25,3 +25,14 @@ struct Foo {
     a: i32,
     b: u128,
 }
+
+-------
+
+if conditions:
+
+fn bar(foo: bool) i32 {
+    if foo {
+        return 1
+    }
+    0
+}
