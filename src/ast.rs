@@ -51,6 +51,11 @@ pub enum Stmt {
     },
     /// Expression followed by `;` (e.g. `println(1);`).
     Expr(Expr),
+    /// Assignment statement (e.g. `x = 1;` or `*p = v;`).
+    Assign {
+        target: Expr,
+        value: Expr,
+    },
     Return(Expr),
     If {
         cond: Expr,

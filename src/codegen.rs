@@ -605,6 +605,19 @@ impl<'a> Gen<'a> {
             Stmt::Expr(e) => {
                 self.emit_expr(e, locals, None);
             }
+            Stmt::Assign { target, value } => {
+                let (tt, ptr_v) = self.emit_assign_ptr(target, locals);
+                let (vt, vv) = self.emit_expr(value, locals, Some(&tt));
+                debug_assert!(types_match(&tt, &vt));
+                writeln!(
+                    self.out,
+                    "  store {} {}, ptr {}",
+                    llvm_ty(&tt, self.structs),
+                    vv,
+                    ptr_v
+                )
+                .unwrap();
+            }
             Stmt::Return(e) => {
                 let Some(ret_ty) = fn_ret else {
                     unreachable!("typechecked")
@@ -982,6 +995,27 @@ impl<'a> Gen<'a> {
             }
         }
     }
+
+    fn emit_assign_ptr(
+        &mut self,
+        target: &Expr,
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        match target {
+            Expr::Ident(name) => {
+                let (ty, ptr) = locals.get(name).expect("typechecked assign ident");
+                (ty.clone(), ptr.clone())
+            }
+            Expr::Deref(inner) => {
+                let (pt, pv) = self.emit_expr(inner, locals, None);
+                let Ty::Ptr(pointee) = pt else {
+                    unreachable!("typechecked assign deref")
+                };
+                ((*pointee).clone(), pv)
+            }
+            _ => unreachable!("typechecked assign lvalue"),
+        }
+    }
 }
 
 /// Lightweight type compatibility used by codegen assertions.
@@ -1113,5 +1147,11 @@ mod tests {
         assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
         assert!(ll.contains("call ptr @realloc"), "IR:\n{ll}");
         assert!(ll.contains("call void @free"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_pointer_write_emits_store_through_ptr() {
+        let ll = emit(include_str!("../examples/tests/ok_ptr_write.nia"));
+        assert!(ll.contains("store i32 99, ptr %"), "IR:\n{ll}");
     }
 }

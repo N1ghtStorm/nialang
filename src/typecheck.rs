@@ -504,6 +504,24 @@ fn check_stmt(
         Stmt::Expr(e) => {
             infer_expr(e, env, struct_fields, fn_sigs, None)?;
         }
+        Stmt::Assign { target, value } => {
+            let tt = infer_expr(target, env, struct_fields, fn_sigs, None)?;
+            match target {
+                Expr::Ident(_) | Expr::Deref(_) => {}
+                _ => {
+                    return Err(
+                        "assignment target must be variable or dereference (e.g. `x` or `*p`)"
+                            .into(),
+                    )
+                }
+            }
+            let vt = infer_expr(value, env, struct_fields, fn_sigs, Some(&tt))?;
+            if !types_equal(&tt, &vt) {
+                return Err(format!(
+                    "assignment type mismatch: target {tt:?}, value {vt:?}"
+                ));
+            }
+        }
         Stmt::Return(e) => {
             let Some(ret_ty) = fn_ret else {
                 return Err("`return` is not allowed in void functions".into());
@@ -566,6 +584,7 @@ mod tests {
             include_str!("../examples/tests/ok_print_array.nia"),
             include_str!("../examples/tests/ok_print_structs.nia"),
             include_str!("../examples/tests/ok_alloc_heap.nia"),
+            include_str!("../examples/tests/ok_ptr_write.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);

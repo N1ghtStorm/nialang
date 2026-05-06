@@ -190,6 +190,13 @@ impl Parser {
                 }
                 _ => {
                     let e = self.parse_expr()?;
+                    if matches!(self.peek(), Token::Eq) {
+                        self.bump();
+                        let value = self.parse_expr()?;
+                        self.expect(&Token::Semi)?;
+                        stmts.push(Stmt::Assign { target: e, value });
+                        continue;
+                    }
                     if matches!(self.peek(), Token::Semi) {
                         self.bump();
                         stmts.push(Stmt::Expr(e));
@@ -538,6 +545,11 @@ mod tests {
     #[test]
     fn parse_fixture_alloc_heap() {
         parse_ok(include_str!("../examples/tests/ok_alloc_heap.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_ptr_write() {
+        parse_ok(include_str!("../examples/tests/ok_ptr_write.nia"));
     }
 
     #[test]
