@@ -45,6 +45,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Usize => "i64".into(),
         Ty::U128 => "i128".into(),
         Ty::Bool => "i1".into(),
+        Ty::Array(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
         Ty::Struct(n) => format!("%struct.{}", sanitize(n)),
         Ty::Ptr(_) => "ptr".into(),
         Ty::Unit => "void".into(),
@@ -215,7 +216,7 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
             }
-            Ty::Struct(_) | Ty::Ptr(_) | Ty::Unit => unreachable!("typechecked"),
+            Ty::Array(_, _) | Ty::Struct(_) | Ty::Ptr(_) | Ty::Unit => unreachable!("typechecked"),
         }
     }
 
@@ -379,7 +380,11 @@ impl<'a> Gen<'a> {
                 Some(Ty::Isize) => (Ty::Isize, format!("{n}")),
                 Some(Ty::Usize) => (Ty::Usize, format!("{n}")),
                 Some(Ty::U128) => (Ty::U128, format!("{n}")),
-                Some(Ty::Struct(_)) | Some(Ty::Unit) | Some(Ty::Ptr(_)) | Some(Ty::Bool) => {
+                Some(Ty::Struct(_))
+                | Some(Ty::Unit)
+                | Some(Ty::Ptr(_))
+                | Some(Ty::Bool)
+                | Some(Ty::Array(_, _)) => {
                     unreachable!("typechecked")
                 }
             },
@@ -421,7 +426,7 @@ impl<'a> Gen<'a> {
                     Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
                     }
-                    Ty::Struct(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
                         unreachable!("add on non-numeric")
                     }
                 }
@@ -524,6 +529,41 @@ impl<'a> Gen<'a> {
                 writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, tmp).unwrap();
                 (Ty::Struct(sname), format!("%{loadt}"))
             }
+            Expr::ArrayLit(elems) => {
+                let (elem_ty, n) = match hint {
+                    Some(Ty::Array(elem, n)) => (elem.as_ref().clone(), *n),
+                    _ => {
+                        let first = elems.first().expect("typechecked non-empty array");
+                        let (t, _) = self.emit_expr(first, locals, None);
+                        (t, elems.len())
+                    }
+                };
+                let llvm_arr = format!("[{} x {}]", n, llvm_ty(&elem_ty, self.structs));
+                let mut agg = "poison".to_string();
+                for (i, e) in elems.iter().enumerate() {
+                    let (et, ev) = self.emit_expr(e, locals, Some(&elem_ty));
+                    debug_assert!(types_match(&et, &elem_ty));
+                    let tmp = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = insertvalue {} {}, {} {}, {}",
+                        tmp,
+                        llvm_arr,
+                        agg,
+                        llvm_ty(&et, self.structs),
+                        ev,
+                        i
+                    )
+                    .unwrap();
+                    agg = format!("%{tmp}");
+                }
+                let tmp = self.fresh();
+                writeln!(self.out, "  %{} = alloca {}", tmp, llvm_arr).unwrap();
+                writeln!(self.out, "  store {} {}, ptr %{}", llvm_arr, agg, tmp).unwrap();
+                let loadt = self.fresh();
+                writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_arr, tmp).unwrap();
+                (Ty::Array(Box::new(elem_ty), n), format!("%{loadt}"))
+            }
             Expr::Field(obj, fname) => {
                 let (bt, bv) = self.emit_expr(obj, locals, None);
                 let Ty::Struct(sname) = bt else {
@@ -593,6 +633,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::U128, Ty::U128)
         | (Ty::Bool, Ty::Bool)
         | (Ty::Unit, Ty::Unit) => true,
+        (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_match(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),
         _ => false,
@@ -665,5 +706,12 @@ mod tests {
         let ll = emit(include_str!("../examples/tests/ok_nested_if.nia"));
         let count_then = ll.matches("if.then.").count();
         assert!(count_then >= 2, "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_contains_array_type_and_insertvalue() {
+        let ll = emit(include_str!("../examples/tests/ok_array.nia"));
+        assert!(ll.contains("[8 x i8]"), "IR:\n{ll}");
+        assert!(ll.contains("insertvalue [8 x i8]"), "IR:\n{ll}");
     }
 }

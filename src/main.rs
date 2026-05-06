@@ -38,6 +38,7 @@ mod self_test {
             "examples/tests/ok_pointers.nia",
             "examples/tests/ok_nested_if.nia",
             "examples/tests/ok_tuple_named_mix.nia",
+            "examples/tests/ok_array.nia",
         ];
         for f in files {
             compile_fixture_ok(f);
@@ -51,6 +52,7 @@ mod self_test {
             "examples/tests/err_type_add_bool.nia",
             "examples/tests/err_type_if_non_bool.nia",
             "examples/tests/err_type_tuple_with_named_literal.nia",
+            "examples/tests/err_array_len_mismatch.nia",
         ];
         for f in err_files {
             let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f);

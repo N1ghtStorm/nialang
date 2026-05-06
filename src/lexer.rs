@@ -18,6 +18,8 @@ pub enum Token {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Plus,
     Star,
     Amp,
@@ -90,6 +92,8 @@ impl<'a> Lexer<'a> {
             ')' => Token::RParen,
             '{' => Token::LBrace,
             '}' => Token::RBrace,
+            '[' => Token::LBracket,
+            ']' => Token::RBracket,
             '+' => Token::Plus,
             '*' => Token::Star,
             '&' => Token::Amp,
@@ -192,7 +196,7 @@ mod tests {
 
     #[test]
     fn lex_symbols_and_comments() {
-        let src = "a: b, c; ( ) { } + * & . = // comment\n42";
+        let src = "a: b, c; ( ) { } [ ] + * & . = // comment\n42";
         let toks = collect(src);
         assert_eq!(
             toks,
@@ -207,6 +211,8 @@ mod tests {
                 Token::RParen,
                 Token::LBrace,
                 Token::RBrace,
+                Token::LBracket,
+                Token::RBracket,
                 Token::Plus,
                 Token::Star,
                 Token::Amp,

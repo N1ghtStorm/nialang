@@ -96,6 +96,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::U128, Ty::U128)
         | (Ty::Bool, Ty::Bool)
         | (Ty::Unit, Ty::Unit) => true,
+        (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_equal(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         _ => false,
@@ -140,6 +141,7 @@ fn infer_expr(
             )),
             Some(Ty::Unit) => Err("integer literal cannot satisfy `()`".into()),
             Some(Ty::Ptr(_)) => Err("integer literal cannot satisfy a pointer type".into()),
+            Some(Ty::Array(_, _)) => Err("integer literal cannot satisfy array type".into()),
             Some(other) => Err(format!("integer literal cannot satisfy {other:?}")),
         },
         Expr::Bool(_) => match hint {
@@ -273,6 +275,41 @@ fn infer_expr(
             }
             Ok(Ty::Struct(name.clone()))
         }
+        Expr::ArrayLit(elems) => match hint {
+            Some(Ty::Array(elem_ty, n)) => {
+                if elems.len() != *n {
+                    return Err(format!(
+                        "array literal length mismatch: expected {n}, got {}",
+                        elems.len()
+                    ));
+                }
+                for e in elems {
+                    let et = infer_expr(e, env, structs, fns, Some(elem_ty))?;
+                    if !types_equal(&et, elem_ty) {
+                        return Err(format!(
+                            "array element type mismatch: expected {elem_ty:?}, got {et:?}"
+                        ));
+                    }
+                }
+                Ok(Ty::Array(elem_ty.clone(), *n))
+            }
+            Some(other) => Err(format!("array literal cannot satisfy {other:?}")),
+            None => {
+                let Some(first) = elems.first() else {
+                    return Err("cannot infer type of empty array literal".into());
+                };
+                let first_ty = infer_expr(first, env, structs, fns, None)?;
+                for e in elems.iter().skip(1) {
+                    let et = infer_expr(e, env, structs, fns, Some(&first_ty))?;
+                    if !types_equal(&et, &first_ty) {
+                        return Err(format!(
+                            "array elements differ: expected {first_ty:?}, got {et:?}"
+                        ));
+                    }
+                }
+                Ok(Ty::Array(Box::new(first_ty), elems.len()))
+            }
+        },
         Expr::Field(obj, fname) => {
             let bt = infer_expr(obj, env, structs, fns, None)?;
             let Ty::Struct(sname) = bt else {
@@ -395,6 +432,7 @@ mod tests {
             include_str!("../examples/tests/ok_pointers.nia"),
             include_str!("../examples/tests/ok_nested_if.nia"),
             include_str!("../examples/tests/ok_tuple_named_mix.nia"),
+            include_str!("../examples/tests/ok_array.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);
@@ -426,6 +464,13 @@ mod tests {
     #[test]
     fn typecheck_detects_tuple_named_literal_fixture() {
         let src = include_str!("../examples/tests/err_type_tuple_with_named_literal.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_detects_array_len_mismatch_fixture() {
+        let src = include_str!("../examples/tests/err_array_len_mismatch.nia");
         let r = check_all(src);
         assert!(r.is_err(), "{r:?}");
     }

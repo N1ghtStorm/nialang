@@ -231,6 +231,17 @@ impl Parser {
             let inner = self.parse_ty()?;
             return Ok(Ty::Ptr(Box::new(inner)));
         }
+        if matches!(self.peek(), Token::LBracket) {
+            self.bump();
+            let elem = self.parse_ty()?;
+            self.expect(&Token::Semi)?;
+            let len = match self.bump() {
+                Token::Int(n) if n >= 0 => n as usize,
+                other => return Err(format!("expected non-negative array length, got {other:?}")),
+            };
+            self.expect(&Token::RBracket)?;
+            return Ok(Ty::Array(Box::new(elem), len));
+        }
         match self.bump() {
             Token::TyI8 => Ok(Ty::I8),
             Token::TyU8 => Ok(Ty::U8),
@@ -315,6 +326,10 @@ impl Parser {
                 let inner = self.parse_atom()?;
                 Ok(Expr::Deref(Box::new(inner)))
             }
+            Token::LBracket => {
+                self.bump();
+                self.parse_array_lit_tail()
+            }
             _ => match self.bump() {
                 Token::Int(n) => Ok(Expr::Int(n)),
                 Token::Bool(b) => Ok(Expr::Bool(b)),
@@ -358,6 +373,27 @@ impl Parser {
             name: struct_name,
             fields,
         })
+    }
+
+    fn parse_array_lit_tail(&mut self) -> Result<Expr, String> {
+        let mut elems = Vec::new();
+        if !matches!(self.peek(), Token::RBracket) {
+            loop {
+                elems.push(self.parse_expr()?);
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                        if matches!(self.peek(), Token::RBracket) {
+                            break;
+                        }
+                    }
+                    Token::RBracket => break,
+                    _ => return Err(format!("expected , or ], got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::RBracket)?;
+        Ok(Expr::ArrayLit(elems))
     }
 
     fn expect_ident(&mut self) -> Result<String, String> {
@@ -411,6 +447,11 @@ mod tests {
     #[test]
     fn parse_fixture_tuple_named_mix() {
         parse_ok(include_str!("../examples/tests/ok_tuple_named_mix.nia"));
+    }
+
+    #[test]
+    fn parse_array_type_and_literal() {
+        parse_ok(include_str!("../examples/tests/ok_array.nia"));
     }
 
     #[test]

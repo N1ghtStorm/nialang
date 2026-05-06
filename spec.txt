@@ -42,3 +42,9 @@ fn bar(foo: bool) i32 {
 tuple struct example:
 
 struct Foo (u8, i32, u8, u128)
+
+---------
+
+arrays example
+
+let arr: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8]

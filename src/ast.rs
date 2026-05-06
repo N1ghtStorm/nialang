@@ -12,6 +12,7 @@ pub enum Ty {
     Usize,
     U128,
     Bool,
+    Array(Box<Ty>, usize),
     Struct(String),
     /// `&T` — LLVM opaque `ptr` to `T`.
     Ptr(Box<Ty>),
@@ -71,6 +72,7 @@ pub enum Expr {
         name: String,
         fields: Vec<(String, Expr)>,
     },
+    ArrayLit(Vec<Expr>),
     Field(Box<Expr>, String),
     /// Address of an lvalue (currently only a local variable).
     AddrOf(Box<Expr>),
