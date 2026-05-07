@@ -1,3 +1,29 @@
+/// Core semantic type model shared by all compiler stages.
+///
+/// This enum is the single source of truth for "what type a value has" once
+/// source text is parsed into AST. Every major phase depends on it:
+/// - parser stores explicit type annotations as `Ty`,
+/// - type checker infers and compares expression/statement types using `Ty`,
+/// - codegen maps `Ty` to concrete LLVM IR types.
+///
+/// Why centralizing this matters:
+/// - keeps parser/typecheck/codegen in sync on supported type forms,
+/// - avoids ad-hoc string-based type handling,
+/// - makes type equality/comparisons deterministic across passes.
+///
+/// Variant groups:
+/// - integer primitives (`I8`..`U128`) and `Bool`,
+/// - composites (`Array`, `Struct`, `Enum`),
+/// - indirection (`Ptr`),
+/// - effect/absence type (`Unit`).
+///
+/// Notes:
+/// - `Struct(String)` / `Enum(String)` store user-defined type names and are
+///   resolved/validated against symbol tables during semantic analysis.
+/// - `Ptr(Box<Ty>)` preserves pointee type for type safety (e.g. dereference and
+///   assignment checks), even though LLVM lowering uses opaque `ptr`.
+/// - `Unit` models "no value" results (void-like), allowing typechecker rules to
+///   reject invalid contexts such as binding a void result in `let`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Ty {
     I8,

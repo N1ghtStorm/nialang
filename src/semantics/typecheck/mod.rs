@@ -5,11 +5,23 @@ use crate::ast::{
 };
 use crate::nia_std::{ALLOC, DEALLOC, LEN, PRINTLN, REALLOC};
 
+/// Canonical function signature table entry used across semantic passes.
+///
+/// We collect `FnSig` for every function before checking bodies so calls can be
+/// validated in one pass (arity + argument types + return type), including
+/// forward references and recursive calls.
 pub struct FnSig {
     pub params: Vec<Ty>,
     pub ret: Option<Ty>,
 }
 
+/// Resolves user-written type syntax into canonical semantic type form.
+///
+/// Why this exists:
+/// - validates that referenced named types actually exist,
+/// - disambiguates `Ty::Struct(name)` into `Ty::Enum(name)` when `name` is an enum,
+/// - recursively normalizes nested types (`&T`, `[T; N]`) so later checks operate
+///   on a consistent representation.
 fn normalize_ty(
     t: &Ty,
     structs: &HashMap<String, StructDef>,
