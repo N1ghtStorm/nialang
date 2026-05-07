@@ -90,6 +90,12 @@ fn codegen_array_reverse_has_helper_and_swaps() {
 }
 
 #[test]
+fn codegen_builtin_len_emits_array_length_constant() {
+    let ll = emit(include_str!("../../../examples/tests/ok_array_len.nia"));
+    assert!(ll.contains("ret i32 3"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_println_array_uses_array_text_constants() {
     let ll = emit(include_str!("../../../examples/tests/ok_print_array.nia"));
     assert!(ll.contains("nialang.std.txt.arr_open"), "IR:\n{ll}");

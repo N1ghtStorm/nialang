@@ -125,6 +125,11 @@ fn parse_fixture_array_reverse() {
 }
 
 #[test]
+fn parse_fixture_array_len() {
+    parse_ok(include_str!("../../examples/tests/ok_array_len.nia"));
+}
+
+#[test]
 fn parse_inline_if_return_bool() {
     let src = r#"
 fn bar(foo: bool) i32 {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::ast::{EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty};
-use crate::nia_std::{ALLOC, DEALLOC, PRINTLN, REALLOC};
+use crate::nia_std::{ALLOC, DEALLOC, LEN, PRINTLN, REALLOC};
 use crate::semantics::typecheck::FnSig;
 
 /// Emits complete textual LLVM module from already-validated AST.
@@ -1338,6 +1338,13 @@ impl<'a> Gen<'a> {
                     let (at, av) = self.emit_expr(&args[0], locals, None);
                     self.emit_print_value(&at, &av, true);
                     return (Ty::Unit, String::new());
+                }
+                if name == LEN {
+                    let (at, _) = self.emit_expr(&args[0], locals, None);
+                    let Ty::Array(_, n) = at else {
+                        unreachable!("typechecked len")
+                    };
+                    return (Ty::I32, format!("{n}"));
                 }
                 if name == ALLOC {
                     let (at, av) = self.emit_expr(&args[0], locals, None);

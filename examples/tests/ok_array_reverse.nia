@@ -6,7 +6,7 @@ fn main() i32 {
 }
 
 fn reverse_array(arr: [u8; 8]) [u8; 8] {
-    for i in 0..4 {
+    for i in 0..len(arr) {
         let temp: u8 = arr[i];
         arr[i] = arr[7 - i];
         arr[7 - i] = temp;

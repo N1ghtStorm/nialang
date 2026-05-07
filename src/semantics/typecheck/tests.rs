@@ -28,8 +28,9 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_array.nia"),
         include_str!("../../../examples/tests/ok_array_index.nia"),
         include_str!("../../../examples/tests/ok_array_index_store.nia"),
-        include_str!("../../../examples/tests/ok_array_reverse.nia"),
-        include_str!("../../../examples/tests/ok_print_array.nia"),
+            include_str!("../../../examples/tests/ok_array_reverse.nia"),
+            include_str!("../../../examples/tests/ok_array_len.nia"),
+            include_str!("../../../examples/tests/ok_print_array.nia"),
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
         include_str!("../../../examples/tests/ok_ptr_write.nia"),
@@ -168,6 +169,17 @@ fn typecheck_rejects_return_in_void_fn() {
     let src = r#"
 fn f() {
 return 1
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_len_non_array() {
+    let src = r#"
+fn main() i32 {
+    len(1)
 }
 "#;
     let r = check_all(src);

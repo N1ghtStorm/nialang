@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{
     Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty,
 };
-use crate::nia_std::{ALLOC, DEALLOC, PRINTLN, REALLOC};
+use crate::nia_std::{ALLOC, DEALLOC, LEN, PRINTLN, REALLOC};
 
 pub struct FnSig {
     pub params: Vec<Ty>,
@@ -56,7 +56,7 @@ fn enum_variant<'a>(edef: &'a EnumDef, variant: &str) -> Option<&'a EnumVariantF
 /// ## Validations in this stage
 /// - rejects duplicate struct names,
 /// - rejects duplicate function names,
-/// - reserves builtin name `println` (user code cannot redefine it).
+/// - reserves builtin names `println`, `len`, heap helpers (user code cannot redefine them).
 ///
 /// This pass is intentionally shallow: it does not typecheck function bodies.
 pub fn collect_sigs(
@@ -108,7 +108,12 @@ pub fn collect_sigs(
 
     let mut fn_sigs: HashMap<String, FnSig> = HashMap::new();
     for f in fns {
-        if f.name == PRINTLN || f.name == ALLOC || f.name == DEALLOC || f.name == REALLOC {
+        if f.name == PRINTLN
+            || f.name == LEN
+            || f.name == ALLOC
+            || f.name == DEALLOC
+            || f.name == REALLOC
+        {
             return Err(format!(
                 "function name `{}` is reserved for the standard library",
                 f.name
@@ -319,7 +324,7 @@ fn is_printable_ty_inner(
 ///
 /// ## Notes
 /// - Integer literals use `hint` for width/sign selection.
-/// - Builtin `println` is treated as a special-case call and returns `Ty::Unit`.
+/// - Builtins `println` / `len` / heap helpers are special-cased (`println` → unit, `len` → i32).
 /// - Function/struct constructor calls validate arity and per-arg compatibility.
 fn infer_arithmetic_bin(
     l: &Expr,
@@ -422,6 +427,19 @@ fn infer_expr(
                     ));
                 }
                 return Ok(Ty::Unit);
+            }
+            if name == LEN {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{LEN}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let t = infer_expr(&args[0], env, structs, enums, fns, None)?;
+                return match t {
+                    Ty::Array(_, _) => Ok(Ty::I32),
+                    _ => Err(format!("`{LEN}` expects an array, got {t:?}")),
+                };
             }
             if name == ALLOC {
                 if args.len() != 1 {

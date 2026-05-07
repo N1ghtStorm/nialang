@@ -1,6 +1,8 @@
-//! Built-in "std" surface: `println` is always available (reserved name).
+//! Built-in "std" surface: `println`, `len`, heap helpers (reserved names).
 
 pub const PRINTLN: &str = "println";
+/// Array length: `len(arr)` → `i32` (compile-time size of `[T; N]`).
+pub const LEN: &str = "len";
 pub const ALLOC: &str = "alloc";
 pub const DEALLOC: &str = "dealloc";
 pub const REALLOC: &str = "realloc";
