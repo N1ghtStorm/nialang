@@ -34,6 +34,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
         include_str!("../../../examples/tests/ok_ptr_write.nia"),
+        include_str!("../../../examples/tests/ok_ptr_array_write.nia"),
         include_str!("../../../examples/tests/ok_enum_match.nia"),
         include_str!("../../../examples/tests/ok_enum_payload_match.nia"),
         include_str!("../../../examples/tests/ok_print_enum.nia"),

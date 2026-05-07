@@ -1,0 +1,10 @@
+fn bump_mid(arr_ptr: &[u8; 4]) {
+    (*arr_ptr)[1] = 9;
+}
+
+fn main() i32 {
+    let arr: [u8; 4] = [1, 2, 3, 4];
+    bump_mid(&arr);
+    println(arr[1]);
+    0
+}

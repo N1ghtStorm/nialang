@@ -83,6 +83,11 @@ fn parse_fixture_ptr_write() {
 }
 
 #[test]
+fn parse_fixture_ptr_array_write() {
+    parse_ok(include_str!("../../examples/tests/ok_ptr_array_write.nia"));
+}
+
+#[test]
 fn parse_fixture_enum_match() {
     parse_ok(include_str!("../../examples/tests/ok_enum_match.nia"));
 }

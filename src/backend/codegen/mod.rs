@@ -244,8 +244,8 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
-/// `arr[i][j]…` as a chain ending in a local name (for GEP-based load/store).
-fn collect_array_index_chain(mut e: &Expr) -> Option<(String, Vec<&Expr>)> {
+/// `root[i][j]...` as a chain ending in a root lvalue expression.
+fn collect_array_index_chain(mut e: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
     let mut idxs = Vec::new();
     loop {
         match e {
@@ -253,9 +253,9 @@ fn collect_array_index_chain(mut e: &Expr) -> Option<(String, Vec<&Expr>)> {
                 idxs.push(i.as_ref());
                 e = a.as_ref();
             }
-            Expr::Ident(n) => {
+            Expr::Ident(_) | Expr::Deref(_) => {
                 idxs.reverse();
-                return Some((n.clone(), idxs));
+                return Some((e, idxs));
             }
             _ => return None,
         }
@@ -1960,9 +1960,8 @@ impl<'a> Gen<'a> {
             }
             Expr::Index(arr, idx) => {
                 let full = Expr::Index(arr.clone(), idx.clone());
-                if let Some((name, idxs)) = collect_array_index_chain(&full) {
-                    let (elem_ty, gep_ptr) =
-                        self.emit_array_gep_chain(&name, &idxs, locals);
+                if let Some((root, idxs)) = collect_array_index_chain(&full) {
+                    let (elem_ty, gep_ptr) = self.emit_array_gep_chain(root, &idxs, locals);
                     let val = self.fresh();
                     writeln!(
                         self.out,
@@ -2031,14 +2030,24 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// Follow `name` through `indices` with GEP; returns element type and `ptr` to the slot.
+    /// Follow `root` through `indices` with GEP; returns element type and `ptr` to the slot.
     fn emit_array_gep_chain(
         &mut self,
-        name: &str,
+        root: &Expr,
         indices: &[&Expr],
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
-        let (mut cur_ty, mut llvm_ptr) = locals.get(name).expect("indexed assign var").clone();
+        let (mut cur_ty, mut llvm_ptr) = match root {
+            Expr::Ident(name) => locals.get(name).expect("indexed assign var").clone(),
+            Expr::Deref(inner) => {
+                let (pt, pv) = self.emit_expr(inner, locals, None);
+                let Ty::Ptr(pointee) = pt else {
+                    unreachable!("typechecked indexed deref root")
+                };
+                ((*pointee).clone(), pv)
+            }
+            _ => unreachable!("typechecked index chain root"),
+        };
         for idx_expr in indices {
             let Ty::Array(elem_ty, n) = &cur_ty else {
                 unreachable!("typechecked index chain");
@@ -2079,8 +2088,8 @@ impl<'a> Gen<'a> {
             }
             Expr::Index(arr, idx) => {
                 let full = Expr::Index(arr.clone(), idx.clone());
-                if let Some((name, idxs)) = collect_array_index_chain(&full) {
-                    self.emit_array_gep_chain(&name, &idxs, locals)
+                if let Some((root, idxs)) = collect_array_index_chain(&full) {
+                    self.emit_array_gep_chain(root, &idxs, locals)
                 } else {
                     unreachable!("typechecked indexed assign")
                 }

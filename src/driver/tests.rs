@@ -25,6 +25,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_array_len.nia",
         "examples/tests/ok_alloc_heap.nia",
         "examples/tests/ok_ptr_write.nia",
+        "examples/tests/ok_ptr_array_write.nia",
         "examples/tests/ok_enum_match.nia",
         "examples/tests/ok_enum_payload_match.nia",
         "examples/tests/ok_print_enum.nia",

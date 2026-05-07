@@ -143,6 +143,13 @@ fn codegen_pointer_write_emits_store_through_ptr() {
 }
 
 #[test]
+fn codegen_pointer_array_write_emits_indexed_store_through_ptr() {
+    let ll = emit(include_str!("../../../examples/tests/ok_ptr_array_write.nia"));
+    assert!(ll.contains("getelementptr inbounds [4 x i8], ptr %"), "IR:\n{ll}");
+    assert!(ll.contains("store i8 9, ptr %"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_enum_match_uses_switch() {
     let ll = emit(include_str!("../../../examples/tests/ok_enum_match.nia"));
     assert!(ll.contains("switch i32"), "IR:\n{ll}");

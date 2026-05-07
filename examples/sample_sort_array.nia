@@ -3,6 +3,7 @@ fn main() i32 {
     println(arr);
     let sorted = sort_array(arr);
     println(sorted);
+    sort_array_ptr(&arr);
     println(arr);
     0
 }
@@ -19,4 +20,16 @@ fn sort_array(arr: [u8; 8]) [u8; 8] {
         }
     }
     arr
+}
+
+fn sort_array_ptr(arr_ptr: &[u8; 8]) {
+    for i in 0..len(*arr_ptr) {
+        for j in 0..len(*arr_ptr) - 1 - i {
+            if (*arr_ptr)[j] > (*arr_ptr)[j + 1] {
+                let temp = (*arr_ptr)[j];
+                (*arr_ptr)[j] = (*arr_ptr)[j + 1];
+                (*arr_ptr)[j + 1] = temp;
+            }
+        }
+    }
 }
