@@ -16,6 +16,8 @@ let a: i32 = 1
 
 let b = bar(a, 2)
 
+compound assignment (like Rust): `+=`, `-=`, `*=`, `/=` (integers only; `/=` uses signed or unsigned division like LLVM).
+
 
 -------
 

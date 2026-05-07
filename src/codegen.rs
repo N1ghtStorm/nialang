@@ -1160,6 +1160,31 @@ impl<'a> Gen<'a> {
                 .unwrap();
                 (ty.clone(), format!("%{tmp}"))
             }
+            Expr::Neg(inner) => {
+                let (t, v) = self.emit_expr(inner, locals, None);
+                let tmp = self.fresh();
+                match t {
+                    Ty::I8 | Ty::U8 => {
+                        writeln!(self.out, "  %{} = sub i8 0, {}", tmp, v).unwrap();
+                    }
+                    Ty::I16 | Ty::U16 => {
+                        writeln!(self.out, "  %{} = sub i16 0, {}", tmp, v).unwrap();
+                    }
+                    Ty::I32 => {
+                        writeln!(self.out, "  %{} = sub nsw i32 0, {}", tmp, v).unwrap();
+                    }
+                    Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                        writeln!(self.out, "  %{} = sub i64 0, {}", tmp, v).unwrap();
+                    }
+                    Ty::I128 | Ty::U128 => {
+                        writeln!(self.out, "  %{} = sub i128 0, {}", tmp, v).unwrap();
+                    }
+                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                        unreachable!("typechecked neg")
+                    }
+                }
+                (t, format!("%{tmp}"))
+            }
             Expr::Add(l, r) => {
                 let (tl, vl) = self.emit_expr(l, locals, None);
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
@@ -1178,14 +1203,113 @@ impl<'a> Gen<'a> {
                     Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                         writeln!(self.out, "  %{} = add i64 {}, {}", tmp, vl, vr).unwrap();
                     }
-                    Ty::I128 => {
-                        writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
-                    }
-                    Ty::U128 => {
+                    Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
                     }
                     Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
                         unreachable!("add on non-numeric")
+                    }
+                }
+                (tl, format!("%{tmp}"))
+            }
+            Expr::Sub(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, None);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let tmp = self.fresh();
+                match tl {
+                    Ty::I8 | Ty::U8 => {
+                        writeln!(self.out, "  %{} = sub i8 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I16 | Ty::U16 => {
+                        writeln!(self.out, "  %{} = sub i16 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I32 => {
+                        writeln!(self.out, "  %{} = sub nsw i32 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                        writeln!(self.out, "  %{} = sub i64 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I128 | Ty::U128 => {
+                        writeln!(self.out, "  %{} = sub i128 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                        unreachable!("sub on non-numeric")
+                    }
+                }
+                (tl, format!("%{tmp}"))
+            }
+            Expr::Mul(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, None);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let tmp = self.fresh();
+                match tl {
+                    Ty::I8 | Ty::U8 => {
+                        writeln!(self.out, "  %{} = mul i8 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I16 | Ty::U16 => {
+                        writeln!(self.out, "  %{} = mul i16 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I32 => {
+                        writeln!(self.out, "  %{} = mul nsw i32 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                        writeln!(self.out, "  %{} = mul i64 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::I128 | Ty::U128 => {
+                        writeln!(self.out, "  %{} = mul i128 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                        unreachable!("mul on non-numeric")
+                    }
+                }
+                (tl, format!("%{tmp}"))
+            }
+            Expr::Div(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, None);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let tmp = self.fresh();
+                let signed = int_ty_signed(&tl);
+                match tl {
+                    Ty::I8 | Ty::U8 => {
+                        if signed {
+                            writeln!(self.out, "  %{} = sdiv i8 {}, {}", tmp, vl, vr).unwrap();
+                        } else {
+                            writeln!(self.out, "  %{} = udiv i8 {}, {}", tmp, vl, vr).unwrap();
+                        }
+                    }
+                    Ty::I16 | Ty::U16 => {
+                        if signed {
+                            writeln!(self.out, "  %{} = sdiv i16 {}, {}", tmp, vl, vr).unwrap();
+                        } else {
+                            writeln!(self.out, "  %{} = udiv i16 {}, {}", tmp, vl, vr).unwrap();
+                        }
+                    }
+                    Ty::I32 => {
+                        if signed {
+                            writeln!(self.out, "  %{} = sdiv i32 {}, {}", tmp, vl, vr).unwrap();
+                        } else {
+                            writeln!(self.out, "  %{} = udiv i32 {}, {}", tmp, vl, vr).unwrap();
+                        }
+                    }
+                    Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                        if signed {
+                            writeln!(self.out, "  %{} = sdiv i64 {}, {}", tmp, vl, vr).unwrap();
+                        } else {
+                            writeln!(self.out, "  %{} = udiv i64 {}, {}", tmp, vl, vr).unwrap();
+                        }
+                    }
+                    Ty::I128 | Ty::U128 => {
+                        if signed {
+                            writeln!(self.out, "  %{} = sdiv i128 {}, {}", tmp, vl, vr).unwrap();
+                        } else {
+                            writeln!(self.out, "  %{} = udiv i128 {}, {}", tmp, vl, vr).unwrap();
+                        }
+                    }
+                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                        unreachable!("div on non-numeric")
                     }
                 }
                 (tl, format!("%{tmp}"))

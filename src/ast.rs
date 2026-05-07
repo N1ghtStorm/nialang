@@ -123,7 +123,12 @@ pub enum Expr {
     Int(i128),
     Bool(bool),
     Ident(String),
+    /// Unary `-` (integer only).
+    Neg(Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
+    Div(Box<Expr>, Box<Expr>),
     Call {
         name: String,
         args: Vec<Expr>,

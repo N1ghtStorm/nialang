@@ -294,6 +294,23 @@ impl Parser {
                         stmts.push(Stmt::Assign { target: e, value });
                         continue;
                     }
+                    if matches!(
+                        self.peek(),
+                        Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq
+                    ) {
+                        let op_tok = self.bump();
+                        let rhs = self.parse_expr()?;
+                        self.expect(&Token::Semi)?;
+                        let value = match op_tok {
+                            Token::PlusEq => Expr::Add(Box::new(e.clone()), Box::new(rhs)),
+                            Token::MinusEq => Expr::Sub(Box::new(e.clone()), Box::new(rhs)),
+                            Token::StarEq => Expr::Mul(Box::new(e.clone()), Box::new(rhs)),
+                            Token::SlashEq => Expr::Div(Box::new(e.clone()), Box::new(rhs)),
+                            _ => unreachable!(),
+                        };
+                        stmts.push(Stmt::Assign { target: e, value });
+                        continue;
+                    }
                     if matches!(self.peek(), Token::Semi) {
                         self.bump();
                         stmts.push(Stmt::Expr(e));
@@ -385,6 +402,11 @@ impl Parser {
     /// validation to type checking.
     fn parse_if_cond(&mut self) -> Result<Expr, String> {
         // Keep `if foo { ... }` unambiguous with struct literals `Foo { ... }`.
+        if matches!(self.peek(), Token::Minus) {
+            self.bump();
+            let inner = self.parse_if_cond()?;
+            return Ok(Expr::Neg(Box::new(inner)));
+        }
         match self.bump() {
             Token::Ident(n) => Ok(Expr::Ident(n)),
             Token::Bool(b) => Ok(Expr::Bool(b)),
@@ -455,20 +477,60 @@ impl Parser {
         }
     }
 
-    /// Expression entrypoint (currently delegates to additive precedence level).
+    /// Expression entrypoint: additive (`+` / `-`), inside which multiplicative (`*` / `/`).
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_add()
+        self.parse_additive()
     }
 
-    /// Parses left-associative `+` chains.
-    fn parse_add(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_suffix_chain()?;
-        while matches!(self.peek(), Token::Plus) {
-            self.bump();
-            let right = self.parse_suffix_chain()?;
-            left = Expr::Add(Box::new(left), Box::new(right));
+    /// Parses left-associative `+` / `-` chains.
+    fn parse_additive(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_multiplicative()?;
+        loop {
+            match self.peek().clone() {
+                Token::Plus => {
+                    self.bump();
+                    let right = self.parse_multiplicative()?;
+                    left = Expr::Add(Box::new(left), Box::new(right));
+                }
+                Token::Minus => {
+                    self.bump();
+                    let right = self.parse_multiplicative()?;
+                    left = Expr::Sub(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
         }
         Ok(left)
+    }
+
+    /// Parses left-associative `*` / `/` chains.
+    fn parse_multiplicative(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_unary()?;
+        loop {
+            match self.peek().clone() {
+                Token::Star => {
+                    self.bump();
+                    let right = self.parse_unary()?;
+                    left = Expr::Mul(Box::new(left), Box::new(right));
+                }
+                Token::Slash => {
+                    self.bump();
+                    let right = self.parse_unary()?;
+                    left = Expr::Div(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr, String> {
+        if matches!(self.peek(), Token::Minus) {
+            self.bump();
+            let inner = self.parse_unary()?;
+            return Ok(Expr::Neg(Box::new(inner)));
+        }
+        self.parse_suffix_chain()
     }
 
     /// Parses postfix expression chain with left-to-right folding.
@@ -848,6 +910,11 @@ mod tests {
     #[test]
     fn parse_fixture_loop() {
         parse_ok(include_str!("../examples/tests/ok_loop.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_compound_assign() {
+        parse_ok(include_str!("../examples/tests/ok_compound_assign.nia"));
     }
 
     #[test]

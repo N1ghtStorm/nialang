@@ -1,0 +1,9 @@
+fn main() i32 {
+    let a: i32 = 10;
+    a += 2;
+    a -= 3;
+    a *= 2;
+    a /= 3;
+    println(a);
+    0
+}

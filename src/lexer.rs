@@ -28,7 +28,13 @@ pub enum Token {
     LBracket,
     RBracket,
     Plus,
+    PlusEq,
+    Minus,
+    MinusEq,
     Star,
+    StarEq,
+    Slash,
+    SlashEq,
     Amp,
     Dot,
     DotDot,
@@ -125,8 +131,26 @@ impl<'a> Lexer<'a> {
             '}' => Token::RBrace,
             '[' => Token::LBracket,
             ']' => Token::RBracket,
+            '+' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::PlusEq
+            }
             '+' => Token::Plus,
+            '-' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::MinusEq
+            }
+            '-' => Token::Minus,
+            '*' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::StarEq
+            }
             '*' => Token::Star,
+            '/' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::SlashEq
+            }
+            '/' => Token::Slash,
             '&' => Token::Amp,
             '.' if matches!(self.src.peek(), Some('.')) => {
                 self.src.next();
@@ -262,6 +286,25 @@ mod tests {
                 Token::Break,
                 Token::Semi,
                 Token::RBrace,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_arithmetic_and_compound() {
+        let toks = collect("a += b - c * d / e");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Ident("a".into()),
+                Token::PlusEq,
+                Token::Ident("b".into()),
+                Token::Minus,
+                Token::Ident("c".into()),
+                Token::Star,
+                Token::Ident("d".into()),
+                Token::Slash,
+                Token::Ident("e".into()),
             ]
         );
     }

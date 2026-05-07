@@ -56,6 +56,7 @@ mod self_test {
             "examples/tests/ok_for_range.nia",
             "examples/tests/ok_while.nia",
             "examples/tests/ok_loop.nia",
+            "examples/tests/ok_compound_assign.nia",
         ];
         for f in files {
             compile_fixture_ok(f);
@@ -78,6 +79,7 @@ mod self_test {
             "examples/tests/err_loop_no_break.nia",
             "examples/tests/err_break_outside_loop.nia",
             "examples/tests/err_break_in_while.nia",
+            "examples/tests/err_div_by_zero.nia",
         ];
         for f in err_files {
             let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f);

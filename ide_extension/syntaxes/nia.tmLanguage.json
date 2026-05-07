@@ -75,6 +75,10 @@
           "name": "keyword.operator.range.nia"
         },
         {
+          "match": "\\+=|-=|\\*=|/=",
+          "name": "keyword.operator.assignment.compound.nia"
+        },
+        {
           "match": "=>",
           "name": "keyword.operator.fat-arrow.nia"
         },
@@ -83,7 +87,7 @@
           "name": "keyword.operator.namespace.nia"
         },
         {
-          "match": "[=+*]",
+          "match": "[=+*/-]",
           "name": "keyword.operator.nia"
         },
         {

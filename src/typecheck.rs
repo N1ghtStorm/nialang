@@ -312,6 +312,41 @@ fn is_printable_ty_inner(
 /// - Integer literals use `hint` for width/sign selection.
 /// - Builtin `println` is treated as a special-case call and returns `Ty::Unit`.
 /// - Function/struct constructor calls validate arity and per-arg compatibility.
+fn infer_arithmetic_bin(
+    l: &Expr,
+    r: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    fns: &HashMap<String, FnSig>,
+    op: &str,
+) -> Result<Ty, String> {
+    let tl = infer_expr(l, env, structs, enums, fns, None)?;
+    if matches!(tl, Ty::Unit) {
+        return Err(format!("void value on the left of `{op}`"));
+    }
+    if matches!(tl, Ty::Ptr(_)) {
+        return Err(format!("cannot use `{op}` on a pointer value"));
+    }
+    if !is_integer_ty(&tl) {
+        return Err(format!("cannot use `{op}` on non-integer type {tl:?}"));
+    }
+    let tr = infer_expr(r, env, structs, enums, fns, Some(&tl))?;
+    if matches!(tr, Ty::Unit) {
+        return Err(format!("void value on the right of `{op}`"));
+    }
+    if matches!(tr, Ty::Ptr(_)) {
+        return Err(format!("cannot use `{op}` on a pointer value"));
+    }
+    if !is_integer_ty(&tr) {
+        return Err(format!("cannot use `{op}` on non-integer type {tr:?}"));
+    }
+    if !types_equal(&tl, &tr) {
+        return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
+    }
+    Ok(tl)
+}
+
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -341,31 +376,27 @@ fn infer_expr(
             .get(name)
             .cloned()
             .ok_or_else(|| format!("unknown variable `{name}`")),
-        Expr::Add(l, r) => {
-            let tl = infer_expr(l, env, structs, enums, fns, None)?;
-            if matches!(tl, Ty::Unit) {
-                return Err("void value on the left of `+`".into());
+        Expr::Neg(inner) => {
+            let t = infer_expr(inner, env, structs, enums, fns, None)?;
+            if matches!(t, Ty::Unit) {
+                return Err("void value in unary `-`".into());
             }
-            if matches!(tl, Ty::Ptr(_)) {
-                return Err("cannot use `+` on a pointer value".into());
+            if matches!(t, Ty::Ptr(_)) {
+                return Err("cannot negate a pointer value".into());
             }
-            if !is_integer_ty(&tl) {
-                return Err(format!("cannot use `+` on non-integer type {tl:?}"));
+            if !is_integer_ty(&t) {
+                return Err(format!("cannot negate non-integer type {t:?}"));
             }
-            let tr = infer_expr(r, env, structs, enums, fns, Some(&tl))?;
-            if matches!(tr, Ty::Unit) {
-                return Err("void value on the right of `+`".into());
+            Ok(t)
+        }
+        Expr::Add(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, fns, "+"),
+        Expr::Sub(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, fns, "-"),
+        Expr::Mul(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, fns, "*"),
+        Expr::Div(l, r) => {
+            if matches!(r.as_ref(), Expr::Int(0)) {
+                return Err("division by zero".into());
             }
-            if matches!(tr, Ty::Ptr(_)) {
-                return Err("cannot use `+` on a pointer value".into());
-            }
-            if !is_integer_ty(&tr) {
-                return Err(format!("cannot use `+` on non-integer type {tr:?}"));
-            }
-            if !types_equal(&tl, &tr) {
-                return Err(format!("add operands differ: {tl:?} vs {tr:?}"));
-            }
-            Ok(tl)
+            infer_arithmetic_bin(l, r, env, structs, enums, fns, "/")
         }
         Expr::Call { name, args } => {
             if name == PRINTLN {
@@ -1071,6 +1102,7 @@ mod tests {
             include_str!("../examples/tests/ok_for_range.nia"),
             include_str!("../examples/tests/ok_while.nia"),
             include_str!("../examples/tests/ok_loop.nia"),
+            include_str!("../examples/tests/ok_compound_assign.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);
@@ -1158,6 +1190,13 @@ mod tests {
     #[test]
     fn typecheck_rejects_break_inside_while_fixture() {
         let src = include_str!("../examples/tests/err_break_in_while.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_div_by_zero_literal_fixture() {
+        let src = include_str!("../examples/tests/err_div_by_zero.nia");
         let r = check_all(src);
         assert!(r.is_err(), "{r:?}");
     }
