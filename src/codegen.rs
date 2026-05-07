@@ -2143,6 +2143,14 @@ mod tests {
     }
 
     #[test]
+    fn codegen_array_reverse_has_helper_and_swaps() {
+        let ll = emit(include_str!("../examples/tests/ok_array_reverse.nia"));
+        assert!(ll.contains("define [8 x i8] @reverse_array"), "IR:\n{ll}");
+        assert!(ll.contains("getelementptr inbounds [8 x i8]"), "IR:\n{ll}");
+        assert!(ll.matches("store i8").count() >= 3, "IR:\n{ll}");
+    }
+
+    #[test]
     fn codegen_println_array_uses_array_text_constants() {
         let ll = emit(include_str!("../examples/tests/ok_print_array.nia"));
         assert!(ll.contains("nialang.std.txt.arr_open"), "IR:\n{ll}");

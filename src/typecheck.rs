@@ -1103,6 +1103,7 @@ mod tests {
             include_str!("../examples/tests/ok_array.nia"),
             include_str!("../examples/tests/ok_array_index.nia"),
             include_str!("../examples/tests/ok_array_index_store.nia"),
+            include_str!("../examples/tests/ok_array_reverse.nia"),
             include_str!("../examples/tests/ok_print_array.nia"),
             include_str!("../examples/tests/ok_print_structs.nia"),
             include_str!("../examples/tests/ok_alloc_heap.nia"),
