@@ -31,6 +31,15 @@ fn normalize_ty(
     }
 }
 
+/// `arr[i][j] = …` is allowed only when the chain is rooted at a simple variable (`arr`, not `f()[i]`).
+fn index_chain_root_is_local_var(e: &Expr) -> bool {
+    match e {
+        Expr::Ident(_) => true,
+        Expr::Index(a, _) => index_chain_root_is_local_var(a.as_ref()),
+        _ => false,
+    }
+}
+
 fn enum_variant<'a>(edef: &'a EnumDef, variant: &str) -> Option<&'a EnumVariantFields> {
     edef.variants
         .iter()
@@ -905,9 +914,10 @@ fn check_stmt(
             let tt = infer_expr(target, env, struct_fields, enums, fn_sigs, None)?;
             match target {
                 Expr::Ident(_) | Expr::Deref(_) => {}
+                Expr::Index(_, _) if index_chain_root_is_local_var(target) => {}
                 _ => {
                     return Err(
-                        "assignment target must be variable or dereference (e.g. `x` or `*p`)"
+                        "assignment target must be variable, dereference, or indexed local array (e.g. `x`, `*p`, `a[i]`)"
                             .into(),
                     )
                 }
@@ -1092,6 +1102,7 @@ mod tests {
             include_str!("../examples/tests/ok_tuple_named_mix.nia"),
             include_str!("../examples/tests/ok_array.nia"),
             include_str!("../examples/tests/ok_array_index.nia"),
+            include_str!("../examples/tests/ok_array_index_store.nia"),
             include_str!("../examples/tests/ok_print_array.nia"),
             include_str!("../examples/tests/ok_print_structs.nia"),
             include_str!("../examples/tests/ok_alloc_heap.nia"),

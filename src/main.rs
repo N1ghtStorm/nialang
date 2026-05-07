@@ -48,6 +48,7 @@ mod self_test {
             "examples/tests/ok_tuple_named_mix.nia",
             "examples/tests/ok_array.nia",
             "examples/tests/ok_array_index.nia",
+            "examples/tests/ok_array_index_store.nia",
             "examples/tests/ok_alloc_heap.nia",
             "examples/tests/ok_ptr_write.nia",
             "examples/tests/ok_enum_match.nia",

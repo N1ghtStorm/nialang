@@ -1,0 +1,6 @@
+fn main() i32 {
+    let arr: [u8; 3] = [1, 2, 3];
+    arr[1] = 99;
+    println(arr[1]);
+    0
+}

@@ -244,6 +244,24 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
+/// `arr[i][j]…` as a chain ending in a local name (for GEP-based load/store).
+fn collect_array_index_chain(mut e: &Expr) -> Option<(String, Vec<&Expr>)> {
+    let mut idxs = Vec::new();
+    loop {
+        match e {
+            Expr::Index(a, i) => {
+                idxs.push(i.as_ref());
+                e = a.as_ref();
+            }
+            Expr::Ident(n) => {
+                idxs.reverse();
+                return Some((n.clone(), idxs));
+            }
+            _ => return None,
+        }
+    }
+}
+
 struct Gen<'a> {
     structs: &'a [StructDef],
     enums: &'a [EnumDef],
@@ -1014,7 +1032,8 @@ impl<'a> Gen<'a> {
                 let (t_ev, v_start) = self.emit_expr(start, locals, None);
                 let (_, v_end) = self.emit_expr(end, locals, Some(&t_ev));
                 let ll = llvm_ty(&t_ev, self.structs);
-                let var_ptr = format!("%{}.addr", sanitize(var));
+                let slot = self.fresh();
+                let var_ptr = format!("%{}.{}", sanitize(var), slot);
                 writeln!(self.out, "  {} = alloca {}", var_ptr, ll).unwrap();
                 writeln!(self.out, "  br label %{}", header).unwrap();
 
@@ -1878,35 +1897,51 @@ impl<'a> Gen<'a> {
                 (fty, format!("%{tmp}"))
             }
             Expr::Index(arr, idx) => {
-                let (at, av) = self.emit_expr(arr, locals, None);
-                let (it, iv) = self.emit_expr(idx, locals, Some(&Ty::I32));
-                debug_assert!(matches!(it, Ty::I32));
-                let Ty::Array(elem_ty, n) = at else {
-                    unreachable!("typechecked")
-                };
-                let llvm_arr = format!("[{} x {}]", n, llvm_ty(&elem_ty, self.structs));
-                let ptr = self.fresh();
-                writeln!(self.out, "  %{} = alloca {}", ptr, llvm_arr).unwrap();
-                writeln!(self.out, "  store {} {}, ptr %{}", llvm_arr, av, ptr).unwrap();
-                let idx64 = self.fresh();
-                writeln!(self.out, "  %{} = sext i32 {} to i64", idx64, iv).unwrap();
-                let gep = self.fresh();
-                writeln!(
-                    self.out,
-                    "  %{} = getelementptr inbounds {}, ptr %{}, i64 0, i64 %{}",
-                    gep, llvm_arr, ptr, idx64
-                )
-                .unwrap();
-                let val = self.fresh();
-                writeln!(
-                    self.out,
-                    "  %{} = load {}, ptr %{}",
-                    val,
-                    llvm_ty(&elem_ty, self.structs),
-                    gep
-                )
-                .unwrap();
-                ((*elem_ty).clone(), format!("%{val}"))
+                let full = Expr::Index(arr.clone(), idx.clone());
+                if let Some((name, idxs)) = collect_array_index_chain(&full) {
+                    let (elem_ty, gep_ptr) =
+                        self.emit_array_gep_chain(&name, &idxs, locals);
+                    let val = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = load {}, ptr {}",
+                        val,
+                        llvm_ty(&elem_ty, self.structs),
+                        gep_ptr
+                    )
+                    .unwrap();
+                    (elem_ty, format!("%{val}"))
+                } else {
+                    let (at, av) = self.emit_expr(arr, locals, None);
+                    let (it, iv) = self.emit_expr(idx, locals, Some(&Ty::I32));
+                    debug_assert!(matches!(it, Ty::I32));
+                    let Ty::Array(elem_ty, n) = at else {
+                        unreachable!("typechecked")
+                    };
+                    let llvm_arr = format!("[{} x {}]", n, llvm_ty(&elem_ty, self.structs));
+                    let ptr = self.fresh();
+                    writeln!(self.out, "  %{} = alloca {}", ptr, llvm_arr).unwrap();
+                    writeln!(self.out, "  store {} {}, ptr %{}", llvm_arr, av, ptr).unwrap();
+                    let idx64 = self.fresh();
+                    writeln!(self.out, "  %{} = sext i32 {} to i64", idx64, iv).unwrap();
+                    let gep = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = getelementptr inbounds {}, ptr %{}, i64 0, i64 %{}",
+                        gep, llvm_arr, ptr, idx64
+                    )
+                    .unwrap();
+                    let val = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = load {}, ptr %{}",
+                        val,
+                        llvm_ty(&elem_ty, self.structs),
+                        gep
+                    )
+                    .unwrap();
+                    ((*elem_ty).clone(), format!("%{val}"))
+                }
             }
             Expr::AddrOf(inner) => {
                 let Expr::Ident(name) = inner.as_ref() else {
@@ -1934,6 +1969,35 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Follow `name` through `indices` with GEP; returns element type and `ptr` to the slot.
+    fn emit_array_gep_chain(
+        &mut self,
+        name: &str,
+        indices: &[&Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (mut cur_ty, mut llvm_ptr) = locals.get(name).expect("indexed assign var").clone();
+        for idx_expr in indices {
+            let Ty::Array(elem_ty, n) = &cur_ty else {
+                unreachable!("typechecked index chain");
+            };
+            let (_, iv) = self.emit_expr(idx_expr, locals, Some(&Ty::I32));
+            let llvm_arr = format!("[{} x {}]", n, llvm_ty(elem_ty, self.structs));
+            let idx64 = self.fresh();
+            writeln!(self.out, "  %{} = sext i32 {} to i64", idx64, iv).unwrap();
+            let gep = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = getelementptr inbounds {}, ptr {}, i64 0, i64 %{}",
+                gep, llvm_arr, llvm_ptr, idx64
+            )
+            .unwrap();
+            llvm_ptr = format!("%{gep}");
+            cur_ty = *elem_ty.clone();
+        }
+        (cur_ty, llvm_ptr)
+    }
+
     fn emit_assign_ptr(
         &mut self,
         target: &Expr,
@@ -1950,6 +2014,14 @@ impl<'a> Gen<'a> {
                     unreachable!("typechecked assign deref")
                 };
                 ((*pointee).clone(), pv)
+            }
+            Expr::Index(arr, idx) => {
+                let full = Expr::Index(arr.clone(), idx.clone());
+                if let Some((name, idxs)) = collect_array_index_chain(&full) {
+                    self.emit_array_gep_chain(&name, &idxs, locals)
+                } else {
+                    unreachable!("typechecked indexed assign")
+                }
             }
             _ => unreachable!("typechecked assign lvalue"),
         }
@@ -2061,6 +2133,13 @@ mod tests {
         let ll = emit(include_str!("../examples/tests/ok_array_index.nia"));
         assert!(ll.contains("getelementptr inbounds [8 x i8]"), "IR:\n{ll}");
         assert!(ll.contains("load i8"), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_array_index_store_emits_store() {
+        let ll = emit(include_str!("../examples/tests/ok_array_index_store.nia"));
+        assert!(ll.contains("getelementptr inbounds [3 x i8]"), "IR:\n{ll}");
+        assert!(ll.contains("store i8"), "IR:\n{ll}");
     }
 
     #[test]

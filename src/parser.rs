@@ -955,6 +955,11 @@ fn main() i32 {
     }
 
     #[test]
+    fn parse_fixture_array_index_store() {
+        parse_ok(include_str!("../examples/tests/ok_array_index_store.nia"));
+    }
+
+    #[test]
     fn parse_inline_if_return_bool() {
         let src = r#"
 fn bar(foo: bool) i32 {
