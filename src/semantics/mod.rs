@@ -1,1 +1,1 @@
-pub(crate) use crate::typecheck;
+pub mod typecheck;
