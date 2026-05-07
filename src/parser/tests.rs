@@ -88,6 +88,21 @@ fn parse_fixture_ptr_array_write() {
 }
 
 #[test]
+fn parse_fixture_readme_arrays() {
+    parse_ok(include_str!("../../examples/tests/ok_readme_arrays.nia"));
+}
+
+#[test]
+fn parse_fixture_readme_enums() {
+    parse_ok(include_str!("../../examples/tests/ok_readme_enums.nia"));
+}
+
+#[test]
+fn parse_fixture_readme_pointers() {
+    parse_ok(include_str!("../../examples/tests/ok_readme_pointers.nia"));
+}
+
+#[test]
 fn parse_fixture_enum_match() {
     parse_ok(include_str!("../../examples/tests/ok_enum_match.nia"));
 }

@@ -1,0 +1,31 @@
+fn reverse_array(arr: [u8; 8]) [u8; 8] {
+    for i in 0..len(arr) / 2 {
+        let temp = arr[i];
+        arr[i] = arr[len(arr) - 1 - i];
+        arr[len(arr) - 1 - i] = temp;
+    }
+    arr
+}
+
+fn bubble_sort(arr: [u8; 8]) [u8; 8] {
+    for i in 0..len(arr) {
+        for j in 0..len(arr) - 1 - i {
+            if arr[j] > arr[j + 1] {
+                let temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+    arr
+}
+
+fn main() i32 {
+    let src: [u8; 8] = [8, 3, 6, 1, 4, 7, 2, 5];
+    let rev = reverse_array(src);
+    let sorted = bubble_sort(src);
+    println(src);
+    println(rev);
+    println(sorted);
+    0
+}

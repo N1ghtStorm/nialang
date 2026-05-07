@@ -1,0 +1,23 @@
+struct Pair(i32, i32)
+
+fn write_mid(arr_ptr: &[u8; 4]) {
+    (*arr_ptr)[1] = 9;
+}
+
+fn main() i32 {
+    let p: &i32 = alloc(42);
+    println(*p);
+
+    let p2: &i32 = realloc(p, 100);
+    println(*p2);
+    dealloc(p2);
+
+    let pair_ptr: &Pair = alloc(Pair(7, 9));
+    println((*pair_ptr).0);
+    dealloc(pair_ptr);
+
+    let arr: [u8; 4] = [1, 2, 3, 4];
+    write_mid(&arr);
+    println(arr);
+    0
+}

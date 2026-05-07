@@ -1,0 +1,20 @@
+enum Msg {
+    Ping,
+    Add(i32, i32),
+    Move { x: i32, y: i32 },
+}
+
+fn eval(m: Msg) i32 {
+    match m {
+        Msg::Ping => 0,
+        Msg::Add(a, b) => a + b,
+        Msg::Move { x, y } => x + y,
+    }
+}
+
+fn main() i32 {
+    println(eval(Msg::Ping));
+    println(eval(Msg::Add(7, 5)));
+    println(eval(Msg::Move { x: 10, y: 20 }));
+    0
+}
