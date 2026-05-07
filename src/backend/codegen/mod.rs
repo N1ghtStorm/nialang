@@ -176,6 +176,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Enum(n) => format!("%enum.{}", sanitize(n)),
         Ty::Ptr(_) => "ptr".into(),
         Ty::Unit => "void".into(),
+        Ty::Vector(_, _) => todo!("unimplemented"),
     }
 }
 
@@ -228,7 +229,11 @@ fn enum_type_decl(e: &EnumDef, structs: &[StructDef]) -> String {
     for v in &e.variants {
         parts.push(enum_variant_payload_ty(v, structs));
     }
-    format!("%enum.{} = type {{ {} }}", sanitize(&e.name), parts.join(", "))
+    format!(
+        "%enum.{} = type {{ {} }}",
+        sanitize(&e.name),
+        parts.join(", ")
+    )
 }
 
 /// Sanitizes user-defined names for safe LLVM symbol usage.
@@ -276,7 +281,11 @@ struct Gen<'a> {
 
 impl<'a> Gen<'a> {
     /// Constructs function-level codegen state.
-    fn new(structs: &'a [StructDef], enums: &'a [EnumDef], fn_sigs: &'a HashMap<String, FnSig>) -> Self {
+    fn new(
+        structs: &'a [StructDef],
+        enums: &'a [EnumDef],
+        fn_sigs: &'a HashMap<String, FnSig>,
+    ) -> Self {
         Self {
             structs,
             enums,
@@ -344,7 +353,11 @@ impl<'a> Gen<'a> {
         e.variants.iter().position(|v| v.name == variant)
     }
 
-    fn enum_variant_def(&self, enum_name: &str, variant: &str) -> Option<&crate::ast::EnumVariantDef> {
+    fn enum_variant_def(
+        &self,
+        enum_name: &str,
+        variant: &str,
+    ) -> Option<&crate::ast::EnumVariantDef> {
         let e = self.enums.iter().find(|e| e.name == enum_name)?;
         e.variants.iter().find(|v| v.name == variant)
     }
@@ -531,6 +544,9 @@ impl<'a> Gen<'a> {
                 .unwrap();
             }
             Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit => unreachable!("typechecked"),
+            Ty::Vector(_, _) => {
+                todo!("unimplemented");
+            }
         }
     }
 
@@ -622,15 +638,14 @@ impl<'a> Gen<'a> {
 
     /// Prints enum as `Variant: <payload>` (unit: `Variant: ()` with newline when requested).
     fn emit_print_enum(&mut self, ename: &str, ev: &str, newline: bool) {
-        let edef = self.enums.iter().find(|e| e.name == ename).expect("typechecked");
+        let edef = self
+            .enums
+            .iter()
+            .find(|e| e.name == ename)
+            .expect("typechecked");
         let enum_ll = format!("%enum.{}", sanitize(ename));
         let tag = self.fresh();
-        writeln!(
-            self.out,
-            "  %{} = extractvalue {} {}, 0",
-            tag, enum_ll, ev
-        )
-        .unwrap();
+        writeln!(self.out, "  %{} = extractvalue {} {}, 0", tag, enum_ll, ev).unwrap();
         let default_lbl = self.fresh_label("println.enum.default");
         let cont_lbl = self.fresh_label("println.enum.cont");
         let arm_lbls: Vec<String> = edef
@@ -1041,11 +1056,7 @@ impl<'a> Gen<'a> {
                 let iv = self.fresh();
                 let iv_next = self.fresh();
                 let cmp = self.fresh();
-                let icmp_op = if int_ty_signed(&t_ev) {
-                    "slt"
-                } else {
-                    "ult"
-                };
+                let icmp_op = if int_ty_signed(&t_ev) { "slt" } else { "ult" };
                 writeln!(
                     self.out,
                     "  %{} = phi {} [ {}, %{} ], [ %{}, %{} ]",
@@ -1066,12 +1077,7 @@ impl<'a> Gen<'a> {
                 .unwrap();
 
                 writeln!(self.out, "{}:", body_lbl).unwrap();
-                writeln!(
-                    self.out,
-                    "  store {} %{}, ptr {}",
-                    ll, iv, var_ptr
-                )
-                .unwrap();
+                writeln!(self.out, "  store {} %{}, ptr {}", ll, iv, var_ptr).unwrap();
                 let mut body_locals = locals.clone();
                 body_locals.insert(var.clone(), (t_ev.clone(), var_ptr));
                 self.terminated = false;
@@ -1095,35 +1101,31 @@ impl<'a> Gen<'a> {
 
                 writeln!(self.out, "{}:", latch).unwrap();
                 match &t_ev {
-                        Ty::I8 | Ty::U8 => {
-                            writeln!(self.out, "  %{} = add i8 %{}, 1", iv_next, iv).unwrap();
-                        }
-                        Ty::I16 | Ty::U16 => {
-                            writeln!(self.out, "  %{} = add i16 %{}, 1", iv_next, iv).unwrap();
-                        }
-                        Ty::I32 => {
-                            writeln!(
-                                self.out,
-                                "  %{} = add nsw i32 %{}, 1",
-                                iv_next, iv
-                            )
-                            .unwrap();
-                        }
-                        Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
-                            writeln!(self.out, "  %{} = add i64 %{}, 1", iv_next, iv).unwrap();
-                        }
-                        Ty::I128 => {
-                            writeln!(self.out, "  %{} = add i128 %{}, 1", iv_next, iv).unwrap();
-                        }
-                        Ty::U128 => {
-                            writeln!(self.out, "  %{} = add i128 %{}, 1", iv_next, iv).unwrap();
-                        }
-                        Ty::Array(_, _)
-                        | Ty::Struct(_)
-                        | Ty::Enum(_)
-                        | Ty::Unit
-                        | Ty::Ptr(_)
-                        | Ty::Bool => unreachable!("typechecked for range"),
+                    Ty::I8 | Ty::U8 => {
+                        writeln!(self.out, "  %{} = add i8 %{}, 1", iv_next, iv).unwrap();
+                    }
+                    Ty::I16 | Ty::U16 => {
+                        writeln!(self.out, "  %{} = add i16 %{}, 1", iv_next, iv).unwrap();
+                    }
+                    Ty::I32 => {
+                        writeln!(self.out, "  %{} = add nsw i32 %{}, 1", iv_next, iv).unwrap();
+                    }
+                    Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                        writeln!(self.out, "  %{} = add i64 %{}, 1", iv_next, iv).unwrap();
+                    }
+                    Ty::I128 => {
+                        writeln!(self.out, "  %{} = add i128 %{}, 1", iv_next, iv).unwrap();
+                    }
+                    Ty::U128 => {
+                        writeln!(self.out, "  %{} = add i128 %{}, 1", iv_next, iv).unwrap();
+                    }
+                    Ty::Array(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Enum(_)
+                    | Ty::Unit
+                    | Ty::Ptr(_)
+                    | Ty::Bool
+                    | Ty::Vector(_, _) => unreachable!("typechecked for range"),
                 }
                 writeln!(self.out, "  br label %{}", header).unwrap();
 
@@ -1157,6 +1159,7 @@ impl<'a> Gen<'a> {
                 Some(Ty::Usize) => (Ty::Usize, format!("{n}")),
                 Some(Ty::U128) => (Ty::U128, format!("{n}")),
                 Some(Ty::Struct(_))
+                | Some(Ty::Vector(_, _))
                 | Some(Ty::Enum(_))
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
@@ -1198,7 +1201,13 @@ impl<'a> Gen<'a> {
                     Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = sub i128 0, {}", tmp, v).unwrap();
                     }
-                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                    Ty::Array(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Vector(_, _)
+                    | Ty::Enum(_)
+                    | Ty::Unit
+                    | Ty::Ptr(_)
+                    | Ty::Bool => {
                         unreachable!("typechecked neg")
                     }
                 }
@@ -1225,7 +1234,13 @@ impl<'a> Gen<'a> {
                     Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
                     }
-                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                    Ty::Array(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Vector(_, _)
+                    | Ty::Enum(_)
+                    | Ty::Unit
+                    | Ty::Ptr(_)
+                    | Ty::Bool => {
                         unreachable!("add on non-numeric")
                     }
                 }
@@ -1252,7 +1267,13 @@ impl<'a> Gen<'a> {
                     Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = sub i128 {}, {}", tmp, vl, vr).unwrap();
                     }
-                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                    Ty::Array(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Vector(_, _)
+                    | Ty::Enum(_)
+                    | Ty::Unit
+                    | Ty::Ptr(_)
+                    | Ty::Bool => {
                         unreachable!("sub on non-numeric")
                     }
                 }
@@ -1279,7 +1300,13 @@ impl<'a> Gen<'a> {
                     Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = mul i128 {}, {}", tmp, vl, vr).unwrap();
                     }
-                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                    Ty::Array(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Vector(_, _)
+                    | Ty::Enum(_)
+                    | Ty::Unit
+                    | Ty::Ptr(_)
+                    | Ty::Bool => {
                         unreachable!("mul on non-numeric")
                     }
                 }
@@ -1327,7 +1354,13 @@ impl<'a> Gen<'a> {
                             writeln!(self.out, "  %{} = udiv i128 {}, {}", tmp, vl, vr).unwrap();
                         }
                     }
-                    Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Ptr(_) | Ty::Bool => {
+                    Ty::Array(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Vector(_, _)
+                    | Ty::Enum(_)
+                    | Ty::Unit
+                    | Ty::Ptr(_)
+                    | Ty::Bool => {
                         unreachable!("div on non-numeric")
                     }
                 }
@@ -1538,7 +1571,9 @@ impl<'a> Gen<'a> {
                 (Ty::Struct(sname), format!("%{loadt}"))
             }
             Expr::EnumVariant { enum_name, variant } => {
-                let tag = self.enum_tag(enum_name, variant).expect("typechecked enum variant");
+                let tag = self
+                    .enum_tag(enum_name, variant)
+                    .expect("typechecked enum variant");
                 let enum_ll = format!("%enum.{}", sanitize(enum_name));
                 let idx = self
                     .enum_variant_index(enum_name, variant)
@@ -1573,7 +1608,9 @@ impl<'a> Gen<'a> {
                 variant,
                 args,
             } => {
-                let tag = self.enum_tag(enum_name, variant).expect("typechecked enum variant");
+                let tag = self
+                    .enum_tag(enum_name, variant)
+                    .expect("typechecked enum variant");
                 let idx = self
                     .enum_variant_index(enum_name, variant)
                     .expect("typechecked enum idx");
@@ -1644,7 +1681,9 @@ impl<'a> Gen<'a> {
                 variant,
                 fields,
             } => {
-                let tag = self.enum_tag(enum_name, variant).expect("typechecked enum variant");
+                let tag = self
+                    .enum_tag(enum_name, variant)
+                    .expect("typechecked enum variant");
                 let idx = self
                     .enum_variant_index(enum_name, variant)
                     .expect("typechecked enum idx");
@@ -1673,7 +1712,10 @@ impl<'a> Gen<'a> {
                 };
                 let mut agg = "poison".to_string();
                 for (i, (fname, fty)) in fs.iter().enumerate() {
-                    let (_, fe) = fields.iter().find(|(n, _)| n == fname).expect("typechecked");
+                    let (_, fe) = fields
+                        .iter()
+                        .find(|(n, _)| n == fname)
+                        .expect("typechecked");
                     let (_, fv) = self.emit_expr(fe, locals, Some(fty));
                     let tmp = self.fresh();
                     writeln!(
@@ -1722,14 +1764,21 @@ impl<'a> Gen<'a> {
                 for _ in arms {
                     arm_labels.push(self.fresh_label("match.arm"));
                 }
-                writeln!(self.out, "  switch i32 %{}, label %{} [", tag_tmp, default_lbl).unwrap();
+                writeln!(
+                    self.out,
+                    "  switch i32 %{}, label %{} [",
+                    tag_tmp, default_lbl
+                )
+                .unwrap();
                 for ((pat, _), lbl) in arms.iter().zip(&arm_labels) {
                     let variant = match pat {
                         MatchPattern::Unit { variant, .. } => variant,
                         MatchPattern::Tuple { variant, .. } => variant,
                         MatchPattern::Struct { variant, .. } => variant,
                     };
-                    let tag = self.enum_tag(&enum_name, variant).expect("typechecked enum tag");
+                    let tag = self
+                        .enum_tag(&enum_name, variant)
+                        .expect("typechecked enum tag");
                     writeln!(self.out, "    i32 {}, label %{}", tag, lbl).unwrap();
                 }
                 writeln!(self.out, "  ]").unwrap();
@@ -1755,10 +1804,7 @@ impl<'a> Gen<'a> {
                         .clone();
                     match (pat, vdef.fields) {
                         (MatchPattern::Unit { .. }, EnumVariantFields::Unit) => {}
-                        (
-                            MatchPattern::Tuple { bindings, .. },
-                            EnumVariantFields::Tuple(ts),
-                        ) => {
+                        (MatchPattern::Tuple { bindings, .. }, EnumVariantFields::Tuple(ts)) => {
                             let payload_ll = if ts.len() == 1 {
                                 llvm_ty(&ts[0], self.structs)
                             } else {
@@ -1773,7 +1819,10 @@ impl<'a> Gen<'a> {
                             writeln!(
                                 self.out,
                                 "  %{} = extractvalue {} {}, {}",
-                                pl, enum_ll, sv, vidx + 1
+                                pl,
+                                enum_ll,
+                                sv,
+                                vidx + 1
                             )
                             .unwrap();
                             if ts.len() == 1 {
@@ -1823,10 +1872,7 @@ impl<'a> Gen<'a> {
                                 }
                             }
                         }
-                        (
-                            MatchPattern::Struct { bindings, .. },
-                            EnumVariantFields::Struct(fs),
-                        ) => {
+                        (MatchPattern::Struct { bindings, .. }, EnumVariantFields::Struct(fs)) => {
                             let payload_ll = {
                                 let inner = fs
                                     .iter()
@@ -1839,7 +1885,10 @@ impl<'a> Gen<'a> {
                             writeln!(
                                 self.out,
                                 "  %{} = extractvalue {} {}, {}",
-                                pl, enum_ll, sv, vidx + 1
+                                pl,
+                                enum_ll,
+                                sv,
+                                vidx + 1
                             )
                             .unwrap();
                             for b in bindings {
@@ -1856,8 +1905,13 @@ impl<'a> Gen<'a> {
                                 )
                                 .unwrap();
                                 let ptr = format!("%{}.addr", sanitize(b));
-                                writeln!(self.out, "  {} = alloca {}", ptr, llvm_ty(t, self.structs))
-                                    .unwrap();
+                                writeln!(
+                                    self.out,
+                                    "  {} = alloca {}",
+                                    ptr,
+                                    llvm_ty(t, self.structs)
+                                )
+                                .unwrap();
                                 writeln!(
                                     self.out,
                                     "  store {} %{}, ptr {}",
@@ -2124,7 +2178,12 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
 }
 
 /// Convenience wrapper creating fresh generator per function.
-fn emit_fn(f: &FnDef, structs: &[StructDef], enums: &[EnumDef], fn_sigs: &HashMap<String, FnSig>) -> String {
+fn emit_fn(
+    f: &FnDef,
+    structs: &[StructDef],
+    enums: &[EnumDef],
+    fn_sigs: &HashMap<String, FnSig>,
+) -> String {
     Gen::new(structs, enums, fn_sigs).emit_fn(f)
 }
 
