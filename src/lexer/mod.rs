@@ -41,6 +41,12 @@ pub enum Token {
     DoubleColon,
     FatArrow,
     Eq,
+    EqEq,
+    NotEq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
     TyI8,
     TyU8,
     TyI16,
@@ -161,7 +167,25 @@ impl<'a> Lexer<'a> {
                 self.src.next();
                 Token::FatArrow
             }
+            '=' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::EqEq
+            }
             '=' => Token::Eq,
+            '!' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::NotEq
+            }
+            '<' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::Le
+            }
+            '<' => Token::Lt,
+            '>' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::Ge
+            }
+            '>' => Token::Gt,
             '0'..='9' => {
                 let mut n = (c as u8 - b'0') as i128;
                 while let Some(&d @ '0'..='9') = self.src.peek() {

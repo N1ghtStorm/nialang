@@ -1333,6 +1333,61 @@ impl<'a> Gen<'a> {
                 }
                 (tl, format!("%{tmp}"))
             }
+            Expr::Eq(l, r)
+            | Expr::Ne(l, r)
+            | Expr::Lt(l, r)
+            | Expr::Le(l, r)
+            | Expr::Gt(l, r)
+            | Expr::Ge(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, None);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let pred = match e {
+                    Expr::Eq(_, _) => "eq",
+                    Expr::Ne(_, _) => "ne",
+                    Expr::Lt(_, _) => {
+                        if int_ty_signed(&tl) {
+                            "slt"
+                        } else {
+                            "ult"
+                        }
+                    }
+                    Expr::Le(_, _) => {
+                        if int_ty_signed(&tl) {
+                            "sle"
+                        } else {
+                            "ule"
+                        }
+                    }
+                    Expr::Gt(_, _) => {
+                        if int_ty_signed(&tl) {
+                            "sgt"
+                        } else {
+                            "ugt"
+                        }
+                    }
+                    Expr::Ge(_, _) => {
+                        if int_ty_signed(&tl) {
+                            "sge"
+                        } else {
+                            "uge"
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                let tmp = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = icmp {} {} {}, {}",
+                    tmp,
+                    pred,
+                    llvm_ty(&tl, self.structs),
+                    vl,
+                    vr
+                )
+                .unwrap();
+                (Ty::Bool, format!("%{tmp}"))
+            }
             Expr::Call { name, args } => {
                 if name == PRINTLN {
                     let (at, av) = self.emit_expr(&args[0], locals, None);

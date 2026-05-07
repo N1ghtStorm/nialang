@@ -130,6 +130,21 @@ fn parse_fixture_array_len() {
 }
 
 #[test]
+fn parse_comparison_expression() {
+    let src = r#"
+fn main() i32 {
+    let a: i32 = 3;
+    let b: i32 = 4;
+    if a < b {
+        1
+    }
+    0
+}
+"#;
+    parse_ok(src);
+}
+
+#[test]
 fn parse_inline_if_return_bool() {
     let src = r#"
 fn bar(foo: bool) i32 {

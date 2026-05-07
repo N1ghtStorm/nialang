@@ -187,6 +187,20 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_rejects_order_on_bool() {
+    let src = r#"
+fn main() i32 {
+    if true < false {
+        1
+    }
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn typecheck_rejects_deref_non_pointer() {
     let src = r#"
 fn main() i32 {

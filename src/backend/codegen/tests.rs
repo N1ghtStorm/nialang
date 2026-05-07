@@ -96,6 +96,22 @@ fn codegen_builtin_len_emits_array_length_constant() {
 }
 
 #[test]
+fn codegen_comparison_emits_icmp() {
+    let src = r#"
+fn main() i32 {
+    let a: i32 = 3;
+    let b: i32 = 4;
+    if a < b {
+        return 1
+    }
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("icmp slt i32"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_println_array_uses_array_text_constants() {
     let ll = emit(include_str!("../../../examples/tests/ok_print_array.nia"));
     assert!(ll.contains("nialang.std.txt.arr_open"), "IR:\n{ll}");

@@ -361,6 +361,33 @@ fn infer_arithmetic_bin(
     Ok(tl)
 }
 
+fn infer_comparison_bin(
+    l: &Expr,
+    r: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    fns: &HashMap<String, FnSig>,
+    op: &str,
+    order_only: bool,
+) -> Result<Ty, String> {
+    let tl = infer_expr(l, env, structs, enums, fns, None)?;
+    let tr = infer_expr(r, env, structs, enums, fns, Some(&tl))?;
+    if !types_equal(&tl, &tr) {
+        return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
+    }
+    if order_only {
+        if !is_integer_ty(&tl) {
+            return Err(format!("cannot use `{op}` on non-integer type {tl:?}"));
+        }
+    } else if !(is_integer_ty(&tl) || matches!(tl, Ty::Bool | Ty::Ptr(_))) {
+        return Err(format!(
+            "cannot use `{op}` on type {tl:?}; supported: integers, bool, pointers"
+        ));
+    }
+    Ok(Ty::Bool)
+}
+
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -412,6 +439,12 @@ fn infer_expr(
             }
             infer_arithmetic_bin(l, r, env, structs, enums, fns, "/")
         }
+        Expr::Eq(l, r) => infer_comparison_bin(l, r, env, structs, enums, fns, "==", false),
+        Expr::Ne(l, r) => infer_comparison_bin(l, r, env, structs, enums, fns, "!=", false),
+        Expr::Lt(l, r) => infer_comparison_bin(l, r, env, structs, enums, fns, "<", true),
+        Expr::Le(l, r) => infer_comparison_bin(l, r, env, structs, enums, fns, "<=", true),
+        Expr::Gt(l, r) => infer_comparison_bin(l, r, env, structs, enums, fns, ">", true),
+        Expr::Ge(l, r) => infer_comparison_bin(l, r, env, structs, enums, fns, ">=", true),
         Expr::Call { name, args } => {
             if name == PRINTLN {
                 if args.len() != 1 {

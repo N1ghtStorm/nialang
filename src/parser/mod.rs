@@ -392,34 +392,12 @@ impl Parser {
         })
     }
 
-    /// Parses restricted condition grammar for `if`.
+    /// Parses condition expression for `if` / `while`.
     ///
-    /// Restriction intentionally avoids ambiguity between:
-    /// - `if Foo { ... }` (condition `Foo`)
-    /// - `Foo { ... }` (struct literal syntax)
-    ///
-    /// The parser accepts a narrow condition subset and delegates richer semantic
-    /// validation to type checking.
+    /// Uses full expression grammar (including comparisons), while preserving
+    /// `if foo { ... }` by avoiding accidental struct-literal parse for `foo`.
     fn parse_if_cond(&mut self) -> Result<Expr, String> {
-        // Keep `if foo { ... }` unambiguous with struct literals `Foo { ... }`.
-        if matches!(self.peek(), Token::Minus) {
-            self.bump();
-            let inner = self.parse_if_cond()?;
-            return Ok(Expr::Neg(Box::new(inner)));
-        }
-        match self.bump() {
-            Token::Ident(n) => Ok(Expr::Ident(n)),
-            Token::Bool(b) => Ok(Expr::Bool(b)),
-            Token::Int(n) => Ok(Expr::Int(n)),
-            Token::LParen => {
-                let e = self.parse_expr()?;
-                self.expect(&Token::RParen)?;
-                Ok(e)
-            }
-            Token::Amp => Ok(Expr::AddrOf(Box::new(self.parse_atom()?))),
-            Token::Star => Ok(Expr::Deref(Box::new(self.parse_atom()?))),
-            other => Err(format!("unexpected token in if condition: {other:?}")),
-        }
+        self.parse_expr()
     }
 
     /// Parses `return <expr>` statement with optional trailing semicolon.
@@ -477,9 +455,59 @@ impl Parser {
         }
     }
 
-    /// Expression entrypoint: additive (`+` / `-`), inside which multiplicative (`*` / `/`).
+    /// Expression entrypoint with comparison precedence above arithmetic.
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_additive()
+        self.parse_equality()
+    }
+
+    fn parse_equality(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_comparison()?;
+        loop {
+            match self.peek().clone() {
+                Token::EqEq => {
+                    self.bump();
+                    let right = self.parse_comparison()?;
+                    left = Expr::Eq(Box::new(left), Box::new(right));
+                }
+                Token::NotEq => {
+                    self.bump();
+                    let right = self.parse_comparison()?;
+                    left = Expr::Ne(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_additive()?;
+        loop {
+            match self.peek().clone() {
+                Token::Lt => {
+                    self.bump();
+                    let right = self.parse_additive()?;
+                    left = Expr::Lt(Box::new(left), Box::new(right));
+                }
+                Token::Le => {
+                    self.bump();
+                    let right = self.parse_additive()?;
+                    left = Expr::Le(Box::new(left), Box::new(right));
+                }
+                Token::Gt => {
+                    self.bump();
+                    let right = self.parse_additive()?;
+                    left = Expr::Gt(Box::new(left), Box::new(right));
+                }
+                Token::Ge => {
+                    self.bump();
+                    let right = self.parse_additive()?;
+                    left = Expr::Ge(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
     }
 
     /// Parses left-associative `+` / `-` chains.
@@ -587,6 +615,14 @@ impl Parser {
         Ok(e)
     }
 
+    fn looks_like_struct_lit_after_ident(&self) -> bool {
+        if !matches!(self.peek(), Token::LBrace) {
+            return false;
+        }
+        matches!(self.peek_n(1), Token::RBrace)
+            || matches!(self.peek_n(1), Token::Ident(_)) && matches!(self.peek_n(2), Token::Colon)
+    }
+
     /// Parses expression atoms (base terms before postfix chaining).
     ///
     /// Includes literals, identifiers, parenthesized expressions, unary pointer ops,
@@ -683,7 +719,7 @@ impl Parser {
                             variant,
                         });
                     }
-                    if matches!(self.peek(), Token::LBrace) {
+                    if self.looks_like_struct_lit_after_ident() {
                         self.parse_struct_lit_tail(name)
                     } else {
                         Ok(Expr::Ident(name))

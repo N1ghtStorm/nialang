@@ -89,6 +89,29 @@ fn lex_arithmetic_and_compound() {
 }
 
 #[test]
+fn lex_comparison_ops() {
+    let toks = collect("a == b != c < d <= e > f >= g");
+    assert_eq!(
+        toks,
+        vec![
+            Token::Ident("a".into()),
+            Token::EqEq,
+            Token::Ident("b".into()),
+            Token::NotEq,
+            Token::Ident("c".into()),
+            Token::Lt,
+            Token::Ident("d".into()),
+            Token::Le,
+            Token::Ident("e".into()),
+            Token::Gt,
+            Token::Ident("f".into()),
+            Token::Ge,
+            Token::Ident("g".into()),
+        ]
+    );
+}
+
+#[test]
 fn lex_for_in_and_dotdot() {
     let src = "for i in 0..1";
     let toks = collect(src);

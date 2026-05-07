@@ -1,0 +1,22 @@
+fn main() i32 {
+    let arr: [u8; 8] = [8, 3, 6, 1, 4, 7, 2, 5];
+    println(arr);
+    let sorted = sort_array(arr);
+    println(sorted);
+    println(arr);
+    0
+}
+
+
+fn sort_array(arr: [u8; 8]) [u8; 8] {
+    for i in 0..len(arr) {
+        for j in 0..len(arr) - 1 - i {
+            if arr[j] > arr[j + 1] {
+                let temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+    arr
+}
