@@ -160,7 +160,16 @@ pub fn check_fn(
         env.insert(pname.clone(), pty.clone());
     }
     for st in &f.body.stmts {
-        check_stmt(st, &mut env, struct_fields, enums, fn_sigs, f.ret.as_ref())?;
+        check_stmt(
+            st,
+            &mut env,
+            struct_fields,
+            enums,
+            fn_sigs,
+            f.ret.as_ref(),
+            0,
+            false,
+        )?;
     }
     if let Some(ret_ty) = &f.ret {
         let tail = f
@@ -784,9 +793,25 @@ fn stmt_contains_return(st: &Stmt) -> bool {
         Stmt::Return(_) => true,
         Stmt::If { then_block, .. } => block_contains_return(then_block),
         Stmt::While { body, .. } => block_contains_return(body),
+        Stmt::Loop { body } => block_contains_return(body),
         Stmt::For { body, .. } => block_contains_return(body),
-        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } => false,
+        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Break => false,
     }
+}
+
+fn stmt_has_break(st: &Stmt) -> bool {
+    match st {
+        Stmt::Break => true,
+        Stmt::If { then_block, .. } => block_has_break(then_block),
+        Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::For { body, .. } => {
+            block_has_break(body)
+        }
+        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Return(_) => false,
+    }
+}
+
+fn block_has_break(b: &Block) -> bool {
+    b.stmts.iter().any(stmt_has_break)
 }
 
 fn block_contains_return(b: &Block) -> bool {
@@ -797,6 +822,10 @@ fn block_contains_return(b: &Block) -> bool {
 ///
 /// Statement order matters: `let` bindings become available only after they are checked.
 /// `return` checks against function declared return type.
+///
+/// `loop_depth` counts enclosing `loop` bodies; `break` requires `loop_depth > 0`.
+/// `break_inside_while_or_for` is true inside `while` / `for` bodies (`break` is not
+/// supported there yet — unlike Rust).
 fn check_stmt(
     st: &Stmt,
     env: &mut HashMap<String, Ty>,
@@ -804,6 +833,8 @@ fn check_stmt(
     enums: &HashMap<String, EnumDef>,
     fn_sigs: &HashMap<String, FnSig>,
     fn_ret: Option<&Ty>,
+    loop_depth: u32,
+    break_inside_while_or_for: bool,
 ) -> Result<(), String> {
     match st {
         Stmt::Let {
@@ -868,6 +899,14 @@ fn check_stmt(
                 ));
             }
         }
+        Stmt::Break => {
+            if loop_depth == 0 {
+                return Err("`break` is only allowed inside a `loop` body".into());
+            }
+            if break_inside_while_or_for {
+                return Err("`break` inside `while` / `for` is not supported yet".into());
+            }
+        }
         Stmt::If { cond, then_block } => {
             let t = infer_expr(cond, env, struct_fields, enums, fn_sigs, Some(&Ty::Bool))?;
             if !types_equal(&t, &Ty::Bool) {
@@ -875,7 +914,16 @@ fn check_stmt(
             }
             let mut then_env = env.clone();
             for st in &then_block.stmts {
-                check_stmt(st, &mut then_env, struct_fields, enums, fn_sigs, fn_ret)?;
+                check_stmt(
+                    st,
+                    &mut then_env,
+                    struct_fields,
+                    enums,
+                    fn_sigs,
+                    fn_ret,
+                    loop_depth,
+                    break_inside_while_or_for,
+                )?;
             }
             if let Some(tail) = &then_block.tail {
                 infer_expr(tail, &then_env, struct_fields, enums, fn_sigs, None)?;
@@ -888,10 +936,50 @@ fn check_stmt(
             }
             let mut body_env = env.clone();
             for st in &body.stmts {
-                check_stmt(st, &mut body_env, struct_fields, enums, fn_sigs, fn_ret)?;
+                check_stmt(
+                    st,
+                    &mut body_env,
+                    struct_fields,
+                    enums,
+                    fn_sigs,
+                    fn_ret,
+                    loop_depth,
+                    true,
+                )?;
             }
             if let Some(tail) = &body.tail {
                 infer_expr(tail, &body_env, struct_fields, enums, fn_sigs, None)?;
+            }
+        }
+        Stmt::Loop { body } => {
+            if !block_has_break(body) {
+                return Err(
+                    "`loop` body must contain at least one `break` (required for correct codegen)"
+                        .into(),
+                );
+            }
+            let mut body_env = env.clone();
+            for st in &body.stmts {
+                check_stmt(
+                    st,
+                    &mut body_env,
+                    struct_fields,
+                    enums,
+                    fn_sigs,
+                    fn_ret,
+                    loop_depth.saturating_add(1),
+                    false,
+                )?;
+            }
+            if let Some(tail) = &body.tail {
+                infer_expr(
+                    tail,
+                    &body_env,
+                    struct_fields,
+                    enums,
+                    fn_sigs,
+                    None,
+                )?;
             }
         }
         Stmt::For {
@@ -923,7 +1011,16 @@ fn check_stmt(
             let mut body_env = env.clone();
             body_env.insert(var.clone(), ts.clone());
             for st in &body.stmts {
-                check_stmt(st, &mut body_env, struct_fields, enums, fn_sigs, fn_ret)?;
+                check_stmt(
+                    st,
+                    &mut body_env,
+                    struct_fields,
+                    enums,
+                    fn_sigs,
+                    fn_ret,
+                    loop_depth,
+                    true,
+                )?;
             }
             if let Some(tail) = &body.tail {
                 infer_expr(tail, &body_env, struct_fields, enums, fn_sigs, None)?;
@@ -973,6 +1070,7 @@ mod tests {
             include_str!("../examples/tests/ok_print_enum.nia"),
             include_str!("../examples/tests/ok_for_range.nia"),
             include_str!("../examples/tests/ok_while.nia"),
+            include_str!("../examples/tests/ok_loop.nia"),
         ];
         for src in ok_files {
             let r = check_all(src);
@@ -1039,6 +1137,27 @@ mod tests {
     #[test]
     fn typecheck_rejects_while_cond_non_bool_fixture() {
         let src = include_str!("../examples/tests/err_while_cond_int.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_loop_without_break_fixture() {
+        let src = include_str!("../examples/tests/err_loop_no_break.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_break_outside_loop_fixture() {
+        let src = include_str!("../examples/tests/err_break_outside_loop.nia");
+        let r = check_all(src);
+        assert!(r.is_err(), "{r:?}");
+    }
+
+    #[test]
+    fn typecheck_rejects_break_inside_while_fixture() {
+        let src = include_str!("../examples/tests/err_break_in_while.nia");
         let r = check_all(src);
         assert!(r.is_err(), "{r:?}");
     }

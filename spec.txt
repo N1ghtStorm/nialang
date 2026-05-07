@@ -74,3 +74,17 @@ fn main() i32 {
     }
     0
 }
+
+---------
+
+loop (exit with `break;` — тело должно содержать хотя бы одну `break`):
+
+fn main() i32 {
+    loop {
+        println(1);
+        break;
+    }
+    0
+}
+
+`break` внутри `while` / `for` пока не поддерживается (в отличие от Rust).

@@ -9,6 +9,8 @@ pub enum Token {
     Enum,
     If,
     While,
+    Loop,
+    Break,
     For,
     In,
     Match,
@@ -163,6 +165,8 @@ impl<'a> Lexer<'a> {
                     "enum" => Token::Enum,
                     "if" => Token::If,
                     "while" => Token::While,
+                    "loop" => Token::Loop,
+                    "break" => Token::Break,
                     "for" => Token::For,
                     "in" => Token::In,
                     "match" => Token::Match,
@@ -244,6 +248,21 @@ mod tests {
         assert_eq!(
             toks,
             vec![Token::While, Token::Ident("x".into()),]
+        );
+    }
+
+    #[test]
+    fn lex_loop_and_break() {
+        let toks = collect("loop { break; }");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Loop,
+                Token::LBrace,
+                Token::Break,
+                Token::Semi,
+                Token::RBrace,
+            ]
         );
     }
 

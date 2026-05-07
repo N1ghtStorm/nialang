@@ -1,0 +1,7 @@
+fn main() i32 {
+    let c: bool = true;
+    while c {
+        break;
+    }
+    0
+}

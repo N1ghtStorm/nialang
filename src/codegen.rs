@@ -252,6 +252,8 @@ struct Gen<'a> {
     lbl: u32,
     out: String,
     terminated: bool,
+    /// Labels of `loop.exit` for nested `loop`; `break` branches to the top.
+    loop_exit_stack: Vec<String>,
 }
 
 impl<'a> Gen<'a> {
@@ -265,6 +267,7 @@ impl<'a> Gen<'a> {
             lbl: 0,
             out: String::new(),
             terminated: false,
+            loop_exit_stack: Vec::new(),
         }
     }
 
@@ -890,6 +893,13 @@ impl<'a> Gen<'a> {
                 writeln!(self.out, "  ret {} {}", llvm_ty(ret_ty, self.structs), v).unwrap();
                 self.terminated = true;
             }
+            Stmt::Break => {
+                let Some(exit) = self.loop_exit_stack.last() else {
+                    panic!("internal: `break` should be rejected by typecheck outside `loop`");
+                };
+                writeln!(self.out, "  br label %{}", exit).unwrap();
+                self.terminated = true;
+            }
             Stmt::If { cond, then_block } => {
                 let (ct, cv) = self.emit_expr(cond, locals, Some(&Ty::Bool));
                 debug_assert!(matches!(ct, Ty::Bool));
@@ -953,6 +963,34 @@ impl<'a> Gen<'a> {
                     }
                     writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
                 }
+                self.terminated = false;
+                writeln!(self.out, "{}:", exit_lbl).unwrap();
+            }
+            Stmt::Loop { body } => {
+                if self.terminated {
+                    return;
+                }
+                let iter_lbl = self.fresh_label("loop.iter");
+                let exit_lbl = self.fresh_label("loop.exit");
+                self.loop_exit_stack.push(exit_lbl.clone());
+
+                writeln!(self.out, "  br label %{}", iter_lbl).unwrap();
+                writeln!(self.out, "{}:", iter_lbl).unwrap();
+                let mut body_locals = locals.clone();
+                self.terminated = false;
+                for st in &body.stmts {
+                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    if self.terminated {
+                        break;
+                    }
+                }
+                if !self.terminated {
+                    if let Some(tail) = &body.tail {
+                        self.emit_expr(tail, &body_locals, None);
+                    }
+                    writeln!(self.out, "  br label %{}", iter_lbl).unwrap();
+                }
+                self.loop_exit_stack.pop();
                 self.terminated = false;
                 writeln!(self.out, "{}:", exit_lbl).unwrap();
             }
@@ -1969,5 +2007,12 @@ mod tests {
         assert!(ll.contains("while.cond."), "IR:\n{ll}");
         assert!(ll.contains("while.body."), "IR:\n{ll}");
         assert!(ll.contains("while.exit."), "IR:\n{ll}");
+    }
+
+    #[test]
+    fn codegen_loop_emits_iter_and_exit_labels() {
+        let ll = emit(include_str!("../examples/tests/ok_loop.nia"));
+        assert!(ll.contains("loop.iter."), "IR:\n{ll}");
+        assert!(ll.contains("loop.exit."), "IR:\n{ll}");
     }
 }

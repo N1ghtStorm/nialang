@@ -273,6 +273,12 @@ impl Parser {
                 Token::While => {
                     stmts.push(self.parse_while_stmt()?);
                 }
+                Token::Loop => {
+                    stmts.push(self.parse_loop_stmt()?);
+                }
+                Token::Break => {
+                    stmts.push(self.parse_break_stmt()?);
+                }
                 Token::For => {
                     stmts.push(self.parse_for_stmt()?);
                 }
@@ -336,6 +342,20 @@ impl Parser {
         let cond = self.parse_if_cond()?;
         let body = self.parse_block()?;
         Ok(Stmt::While { cond, body })
+    }
+
+    /// Parses `loop { ... }`.
+    fn parse_loop_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Loop)?;
+        let body = self.parse_block()?;
+        Ok(Stmt::Loop { body })
+    }
+
+    /// Parses `break;`
+    fn parse_break_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Break)?;
+        self.expect(&Token::Semi)?;
+        Ok(Stmt::Break)
     }
 
     /// Parses `for <ident> in <expr>..<expr> { ... }` (half-open range).
@@ -823,6 +843,11 @@ mod tests {
     #[test]
     fn parse_fixture_while() {
         parse_ok(include_str!("../examples/tests/ok_while.nia"));
+    }
+
+    #[test]
+    fn parse_fixture_loop() {
+        parse_ok(include_str!("../examples/tests/ok_loop.nia"));
     }
 
     #[test]

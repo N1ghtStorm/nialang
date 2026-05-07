@@ -103,6 +103,12 @@ pub enum Stmt {
         cond: Expr,
         body: Block,
     },
+    /// Infinite loop; exit only via `break` (must appear at least once in body for codegen).
+    Loop {
+        body: Block,
+    },
+    /// Exit the innermost enclosing `loop` (Nia: only `loop`, not `while`/`for`).
+    Break,
     /// `for name in start..end { ... }` — half-open numeric range (like Rust `..`).
     For {
         var: String,
