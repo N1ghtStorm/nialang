@@ -185,7 +185,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Enum(n) => format!("%enum.{}", sanitize(n)),
         Ty::Ptr(_) => "ptr".into(),
         Ty::Unit => "void".into(),
-        Ty::Vector(_, _) => todo!("unimplemented"),
+        Ty::Vector(n, _) => format!("%struct.{}", sanitize(n)),
     }
 }
 
@@ -565,9 +565,8 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
             }
-            Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit => unreachable!("typechecked"),
-            Ty::Vector(_, _) => {
-                todo!("unimplemented");
+            Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Vector(_, _) => {
+                unreachable!("typechecked")
             }
         }
     }
