@@ -176,6 +176,10 @@ pub enum Expr {
         name: String,
         fields: Vec<(String, Expr)>,
     },
+    VectorLit {
+        name: String,
+        fields: Vec<Expr>,
+    },
     ArrayLit(Vec<Expr>),
     EnumVariant {
         enum_name: String,

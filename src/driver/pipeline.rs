@@ -3,7 +3,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backend::codegen;
-use crate::frontend::parser::{tokenize, Parser};
+use crate::frontend::parser::{Parser, tokenize};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
 
 /// Compiles nialang source text into one textual LLVM IR module.
@@ -23,7 +23,7 @@ use crate::semantics::typecheck::{check_fn, collect_sigs};
 /// Each stage depends on previous output, so failures are intentionally not aggregated.
 pub fn compile_to_ll(src: &str) -> Result<String, String> {
     let tokens = tokenize(src);
-    let (structs, enums, fns) = Parser::new(tokens).parse_file()?;
+    let (structs, enums, fns, vectors) = Parser::new(tokens).parse_file()?;
     let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns)?;
     for f in &fns {
         check_fn(f, &struct_map, &enum_map, &fn_sigs)?;
@@ -73,8 +73,8 @@ pub fn run_cli() -> Result<i32, String> {
     }
 
     // Read the input program after path resolution, so diagnostics include final path.
-    let src = std::fs::read_to_string(&in_path)
-        .map_err(|e| format!("{}: {e}", in_path.display()))?;
+    let src =
+        std::fs::read_to_string(&in_path).map_err(|e| format!("{}: {e}", in_path.display()))?;
     let ll = compile_to_ll(&src)?;
 
     if let Some(ref p) = out_ll {

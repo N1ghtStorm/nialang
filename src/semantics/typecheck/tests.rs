@@ -1,12 +1,17 @@
 use super::*;
-use crate::parser::{Parser, tokenize};
+use crate::{
+    ast::VectorDef,
+    parser::{Parser, tokenize},
+};
 
-fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>) {
-    Parser::new(tokenize(src)).parse_file().expect("parse success")
+fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>, Vec<VectorDef>) {
+    Parser::new(tokenize(src))
+        .parse_file()
+        .expect("parse success")
 }
 
 fn check_all(src: &str) -> Result<(), String> {
-    let (structs, enums, fns) = parse(src);
+    let (structs, enums, fns, vectors) = parse(src);
     let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns)?;
     for f in &fns {
         check_fn(f, &struct_map, &enum_map, &fn_sigs)?;
@@ -28,9 +33,9 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_array.nia"),
         include_str!("../../../examples/tests/ok_array_index.nia"),
         include_str!("../../../examples/tests/ok_array_index_store.nia"),
-            include_str!("../../../examples/tests/ok_array_reverse.nia"),
-            include_str!("../../../examples/tests/ok_array_len.nia"),
-            include_str!("../../../examples/tests/ok_print_array.nia"),
+        include_str!("../../../examples/tests/ok_array_reverse.nia"),
+        include_str!("../../../examples/tests/ok_array_len.nia"),
+        include_str!("../../../examples/tests/ok_print_array.nia"),
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
         include_str!("../../../examples/tests/ok_ptr_write.nia"),
