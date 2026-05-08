@@ -31,6 +31,7 @@ pub fn emit_module(
     out.push_str("target triple = \"unknown-unknown-unknown\"\n\n");
     out.push_str(crate::nia_std::llvm_prelude());
     out.push_str(&emit_struct_print_constants(structs));
+    out.push_str(&emit_vector_print_constants(vectors));
     out.push_str(&emit_enum_print_constants(enums));
 
     for s in structs {
@@ -83,6 +84,35 @@ fn struct_field_key_symbol(sname: &str, fname: &str) -> String {
         sanitize(sname),
         sanitize(fname)
     )
+}
+
+/// Source-like spelling of a type for `println` (vector axis element type).
+fn ty_print_label(t: &Ty) -> String {
+    match t {
+        Ty::I8 => "i8".into(),
+        Ty::U8 => "u8".into(),
+        Ty::I16 => "i16".into(),
+        Ty::U16 => "u16".into(),
+        Ty::I32 => "i32".into(),
+        Ty::I64 => "i64".into(),
+        Ty::U64 => "u64".into(),
+        Ty::I128 => "i128".into(),
+        Ty::Isize => "isize".into(),
+        Ty::Usize => "usize".into(),
+        Ty::U128 => "u128".into(),
+        Ty::Bool => "bool".into(),
+        Ty::Array(inner, n) => format!("[{}; {}]", ty_print_label(inner), n),
+        Ty::Struct(n) => n.clone(),
+        Ty::Enum(n) => n.clone(),
+        Ty::Ptr(inner) => format!("&{}", ty_print_label(inner)),
+        Ty::Unit => "()".into(),
+        Ty::Vector(n, inner) => format!("{} {}", n, ty_print_label(inner)),
+    }
+}
+
+/// LLVM global holding `println` prefix between `(` and `{`: element type + ASCII space (unique per vector decl).
+fn vector_print_ty_prefix_symbol(vname: &str) -> String {
+    format!("nialang.std.vector.ty.{}", sanitize(vname))
 }
 
 fn enum_variant_prefix_symbol(ename: &str, vname: &str) -> String {
@@ -151,6 +181,42 @@ fn emit_struct_print_constants(structs: &[StructDef]) -> String {
             let sz = bytes.len() + 1;
             let lit = llvm_c_escape(bytes);
             let sym = struct_field_key_symbol(&s.name, fname);
+            writeln!(
+                out,
+                "@{} = private unnamed_addr constant [{} x i8] c\"{}\\00\", align 1",
+                sym, sz, lit
+            )
+            .unwrap();
+        }
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+/// JSON key fragments for `println` on vector values (same symbol scheme as named structs).
+fn emit_vector_print_constants(vectors: &[VectorDef]) -> String {
+    let mut out = String::new();
+    for v in vectors {
+        let ty_prefix = format!("{} ", ty_print_label(&v.ty));
+        let bytes = ty_prefix.as_bytes();
+        let sz = bytes.len() + 1;
+        let lit = llvm_c_escape(bytes);
+        let sym = vector_print_ty_prefix_symbol(&v.name);
+        writeln!(
+            out,
+            "@{} = private unnamed_addr constant [{} x i8] c\"{}\\00\", align 1",
+            sym, sz, lit
+        )
+        .unwrap();
+
+        for fname in &v.fields {
+            let key = format!("\"{fname}\": ");
+            let bytes = key.as_bytes();
+            let sz = bytes.len() + 1;
+            let lit = llvm_c_escape(bytes);
+            let sym = struct_field_key_symbol(&v.name, fname);
             writeln!(
                 out,
                 "@{} = private unnamed_addr constant [{} x i8] c\"{}\\00\", align 1",
@@ -657,6 +723,44 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Vector values use `%struct.<name>` aggregates; print as `(Name {"X": …})`.
+    fn emit_print_vector(&mut self, vname: &str, vec_v: &str, newline: bool) {
+        let vdef = self
+            .vectors
+            .iter()
+            .find(|v| v.name == vname)
+            .expect("typechecked vector");
+        let fty = vdef.ty.clone();
+        let llvm_st = format!("%struct.{}", sanitize(vname));
+        self.emit_printf_text("nialang.std.txt.tuple_open", 2);
+        let ty_sym = vector_print_ty_prefix_symbol(vname);
+        let ty_sz = format!("{} ", ty_print_label(&vdef.ty)).as_bytes().len() + 1;
+        self.emit_printf_text_dynamic(&ty_sym, ty_sz);
+        self.emit_printf_text("nialang.std.txt.obj_open", 2);
+        for (i, fname) in vdef.fields.iter().enumerate() {
+            if i > 0 {
+                self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+            }
+            let key_sym = struct_field_key_symbol(vname, fname);
+            let key_sz = fname.as_bytes().len() + 5;
+            self.emit_printf_text_dynamic(&key_sym, key_sz);
+            let fv = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                fv, llvm_st, vec_v, i
+            )
+            .unwrap();
+            self.emit_print_value(&fty, &format!("%{fv}"), false);
+        }
+        self.emit_printf_text("nialang.std.txt.obj_close", 2);
+        if newline {
+            self.emit_printf_text("nialang.std.txt.tuple_close_ln", 3);
+        } else {
+            self.emit_printf_text("nialang.std.txt.tuple_close", 2);
+        }
+    }
+
     /// Prints enum as `Variant: <payload>` (unit: `Variant: ()` with newline when requested).
     fn emit_print_enum(&mut self, ename: &str, ev: &str, newline: bool) {
         let edef = self
@@ -800,7 +904,14 @@ impl<'a> Gen<'a> {
                 self.emit_print_array(elem, *n, v, newline);
             }
             Ty::Struct(sname) => {
-                self.emit_print_struct(sname, v, newline);
+                if self.struct_def(sname).is_some() {
+                    self.emit_print_struct(sname, v, newline);
+                } else {
+                    self.emit_print_vector(sname, v, newline);
+                }
+            }
+            Ty::Vector(vname, _) => {
+                self.emit_print_vector(vname, v, newline);
             }
             Ty::Enum(ename) => {
                 self.emit_print_enum(ename, v, newline);

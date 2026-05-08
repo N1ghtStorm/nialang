@@ -10,5 +10,6 @@ fn main() i32 {
         Y: 2,
         Z: 3
     ];
+    println(p);
     0
 }
