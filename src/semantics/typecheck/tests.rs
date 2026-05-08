@@ -1,15 +1,21 @@
 use super::*;
-use crate::parser::{Parser, tokenize};
+use crate::{
+    ast::VectorDef,
+    parser::{Parser, tokenize},
+};
 
-fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>) {
-    Parser::new(tokenize(src)).parse_file().expect("parse success")
+fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>, Vec<VectorDef>) {
+    Parser::new(tokenize(src))
+        .parse_file()
+        .expect("parse success")
 }
 
 fn check_all(src: &str) -> Result<(), String> {
-    let (structs, enums, fns) = parse(src);
-    let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns)?;
+    let (structs, enums, fns, vectors) = parse(src);
+    let (struct_map, enum_map, vector_map, fn_sigs) =
+        collect_sigs(&structs, &enums, &vectors, &fns)?;
     for f in &fns {
-        check_fn(f, &struct_map, &enum_map, &fn_sigs)?;
+        check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs)?;
     }
     Ok(())
 }
@@ -28,9 +34,9 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_array.nia"),
         include_str!("../../../examples/tests/ok_array_index.nia"),
         include_str!("../../../examples/tests/ok_array_index_store.nia"),
-            include_str!("../../../examples/tests/ok_array_reverse.nia"),
-            include_str!("../../../examples/tests/ok_array_len.nia"),
-            include_str!("../../../examples/tests/ok_print_array.nia"),
+        include_str!("../../../examples/tests/ok_array_reverse.nia"),
+        include_str!("../../../examples/tests/ok_array_len.nia"),
+        include_str!("../../../examples/tests/ok_print_array.nia"),
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
         include_str!("../../../examples/tests/ok_ptr_write.nia"),
@@ -214,4 +220,34 @@ let a: i32 = 1;
 "#;
     let r = check_all(src);
     assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_vector_type_annotation_normalizes() {
+    let src = r#"
+vector Point i32 [
+    X,
+    Y,
+    Z,
+]
+
+fn main() i32 {
+    let p: Point = Point [X: 1, Y: 2, Z: 3];
+    p.X
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_duplicate_type_name_struct_vector() {
+    let src = r#"
+struct Point { x: i32 }
+vector Point i32 [ X, Y, Z ]
+fn main() i32 { 0 }
+"#;
+    let (structs, enums, fns, vectors) = parse(src);
+    let r = collect_sigs(&structs, &enums, &vectors, &fns);
+    assert!(r.is_err());
 }

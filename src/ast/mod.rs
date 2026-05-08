@@ -45,6 +45,7 @@ pub enum Ty {
     Ptr(Box<Ty>),
     /// Result of a void call or `println`; not storable in `let`.
     Unit,
+    Vector(String, Box<Ty>),
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +53,12 @@ pub struct StructDef {
     pub name: String,
     pub is_tuple: bool,
     pub fields: Vec<(String, Ty)>,
+}
+#[derive(Debug, Clone)]
+pub struct VectorDef {
+    pub name: String,
+    pub ty: Ty,
+    pub fields: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +173,10 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     StructLit {
+        name: String,
+        fields: Vec<(String, Expr)>,
+    },
+    VectorLit {
         name: String,
         fields: Vec<(String, Expr)>,
     },

@@ -1,6 +1,6 @@
 use crate::ast::{
     Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
-    Ty,
+    Ty, VectorDef,
 };
 use crate::lexer::Token;
 
@@ -43,7 +43,7 @@ impl Parser {
         }
     }
 
-    /// Parses a complete source file into `(structs, enums, functions)`.
+    /// Parses a complete source file into `(structs, enums, functions, vectors)`.
     ///
     /// ## Grammar contract
     /// Top-level accepts only:
@@ -52,14 +52,20 @@ impl Parser {
     ///
     /// Any other token at top level is a hard parse error. This strictness keeps
     /// recovery and diagnostics simple for a small language.
-    pub fn parse_file(mut self) -> Result<(Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>), String> {
+    pub fn parse_file(
+        mut self,
+    ) -> Result<(Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>, Vec<VectorDef>), String> {
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         let mut fns = Vec::new();
+        let mut vectors = Vec::new();
         while !matches!(self.peek(), Token::Eof) {
             match self.peek().clone() {
                 Token::Struct => {
                     structs.push(self.parse_struct()?);
+                }
+                Token::Vector => {
+                    vectors.push(self.parse_vector()?);
                 }
                 Token::Enum => {
                     enums.push(self.parse_enum()?);
@@ -70,7 +76,7 @@ impl Parser {
                 other => return Err(format!("unexpected token at top level: {other:?}")),
             }
         }
-        Ok((structs, enums, fns))
+        Ok((structs, enums, fns, vectors))
     }
 
     fn parse_enum(&mut self) -> Result<EnumDef, String> {
@@ -118,7 +124,9 @@ impl Parser {
                                     }
                                 }
                                 Token::RBrace => break,
-                                _ => return Err(format!("expected , or }}, got {:?}", self.peek())),
+                                _ => {
+                                    return Err(format!("expected , or }}, got {:?}", self.peek()));
+                                }
                             }
                         }
                     }
@@ -207,6 +215,44 @@ impl Parser {
                 self.peek()
             ))
         }
+    }
+
+    fn parse_vector(&mut self) -> Result<VectorDef, String> {
+        self.expect(&Token::Vector)?;
+        let name = self.expect_ident()?;
+        let ty = self.parse_ty()?;
+
+        let bracket = if matches!(self.peek(), Token::LBracket) {
+            self.bump();
+            true
+        } else if matches!(self.peek(), Token::LBrace) {
+            self.bump();
+            false
+        } else {
+            return Err(format!(
+                "expected `[` or `{{` after vector type, got {:?}",
+                self.peek()
+            ));
+        };
+
+        let mut fields = Vec::new();
+        while if bracket {
+            !matches!(self.peek(), Token::RBracket)
+        } else {
+            !matches!(self.peek(), Token::RBrace)
+        } {
+            let fname = self.expect_ident()?;
+            fields.push(fname);
+            if matches!(self.peek(), Token::Comma) {
+                self.bump();
+            }
+        }
+        if bracket {
+            self.expect(&Token::RBracket)?;
+        } else {
+            self.expect(&Token::RBrace)?;
+        }
+        Ok(VectorDef { name, ty, fields })
     }
 
     /// Parses function declaration: name, params, optional return type, and body.
@@ -599,7 +645,9 @@ impl Parser {
                     let field = match self.bump() {
                         Token::Ident(s) => s,
                         Token::Int(n) => n.to_string(),
-                        other => return Err(format!("expected field name or index, got {other:?}")),
+                        other => {
+                            return Err(format!("expected field name or index, got {other:?}"));
+                        }
                     };
                     e = Expr::Field(Box::new(e), field);
                 }
@@ -620,6 +668,14 @@ impl Parser {
             return false;
         }
         matches!(self.peek_n(1), Token::RBrace)
+            || matches!(self.peek_n(1), Token::Ident(_)) && matches!(self.peek_n(2), Token::Colon)
+    }
+
+    fn looks_like_vector_lit_after_ident(&self) -> bool {
+        if !matches!(self.peek(), Token::LBracket) {
+            return false;
+        }
+        matches!(self.peek_n(1), Token::RBracket)
             || matches!(self.peek_n(1), Token::Ident(_)) && matches!(self.peek_n(2), Token::Colon)
     }
 
@@ -669,7 +725,7 @@ impl Parser {
                                             return Err(format!(
                                                 "expected , or ), got {:?}",
                                                 self.peek()
-                                            ))
+                                            ));
                                         }
                                     }
                                 }
@@ -702,7 +758,7 @@ impl Parser {
                                             return Err(format!(
                                                 "expected , or }}, got {:?}",
                                                 self.peek()
-                                            ))
+                                            ));
                                         }
                                     }
                                 }
@@ -721,6 +777,8 @@ impl Parser {
                     }
                     if self.looks_like_struct_lit_after_ident() {
                         self.parse_struct_lit_tail(name)
+                    } else if self.looks_like_vector_lit_after_ident() {
+                        self.parse_vector_lit_tail(name)
                     } else {
                         Ok(Expr::Ident(name))
                     }
@@ -761,6 +819,32 @@ impl Parser {
         })
     }
 
+    fn parse_vector_lit_tail(&mut self, vector_name: String) -> Result<Expr, String> {
+        self.expect(&Token::LBracket)?;
+        let mut fields = Vec::new();
+        if !matches!(self.peek(), Token::RBracket) {
+            loop {
+                let fname = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let fe = self.parse_expr()?;
+                fields.push((fname, fe));
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                    }
+                    Token::RBracket => break,
+                    _ => return Err(format!("expected , or ], got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::RBracket)?;
+
+        Ok(Expr::VectorLit {
+            name: vector_name,
+            fields,
+        })
+    }
+
     /// Parses array literal body after consuming opening bracket.
     fn parse_array_lit_tail(&mut self) -> Result<Expr, String> {
         let mut elems = Vec::new();
@@ -793,13 +877,12 @@ impl Parser {
 
     fn parse_match_expr(&mut self) -> Result<Expr, String> {
         self.expect(&Token::Match)?;
-        let scrutinee = if matches!(self.peek(), Token::Ident(_))
-            && matches!(self.peek_n(1), Token::LBrace)
-        {
-            Expr::Ident(self.expect_ident()?)
-        } else {
-            self.parse_expr()?
-        };
+        let scrutinee =
+            if matches!(self.peek(), Token::Ident(_)) && matches!(self.peek_n(1), Token::LBrace) {
+                Expr::Ident(self.expect_ident()?)
+            } else {
+                self.parse_expr()?
+            };
         self.expect(&Token::LBrace)?;
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {

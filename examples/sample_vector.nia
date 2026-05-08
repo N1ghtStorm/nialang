@@ -1,0 +1,15 @@
+vector Point i32 [
+    X,
+    Y,
+    Z,
+]
+
+fn main() i32 {
+    let p: Point = Point [
+        X: 1,
+        Y: 2,
+        Z: 3
+    ];
+    println(p);
+    0
+}

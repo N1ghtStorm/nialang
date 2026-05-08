@@ -3,12 +3,13 @@ use crate::parser::{Parser, tokenize};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
 
 fn emit(src: &str) -> String {
-    let (structs, enums, fns) = Parser::new(tokenize(src)).parse_file().expect("parse");
-    let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns).expect("sigs");
+    let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().expect("parse");
+    let (struct_map, enum_map, vector_map, fn_sigs) =
+        collect_sigs(&structs, &enums, &vectors, &fns).expect("sigs");
     for f in &fns {
-        check_fn(f, &struct_map, &enum_map, &fn_sigs).expect("typecheck");
+        check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs).expect("typecheck");
     }
-    emit_module(&structs, &enums, &fns, &fn_sigs)
+    emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
 }
 
 #[test]
@@ -27,7 +28,9 @@ fn codegen_contains_tuple_struct_ops() {
 
 #[test]
 fn codegen_contains_print_for_primitives() {
-    let ll = emit(include_str!("../../../examples/tests/ok_print_primitives.nia"));
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_print_primitives.nia"
+    ));
     assert!(ll.contains("@printf"));
     assert!(ll.contains("nialang.std.fmt"));
 }
@@ -47,7 +50,9 @@ fn codegen_named_struct_type_decl_present() {
 
 #[test]
 fn codegen_tuple_named_mix_contains_pair_and_boxed() {
-    let ll = emit(include_str!("../../../examples/tests/ok_tuple_named_mix.nia"));
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_tuple_named_mix.nia"
+    ));
     assert!(ll.contains("%struct.Pair = type"));
     assert!(ll.contains("%struct.Boxed = type"));
     assert!(ll.contains("extractvalue %struct.Pair"));
@@ -76,7 +81,9 @@ fn codegen_contains_array_index_gep() {
 
 #[test]
 fn codegen_array_index_store_emits_store() {
-    let ll = emit(include_str!("../../../examples/tests/ok_array_index_store.nia"));
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_array_index_store.nia"
+    ));
     assert!(ll.contains("getelementptr inbounds [3 x i8]"), "IR:\n{ll}");
     assert!(ll.contains("store i8"), "IR:\n{ll}");
 }
@@ -144,8 +151,13 @@ fn codegen_pointer_write_emits_store_through_ptr() {
 
 #[test]
 fn codegen_pointer_array_write_emits_indexed_store_through_ptr() {
-    let ll = emit(include_str!("../../../examples/tests/ok_ptr_array_write.nia"));
-    assert!(ll.contains("getelementptr inbounds [4 x i8], ptr %"), "IR:\n{ll}");
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_ptr_array_write.nia"
+    ));
+    assert!(
+        ll.contains("getelementptr inbounds [4 x i8], ptr %"),
+        "IR:\n{ll}"
+    );
     assert!(ll.contains("store i8 9, ptr %"), "IR:\n{ll}");
 }
 
@@ -165,7 +177,9 @@ fn codegen_enum_match_uses_switch() {
 
 #[test]
 fn codegen_enum_payload_match_extracts_payloads() {
-    let ll = emit(include_str!("../../../examples/tests/ok_enum_payload_match.nia"));
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_enum_payload_match.nia"
+    ));
     assert!(ll.contains("%enum.Value = type"), "IR:\n{ll}");
     assert!(ll.contains("extractvalue %enum.Value"), "IR:\n{ll}");
 }
@@ -173,8 +187,14 @@ fn codegen_enum_payload_match_extracts_payloads() {
 #[test]
 fn codegen_println_enum_emits_prefix_constants_and_switch() {
     let ll = emit(include_str!("../../../examples/tests/ok_print_enum.nia"));
-    assert!(ll.contains("nialang.std.txt.enumprefix.Color.Red"), "IR:\n{ll}");
-    assert!(ll.contains("nialang.std.txt.enumprefix.Msg.Point"), "IR:\n{ll}");
+    assert!(
+        ll.contains("nialang.std.txt.enumprefix.Color.Red"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("nialang.std.txt.enumprefix.Msg.Point"),
+        "IR:\n{ll}"
+    );
     assert!(ll.contains("println.enum.arm"), "IR:\n{ll}");
 }
 
