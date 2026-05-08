@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use crate::ast::{EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty};
+use crate::ast::{
+    EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
+};
 use crate::nia_std::{ALLOC, DEALLOC, LEN, PRINTLN, REALLOC};
 use crate::semantics::typecheck::FnSig;
 
@@ -19,6 +21,7 @@ use crate::semantics::typecheck::FnSig;
 pub fn emit_module(
     structs: &[StructDef],
     enums: &[EnumDef],
+    vectors: &[VectorDef],
     fns: &[FnDef],
     fn_sigs: &HashMap<String, FnSig>,
 ) -> String {
@@ -43,7 +46,7 @@ pub fn emit_module(
     }
 
     for f in fns {
-        out.push_str(&emit_fn(f, structs, enums, fn_sigs));
+        out.push_str(&emit_fn(f, structs, enums, vectors, fn_sigs));
         out.push('\n');
     }
     out
@@ -270,6 +273,7 @@ fn collect_array_index_chain(mut e: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
 struct Gen<'a> {
     structs: &'a [StructDef],
     enums: &'a [EnumDef],
+    vectors: &'a [VectorDef],
     fn_sigs: &'a HashMap<String, FnSig>,
     tmp: u32,
     lbl: u32,
@@ -284,11 +288,13 @@ impl<'a> Gen<'a> {
     fn new(
         structs: &'a [StructDef],
         enums: &'a [EnumDef],
+        vectors: &'a [VectorDef],
         fn_sigs: &'a HashMap<String, FnSig>,
     ) -> Self {
         Self {
             structs,
             enums,
+            vectors,
             fn_sigs,
             tmp: 0,
             lbl: 0,
@@ -1570,6 +1576,36 @@ impl<'a> Gen<'a> {
                 writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, tmp).unwrap();
                 (Ty::Struct(sname), format!("%{loadt}"))
             }
+            Expr::VectorLit { name, fields } => {
+                let vdef = self.vectors.iter().find(|s| s.name == *name).unwrap();
+                let llvm_st = format!("%struct.{}", sanitize(name));
+                let mut agg = "poison".to_string();
+                for (i, fname) in vdef.fields.iter().enumerate() {
+                    let (_, fe) = fields.iter().find(|(n, _)| n == fname).unwrap();
+                    // !!!!!type of fields is the same as the vector type!!!!!
+                    let (ft, fv) = self.emit_expr(fe, locals, Some(&vdef.ty));
+                    let tmp = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = insertvalue {} {}, {} {}, {}",
+                        tmp,
+                        llvm_st,
+                        agg,
+                        llvm_ty(&ft, self.structs),
+                        fv,
+                        i
+                    )
+                    .unwrap();
+                    agg = format!("%{tmp}");
+                }
+                let sname = name.clone();
+                let tmp = self.fresh();
+                writeln!(self.out, "  %{} = alloca {}", tmp, llvm_st).unwrap();
+                writeln!(self.out, "  store {} {}, ptr %{}", llvm_st, agg, tmp).unwrap();
+                let loadt = self.fresh();
+                writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, tmp).unwrap();
+                (Ty::Struct(sname), format!("%{loadt}"))
+            }
             Expr::EnumVariant { enum_name, variant } => {
                 let tag = self
                     .enum_tag(enum_name, variant)
@@ -2182,9 +2218,10 @@ fn emit_fn(
     f: &FnDef,
     structs: &[StructDef],
     enums: &[EnumDef],
+    vectors: &[VectorDef],
     fn_sigs: &HashMap<String, FnSig>,
 ) -> String {
-    Gen::new(structs, enums, fn_sigs).emit_fn(f)
+    Gen::new(structs, enums, vectors, fn_sigs).emit_fn(f)
 }
 
 #[cfg(test)]

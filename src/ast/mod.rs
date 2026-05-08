@@ -178,7 +178,7 @@ pub enum Expr {
     },
     VectorLit {
         name: String,
-        fields: Vec<Expr>,
+        fields: Vec<(String, Expr)>,
     },
     ArrayLit(Vec<Expr>),
     EnumVariant {

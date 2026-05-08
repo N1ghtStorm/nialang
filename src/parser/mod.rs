@@ -661,6 +661,14 @@ impl Parser {
             || matches!(self.peek_n(1), Token::Ident(_)) && matches!(self.peek_n(2), Token::Colon)
     }
 
+    fn looks_like_vector_lit_after_ident(&self) -> bool {
+        if !matches!(self.peek(), Token::LBracket) {
+            return false;
+        }
+        matches!(self.peek_n(1), Token::RBracket)
+            || matches!(self.peek_n(1), Token::Ident(_)) && matches!(self.peek_n(2), Token::Colon)
+    }
+
     /// Parses expression atoms (base terms before postfix chaining).
     ///
     /// Includes literals, identifiers, parenthesized expressions, unary pointer ops,
@@ -759,6 +767,8 @@ impl Parser {
                     }
                     if self.looks_like_struct_lit_after_ident() {
                         self.parse_struct_lit_tail(name)
+                    } else if self.looks_like_vector_lit_after_ident() {
+                        self.parse_vector_lit_tail(name)
                     } else {
                         Ok(Expr::Ident(name))
                     }
@@ -801,8 +811,28 @@ impl Parser {
 
     fn parse_vector_lit_tail(&mut self, vector_name: String) -> Result<Expr, String> {
         self.expect(&Token::LBracket)?;
+        let mut fields = Vec::new();
+        if !matches!(self.peek(), Token::RBracket) {
+            loop {
+                let fname = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let fe = self.parse_expr()?;
+                fields.push((fname, fe));
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                    }
+                    Token::RBrace => break,
+                    _ => return Err(format!("expected , or ], got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::RBrace)?;
 
-        todo!("")
+        Ok(Expr::VectorLit {
+            name: vector_name,
+            fields,
+        })
     }
 
     /// Parses array literal body after consuming opening bracket.

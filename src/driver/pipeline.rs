@@ -28,7 +28,9 @@ pub fn compile_to_ll(src: &str) -> Result<String, String> {
     for f in &fns {
         check_fn(f, &struct_map, &enum_map, &fn_sigs)?;
     }
-    Ok(codegen::emit_module(&structs, &enums, &fns, &fn_sigs))
+    Ok(codegen::emit_module(
+        &structs, &enums, &vectors, &fns, &fn_sigs,
+    ))
 }
 
 /// High-level CLI execution pipeline used by `main`.

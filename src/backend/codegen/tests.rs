@@ -8,7 +8,7 @@ fn emit(src: &str) -> String {
     for f in &fns {
         check_fn(f, &struct_map, &enum_map, &fn_sigs).expect("typecheck");
     }
-    emit_module(&structs, &enums, &fns, &fn_sigs)
+    emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
 }
 
 #[test]
