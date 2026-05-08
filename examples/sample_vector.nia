@@ -1,8 +1,8 @@
-vector Point i32 {
+vector Point i32 [
     X,
     Y,
     Z,
-}
+]
 
 fn main() i32 {
     let p: Point = Point [

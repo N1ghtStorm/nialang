@@ -123,6 +123,24 @@ fn parse_array_type_and_literal() {
 }
 
 #[test]
+fn parse_vector_decl_brackets() {
+    let src = r#"
+vector Point i32 [ X, Y, Z ]
+fn main() i32 { 0 }
+"#;
+    parse_ok(src);
+}
+
+#[test]
+fn parse_vector_decl_braces_legacy() {
+    let src = r#"
+vector Point i32 { X, Y, Z }
+fn main() i32 { 0 }
+"#;
+    parse_ok(src);
+}
+
+#[test]
 fn parse_array_index_expression() {
     let src = r#"
 fn main() i32 {

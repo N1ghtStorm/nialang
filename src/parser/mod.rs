@@ -222,25 +222,37 @@ impl Parser {
         let name = self.expect_ident()?;
         let ty = self.parse_ty()?;
 
-        if matches!(self.peek(), Token::LBrace) {
+        let bracket = if matches!(self.peek(), Token::LBracket) {
             self.bump();
-            let mut fields = Vec::new();
-
-            while !matches!(self.peek(), Token::RBrace) {
-                let fname = self.expect_ident()?;
-                fields.push(fname);
-                if matches!(self.peek(), Token::Comma) {
-                    self.bump();
-                }
-            }
-            self.expect(&Token::RBrace)?;
-            return Ok(VectorDef { name, ty, fields });
+            true
+        } else if matches!(self.peek(), Token::LBrace) {
+            self.bump();
+            false
         } else {
-            Err(format!(
-                "expected `{{` after vector type, got {:?}",
+            return Err(format!(
+                "expected `[` or `{{` after vector type, got {:?}",
                 self.peek()
-            ))
+            ));
+        };
+
+        let mut fields = Vec::new();
+        while if bracket {
+            !matches!(self.peek(), Token::RBracket)
+        } else {
+            !matches!(self.peek(), Token::RBrace)
+        } {
+            let fname = self.expect_ident()?;
+            fields.push(fname);
+            if matches!(self.peek(), Token::Comma) {
+                self.bump();
+            }
         }
+        if bracket {
+            self.expect(&Token::RBracket)?;
+        } else {
+            self.expect(&Token::RBrace)?;
+        }
+        Ok(VectorDef { name, ty, fields })
     }
 
     /// Parses function declaration: name, params, optional return type, and body.

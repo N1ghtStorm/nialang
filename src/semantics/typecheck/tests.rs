@@ -225,11 +225,11 @@ let a: i32 = 1;
 #[test]
 fn typecheck_vector_type_annotation_normalizes() {
     let src = r#"
-vector Point i32 {
+vector Point i32 [
     X,
     Y,
     Z,
-}
+]
 
 fn main() i32 {
     let p: Point = Point [X: 1, Y: 2, Z: 3];
@@ -244,7 +244,7 @@ fn main() i32 {
 fn typecheck_rejects_duplicate_type_name_struct_vector() {
     let src = r#"
 struct Point { x: i32 }
-vector Point i32 { X, Y, Z }
+vector Point i32 [ X, Y, Z ]
 fn main() i32 { 0 }
 "#;
     let (structs, enums, fns, vectors) = parse(src);
