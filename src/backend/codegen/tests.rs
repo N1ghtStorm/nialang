@@ -4,9 +4,10 @@ use crate::semantics::typecheck::{check_fn, collect_sigs};
 
 fn emit(src: &str) -> String {
     let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().expect("parse");
-    let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns).expect("sigs");
+    let (struct_map, enum_map, vector_map, fn_sigs) =
+        collect_sigs(&structs, &enums, &vectors, &fns).expect("sigs");
     for f in &fns {
-        check_fn(f, &struct_map, &enum_map, &fn_sigs).expect("typecheck");
+        check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs).expect("typecheck");
     }
     emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
 }

@@ -12,9 +12,10 @@ fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>, Vec<VectorDef>
 
 fn check_all(src: &str) -> Result<(), String> {
     let (structs, enums, fns, vectors) = parse(src);
-    let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns)?;
+    let (struct_map, enum_map, vector_map, fn_sigs) =
+        collect_sigs(&structs, &enums, &vectors, &fns)?;
     for f in &fns {
-        check_fn(f, &struct_map, &enum_map, &fn_sigs)?;
+        check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs)?;
     }
     Ok(())
 }

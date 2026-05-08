@@ -24,9 +24,10 @@ use crate::semantics::typecheck::{check_fn, collect_sigs};
 pub fn compile_to_ll(src: &str) -> Result<String, String> {
     let tokens = tokenize(src);
     let (structs, enums, fns, vectors) = Parser::new(tokens).parse_file()?;
-    let (struct_map, enum_map, fn_sigs) = collect_sigs(&structs, &enums, &fns)?;
+    let (struct_map, enum_map, vector_map, fn_sigs) =
+        collect_sigs(&structs, &enums, &vectors, &fns)?;
     for f in &fns {
-        check_fn(f, &struct_map, &enum_map, &fn_sigs)?;
+        check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs)?;
     }
     Ok(codegen::emit_module(
         &structs, &enums, &vectors, &fns, &fn_sigs,
