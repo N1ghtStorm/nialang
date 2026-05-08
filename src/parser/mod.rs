@@ -822,12 +822,12 @@ impl Parser {
                     Token::Comma => {
                         self.bump();
                     }
-                    Token::RBrace => break,
+                    Token::RBracket => break,
                     _ => return Err(format!("expected , or ], got {:?}", self.peek())),
                 }
             }
         }
-        self.expect(&Token::RBrace)?;
+        self.expect(&Token::RBracket)?;
 
         Ok(Expr::VectorLit {
             name: vector_name,

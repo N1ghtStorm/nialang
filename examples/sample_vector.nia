@@ -1,9 +1,9 @@
 fn main() i32 {
-    let x_basis = Point {
+    let x_basis = Point [
         X: 1,
         Y: 0,
-        Z: 0,
-    };
+        Z: 0
+    ];
     0
 }
 
