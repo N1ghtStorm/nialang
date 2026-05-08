@@ -1,14 +1,14 @@
-fn main() i32 {
-    let x_basis = Point [
-        X: 1,
-        Y: 0,
-        Z: 0
-    ];
-    0
-}
-
 vector Point i32 {
     X,
     Y,
     Z,
+}
+
+fn main() i32 {
+    let p: Point = Point [
+        X: 1,
+        Y: 2,
+        Z: 3
+    ];
+    0
 }

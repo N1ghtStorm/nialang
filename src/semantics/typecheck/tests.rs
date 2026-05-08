@@ -221,3 +221,33 @@ let a: i32 = 1;
     let r = check_all(src);
     assert!(r.is_err(), "{r:?}");
 }
+
+#[test]
+fn typecheck_vector_type_annotation_normalizes() {
+    let src = r#"
+vector Point i32 {
+    X,
+    Y,
+    Z,
+}
+
+fn main() i32 {
+    let p: Point = Point [X: 1, Y: 2, Z: 3];
+    p.X
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_duplicate_type_name_struct_vector() {
+    let src = r#"
+struct Point { x: i32 }
+vector Point i32 { X, Y, Z }
+fn main() i32 { 0 }
+"#;
+    let (structs, enums, fns, vectors) = parse(src);
+    let r = collect_sigs(&structs, &enums, &vectors, &fns);
+    assert!(r.is_err());
+}

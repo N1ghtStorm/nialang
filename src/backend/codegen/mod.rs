@@ -818,6 +818,14 @@ impl<'a> Gen<'a> {
             .map(|i| i as u32)
     }
 
+    fn vector_idx(&self, vname: &str, field: &str) -> Option<u32> {
+        let v = self.vectors.iter().find(|v| v.name == vname)?;
+        v.fields
+            .iter()
+            .position(|n| n == field)
+            .map(|i| i as u32)
+    }
+
     /// Emits one full LLVM function definition.
     ///
     /// ## Strategy
@@ -2041,7 +2049,10 @@ impl<'a> Gen<'a> {
                 let Ty::Struct(sname) = bt else {
                     unreachable!()
                 };
-                let idx = self.struct_idx(&sname, fname).unwrap();
+                let idx = self
+                    .struct_idx(&sname, fname)
+                    .or_else(|| self.vector_idx(&sname, fname))
+                    .unwrap();
                 let llvm_st = format!("%struct.{}", sanitize(&sname));
                 let tmp = self.fresh();
                 writeln!(
@@ -2050,17 +2061,19 @@ impl<'a> Gen<'a> {
                     tmp, llvm_st, bv, idx
                 )
                 .unwrap();
-                let fty = self
-                    .structs
-                    .iter()
-                    .find(|s| s.name == sname)
-                    .unwrap()
-                    .fields
-                    .iter()
-                    .find(|(n, _)| n == fname)
-                    .unwrap()
-                    .1
-                    .clone();
+                let fty = if let Some(sdef) = self.structs.iter().find(|s| s.name == sname) {
+                    sdef.fields
+                        .iter()
+                        .find(|(n, _)| n == fname)
+                        .unwrap()
+                        .1
+                        .clone()
+                } else if let Some(vdef) = self.vectors.iter().find(|v| v.name == sname) {
+                    assert!(vdef.fields.iter().any(|n| n == fname));
+                    vdef.ty.clone()
+                } else {
+                    unreachable!("typechecked field base type")
+                };
                 (fty, format!("%{tmp}"))
             }
             Expr::Index(arr, idx) => {
@@ -2222,6 +2235,8 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_match(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
+        (Ty::Vector(xn, xt), Ty::Vector(yn, yt)) => xn == yn && types_match(xt, yt),
+        (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),
         _ => false,

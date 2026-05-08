@@ -35,9 +35,12 @@ fn normalize_ty(
             } else if structs.contains_key(name) {
                 Ok(Ty::Struct(name.clone()))
             } else if vectors.contains_key(name) {
+                let v = vectors
+                    .get(name)
+                    .expect("checked vector existence before lookup");
                 Ok(Ty::Vector(
                     name.clone(),
-                    Box::new(normalize_ty(t, structs, enums, vectors)?),
+                    Box::new(normalize_ty(&v.ty, structs, enums, vectors)?),
                 ))
             } else {
                 Err(format!("unknown type `{name}`"))
@@ -106,13 +109,16 @@ pub fn collect_sigs(
     }
     let mut vector_map: HashMap<String, VectorDef> = HashMap::new();
     for v in vectors {
+        if struct_map.contains_key(&v.name) {
+            return Err(format!("duplicate type name {}", v.name));
+        }
         if vector_map.insert(v.name.clone(), v.clone()).is_some() {
             return Err(format!("duplicate vector {}", v.name));
         }
     }
     let mut enum_map: HashMap<String, EnumDef> = HashMap::new();
     for e in enums {
-        if struct_map.contains_key(&e.name) {
+        if struct_map.contains_key(&e.name) || vector_map.contains_key(&e.name) {
             return Err(format!("duplicate type name {}", e.name));
         }
         if enum_map.insert(e.name.clone(), e.clone()).is_some() {
@@ -285,6 +291,10 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_equal(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
+        (Ty::Vector(xn, xt), Ty::Vector(yn, yt)) => xn == yn && types_equal(xt, yt),
+        // Vector values are currently represented as struct-shaped aggregates in AST/codegen.
+        // Accept name-equivalence across these forms at semantic boundaries.
+        (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         _ => false,
@@ -932,14 +942,21 @@ fn infer_expr(
             let Ty::Struct(sname) = bt else {
                 return Err("field access on non-struct".into());
             };
-            let def = structs
-                .get(&sname)
-                .ok_or_else(|| format!("unknown struct `{sname}`"))?;
-            def.fields
-                .iter()
-                .find(|(n, _)| n == fname)
-                .map(|(_, t)| t.clone())
-                .ok_or_else(|| format!("struct `{sname}` has no field `{fname}`"))
+            if let Some(def) = structs.get(&sname) {
+                return def
+                    .fields
+                    .iter()
+                    .find(|(n, _)| n == fname)
+                    .map(|(_, t)| t.clone())
+                    .ok_or_else(|| format!("struct `{sname}` has no field `{fname}`"));
+            }
+            if let Some(def) = vectors.get(&sname) {
+                if def.fields.iter().any(|n| n == fname) {
+                    return Ok(def.ty.clone());
+                }
+                return Err(format!("vector `{sname}` has no field `{fname}`"));
+            }
+            Err(format!("unknown struct `{sname}`"))
         }
         Expr::Index(arr, idx) => {
             let at = infer_expr(arr, env, structs, enums, vectors, fns, None)?;

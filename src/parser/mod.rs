@@ -234,8 +234,6 @@ impl Parser {
                 }
             }
             self.expect(&Token::RBrace)?;
-            println!("ty: {:?}", ty);
-            println!("name: {:?}", name);
             return Ok(VectorDef { name, ty, fields });
         } else {
             Err(format!(
