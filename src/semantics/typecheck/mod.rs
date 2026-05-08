@@ -864,33 +864,29 @@ fn infer_expr(
         Expr::VectorLit { name, fields } => {
             let def = vectors
                 .get(name)
-                .ok_or_else(|| format!("unknown struct `{name}`"))?;
+                .ok_or_else(|| format!("unknown vector `{name}`"))?;
             let def_fields = &def.fields;
-            if def.is_tuple {
-                return Err(format!(
-                    "tuple struct `{name}` must use constructor syntax `{name}(...)`"
-                ));
-            }
             for (fname, _) in fields {
-                if !def_fields.iter().any(|(n, _)| n == fname) {
-                    return Err(format!("struct `{name}` has no field `{fname}`"));
+                if !def_fields.iter().any(|n| n == fname) {
+                    return Err(format!("vector `{name}` has no field `{fname}`"));
                 }
             }
             if fields.len() != def_fields.len() {
                 return Err(format!(
-                    "struct `{name}` literal: expected {} fields, got {}",
+                    "vector `{name}` literal: expected {} fields, got {}",
                     def_fields.len(),
                     fields.len()
                 ));
             }
-            for (dfn, dty) in def_fields {
+            for dfn in def_fields {
                 let Some((_, fe)) = fields.iter().find(|(n, _)| n == dfn) else {
-                    return Err(format!("struct `{name}` missing field `{dfn}`"));
+                    return Err(format!("vector `{name}` missing field `{dfn}`"));
                 };
-                let ft = infer_expr(fe, env, structs, enums, vectors, fns, Some(dty))?;
-                if !types_equal(dty, &ft) {
+                let ty = &def.ty;
+                let ft = infer_expr(fe, env, structs, enums, vectors, fns, Some(ty))?;
+                if !types_equal(&def.ty, &ft) {
                     return Err(format!(
-                        "struct `{name}` field `{dfn}`: expected {dty:?}, got {ft:?}"
+                        "vector `{name}` field `{dfn}`: expected {ty:?}, got {ft:?}"
                     ));
                 }
             }
