@@ -37,6 +37,12 @@ pub fn emit_module(
         out.push_str(&struct_type_decl(s));
         out.push('\n');
     }
+    for v in vectors {
+        // Vector literals are lowered as `%struct.<name>` aggregates.
+        // Emit matching concrete LLVM type declarations for all vectors.
+        out.push_str(&vector_type_decl(v, structs));
+        out.push('\n');
+    }
     for e in enums {
         out.push_str(&enum_type_decl(e, structs));
         out.push('\n');
@@ -197,6 +203,16 @@ fn struct_type_decl(s: &StructDef) -> String {
     format!(
         "%struct.{} = type {{ {} }}",
         sanitize(&s.name),
+        parts.join(", ")
+    )
+}
+
+fn vector_type_decl(v: &VectorDef, structs: &[StructDef]) -> String {
+    let elem = llvm_ty(&v.ty, structs);
+    let parts = vec![elem; v.fields.len()];
+    format!(
+        "%struct.{} = type {{ {} }}",
+        sanitize(&v.name),
         parts.join(", ")
     )
 }
