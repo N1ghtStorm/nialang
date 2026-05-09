@@ -101,6 +101,9 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::Usize => "usize".into(),
         Ty::U128 => "u128".into(),
         Ty::Bool => "bool".into(),
+        Ty::F16 => "f16".into(),
+        Ty::F32 => "f32".into(),
+        Ty::F64 => "f64".into(),
         Ty::Array(inner, n) => format!("[{}; {}]", ty_print_label(inner), n),
         Ty::Struct(n) => n.clone(),
         Ty::Enum(n) => n.clone(),
@@ -246,6 +249,9 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Usize => "i64".into(),
         Ty::U128 => "i128".into(),
         Ty::Bool => "i1".into(),
+        Ty::F16 => "half".into(),
+        Ty::F32 => "float".into(),
+        Ty::F64 => "double".into(),
         Ty::Array(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
         Ty::Struct(n) => format!("%struct.{}", sanitize(n)),
         Ty::Enum(n) => format!("%enum.{}", sanitize(n)),
@@ -261,6 +267,10 @@ fn int_ty_signed(t: &Ty) -> bool {
         t,
         Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64 | Ty::I128 | Ty::Isize
     )
+}
+
+fn is_float_ty(t: &Ty) -> bool {
+    matches!(t, Ty::F16 | Ty::F32 | Ty::F64)
 }
 
 /// Emits LLVM `%struct.Name = type { ... }` declaration.
@@ -630,6 +640,55 @@ impl<'a> Gen<'a> {
                     p, addr
                 )
                 .unwrap();
+            }
+            Ty::F16 | Ty::F32 | Ty::F64 => {
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.f64", 4)
+                } else {
+                    ("nialang.std.fmt.f64.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
+                match ty {
+                    Ty::F64 => {
+                        writeln!(
+                            self.out,
+                            "  call i32 (ptr, ...) @printf(ptr {}, double {})",
+                            p, v
+                        )
+                        .unwrap();
+                    }
+                    Ty::F32 => {
+                        let e = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = fpext float {} to double",
+                            e, v
+                        )
+                        .unwrap();
+                        writeln!(
+                            self.out,
+                            "  call i32 (ptr, ...) @printf(ptr {}, double %{})",
+                            p, e
+                        )
+                        .unwrap();
+                    }
+                    Ty::F16 => {
+                        let e = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = fpext half {} to double",
+                            e, v
+                        )
+                        .unwrap();
+                        writeln!(
+                            self.out,
+                            "  call i32 (ptr, ...) @printf(ptr {}, double %{})",
+                            p, e
+                        )
+                        .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
             }
             Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Vector(_, _) => {
                 unreachable!("typechecked")
@@ -1259,6 +1318,9 @@ impl<'a> Gen<'a> {
                     Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 %{}, 1", iv_next, iv).unwrap();
                     }
+                    Ty::F16 | Ty::F32 | Ty::F64 => {
+                        unreachable!("typechecked for range")
+                    }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
@@ -1287,6 +1349,19 @@ impl<'a> Gen<'a> {
     ) -> (Ty, String) {
         match e {
             Expr::Int(n) => match hint {
+                Some(Ty::F16 | Ty::F32 | Ty::F64) => {
+                    let tmp = self.fresh();
+                    let t = hint.unwrap().clone();
+                    writeln!(
+                        self.out,
+                        "  %{} = sitofp i32 {} to {}",
+                        tmp,
+                        n,
+                        llvm_ty(&t, self.structs)
+                    )
+                    .unwrap();
+                    (t, format!("%{tmp}"))
+                }
                 Some(Ty::I8) => (Ty::I8, format!("{n}")),
                 Some(Ty::U8) => (Ty::U8, format!("{n}")),
                 Some(Ty::I16) => (Ty::I16, format!("{n}")),
@@ -1308,6 +1383,41 @@ impl<'a> Gen<'a> {
                     unreachable!("typechecked")
                 }
             },
+            Expr::Float(v) => {
+                let lit = format!("{:.17e}", v);
+                let target = hint.cloned().unwrap_or(Ty::F64);
+                let dbl = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = fadd double {}, 0.0",
+                    dbl, lit
+                )
+                .unwrap();
+                match target {
+                    Ty::F64 => (Ty::F64, format!("%{dbl}")),
+                    Ty::F32 => {
+                        let tmp = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = fptrunc double %{} to float",
+                            tmp, dbl
+                        )
+                        .unwrap();
+                        (Ty::F32, format!("%{tmp}"))
+                    }
+                    Ty::F16 => {
+                        let tmp = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = fptrunc double %{} to half",
+                            tmp, dbl
+                        )
+                        .unwrap();
+                        (Ty::F16, format!("%{tmp}"))
+                    }
+                    _ => unreachable!("typechecked float literal"),
+                }
+            }
             Expr::Bool(b) => (Ty::Bool, if *b { "1".into() } else { "0".into() }),
             Expr::Ident(name) => {
                 let (ty, ptr) = locals.get(name).expect("checked var");
@@ -1340,6 +1450,10 @@ impl<'a> Gen<'a> {
                     }
                     Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = sub i128 0, {}", tmp, v).unwrap();
+                    }
+                    Ty::F16 | Ty::F32 | Ty::F64 => {
+                        let ll = llvm_ty(&t, self.structs);
+                        writeln!(self.out, "  %{} = fneg {} {}", tmp, ll, v).unwrap();
                     }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
@@ -1374,6 +1488,15 @@ impl<'a> Gen<'a> {
                     Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = add i128 {}, {}", tmp, vl, vr).unwrap();
                     }
+                    Ty::F16 | Ty::F32 | Ty::F64 => {
+                        let ll = llvm_ty(&tl, self.structs);
+                        writeln!(
+                            self.out,
+                            "  %{} = fadd {} {}, {}",
+                            tmp, ll, vl, vr
+                        )
+                        .unwrap();
+                    }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
@@ -1407,6 +1530,15 @@ impl<'a> Gen<'a> {
                     Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = sub i128 {}, {}", tmp, vl, vr).unwrap();
                     }
+                    Ty::F16 | Ty::F32 | Ty::F64 => {
+                        let ll = llvm_ty(&tl, self.structs);
+                        writeln!(
+                            self.out,
+                            "  %{} = fsub {} {}, {}",
+                            tmp, ll, vl, vr
+                        )
+                        .unwrap();
+                    }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
@@ -1439,6 +1571,15 @@ impl<'a> Gen<'a> {
                     }
                     Ty::I128 | Ty::U128 => {
                         writeln!(self.out, "  %{} = mul i128 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::F16 | Ty::F32 | Ty::F64 => {
+                        let ll = llvm_ty(&tl, self.structs);
+                        writeln!(
+                            self.out,
+                            "  %{} = fmul {} {}, {}",
+                            tmp, ll, vl, vr
+                        )
+                        .unwrap();
                     }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
@@ -1494,6 +1635,15 @@ impl<'a> Gen<'a> {
                             writeln!(self.out, "  %{} = udiv i128 {}, {}", tmp, vl, vr).unwrap();
                         }
                     }
+                    Ty::F16 | Ty::F32 | Ty::F64 => {
+                        let ll = llvm_ty(&tl, self.structs);
+                        writeln!(
+                            self.out,
+                            "  %{} = fdiv {} {}, {}",
+                            tmp, ll, vl, vr
+                        )
+                        .unwrap();
+                    }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
@@ -1515,50 +1665,72 @@ impl<'a> Gen<'a> {
                 let (tl, vl) = self.emit_expr(l, locals, None);
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
                 assert!(types_match(&tl, &tr));
-                let pred = match e {
-                    Expr::Eq(_, _) => "eq",
-                    Expr::Ne(_, _) => "ne",
-                    Expr::Lt(_, _) => {
-                        if int_ty_signed(&tl) {
-                            "slt"
-                        } else {
-                            "ult"
-                        }
-                    }
-                    Expr::Le(_, _) => {
-                        if int_ty_signed(&tl) {
-                            "sle"
-                        } else {
-                            "ule"
-                        }
-                    }
-                    Expr::Gt(_, _) => {
-                        if int_ty_signed(&tl) {
-                            "sgt"
-                        } else {
-                            "ugt"
-                        }
-                    }
-                    Expr::Ge(_, _) => {
-                        if int_ty_signed(&tl) {
-                            "sge"
-                        } else {
-                            "uge"
-                        }
-                    }
-                    _ => unreachable!(),
-                };
                 let tmp = self.fresh();
-                writeln!(
-                    self.out,
-                    "  %{} = icmp {} {} {}, {}",
-                    tmp,
-                    pred,
-                    llvm_ty(&tl, self.structs),
-                    vl,
-                    vr
-                )
-                .unwrap();
+                if is_float_ty(&tl) {
+                    let pred = match e {
+                        Expr::Eq(_, _) => "oeq",
+                        Expr::Ne(_, _) => "one",
+                        Expr::Lt(_, _) => "olt",
+                        Expr::Le(_, _) => "ole",
+                        Expr::Gt(_, _) => "ogt",
+                        Expr::Ge(_, _) => "oge",
+                        _ => unreachable!(),
+                    };
+                    writeln!(
+                        self.out,
+                        "  %{} = fcmp {} {} {}, {}",
+                        tmp,
+                        pred,
+                        llvm_ty(&tl, self.structs),
+                        vl,
+                        vr
+                    )
+                    .unwrap();
+                } else {
+                    let pred = match e {
+                        Expr::Eq(_, _) => "eq",
+                        Expr::Ne(_, _) => "ne",
+                        Expr::Lt(_, _) => {
+                            if int_ty_signed(&tl) {
+                                "slt"
+                            } else {
+                                "ult"
+                            }
+                        }
+                        Expr::Le(_, _) => {
+                            if int_ty_signed(&tl) {
+                                "sle"
+                            } else {
+                                "ule"
+                            }
+                        }
+                        Expr::Gt(_, _) => {
+                            if int_ty_signed(&tl) {
+                                "sgt"
+                            } else {
+                                "ugt"
+                            }
+                        }
+                        Expr::Ge(_, _) => {
+                            if int_ty_signed(&tl) {
+                                "sge"
+                            } else {
+                                "uge"
+                            }
+                        }
+                        _ => unreachable!(),
+                    };
+                    writeln!(
+                        self.out,
+                        "  %{} = icmp {} {} {}, {}",
+                        tmp,
+                        pred,
+                        llvm_ty(&tl, self.structs),
+                        vl,
+                        vr
+                    )
+                    .unwrap();
+                }
                 (Ty::Bool, format!("%{tmp}"))
             }
             Expr::Call { name, args } => {
@@ -2342,6 +2514,9 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::Isize, Ty::Isize)
         | (Ty::Usize, Ty::Usize)
         | (Ty::U128, Ty::U128)
+        | (Ty::F16, Ty::F16)
+        | (Ty::F32, Ty::F32)
+        | (Ty::F64, Ty::F64)
         | (Ty::Bool, Ty::Bool)
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_match(ax, bx),

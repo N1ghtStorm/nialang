@@ -18,6 +18,7 @@ pub enum Token {
     Return,
     Ident(String),
     Int(i128),
+    Float(f64),
     Bool(bool),
     Colon,
     Comma,
@@ -60,6 +61,9 @@ pub enum Token {
     TyUsize,
     TyU128,
     TyBool,
+    TyF16,
+    TyF32,
+    TyF64,
     Eof,
 }
 
@@ -188,13 +192,35 @@ impl<'a> Lexer<'a> {
             }
             '>' => Token::Gt,
             '0'..='9' => {
-                let mut n = (c as u8 - b'0') as i128;
-                while let Some(&d @ '0'..='9') = self.src.peek() {
-                    self.src.next();
-                    n = n
-                        .saturating_mul(10)
-                        .saturating_add((d as u8 - b'0') as i128);
+                let mut buf = String::new();
+                buf.push(c);
+                while let Some(&_d @ '0'..='9') = self.src.peek() {
+                    buf.push(self.src.next().unwrap());
                 }
+                if matches!(self.src.peek(), Some(&'.')) {
+                    let mut ahead = self.src.clone();
+                    ahead.next();
+                    if matches!(ahead.peek(), Some(&'.')) {
+                        let n = buf.parse::<i128>().unwrap_or(0);
+                        return Token::Int(n);
+                    }
+                    buf.push(self.src.next().unwrap());
+                    while let Some(&_d @ '0'..='9') = self.src.peek() {
+                        buf.push(self.src.next().unwrap());
+                    }
+                    if matches!(self.src.peek(), Some('e') | Some('E')) {
+                        buf.push(self.src.next().unwrap());
+                        if matches!(self.src.peek(), Some('+') | Some('-')) {
+                            buf.push(self.src.next().unwrap());
+                        }
+                        while let Some(&_d @ '0'..='9') = self.src.peek() {
+                            buf.push(self.src.next().unwrap());
+                        }
+                    }
+                    let v = buf.parse::<f64>().unwrap_or(0.0);
+                    return Token::Float(v);
+                }
+                let n = buf.parse::<i128>().unwrap_or(0);
                 Token::Int(n)
             }
             'a'..='z' | 'A'..='Z' | '_' => {
@@ -235,6 +261,9 @@ impl<'a> Lexer<'a> {
                     "usize" => Token::TyUsize,
                     "u128" => Token::TyU128,
                     "bool" => Token::TyBool,
+                    "f16" => Token::TyF16,
+                    "f32" => Token::TyF32,
+                    "f64" => Token::TyF64,
                     _ => Token::Ident(s),
                 }
             }

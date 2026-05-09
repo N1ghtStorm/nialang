@@ -118,6 +118,24 @@ fn parse_fixture_print_enum() {
 }
 
 #[test]
+fn parse_fixture_ok_floats() {
+    parse_ok(include_str!("../../examples/tests/ok_floats.nia"));
+}
+
+#[test]
+fn parse_float_fn_param_and_return() {
+    let src = r#"
+fn scale(x: f32, k: f64) f64 {
+    1.0
+}
+fn main() i32 {
+    0
+}
+"#;
+    parse_ok(src);
+}
+
+#[test]
 fn parse_array_type_and_literal() {
     parse_ok(include_str!("../../examples/tests/ok_array.nia"));
 }

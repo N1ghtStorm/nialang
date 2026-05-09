@@ -1,0 +1,16 @@
+fn main() i32 {
+    let a: f16 = 1.0;
+    let b0: f32 = 2.0;
+    let b: f32 = b0 + 1.0;
+    let c: f64 = 3.0e0;
+    let d: f64 = 4.0;
+    let e: f32 = 10;
+    let f: bool = a < 2.0;
+    println(a);
+    println(b);
+    println(c);
+    println(d);
+    println(e);
+    println(f);
+    0
+}

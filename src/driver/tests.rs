@@ -15,6 +15,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_tuple_struct.nia",
         "examples/tests/ok_struct_named.nia",
         "examples/tests/ok_print_primitives.nia",
+        "examples/tests/ok_floats.nia",
         "examples/tests/ok_pointers.nia",
         "examples/tests/ok_nested_if.nia",
         "examples/tests/ok_tuple_named_mix.nia",

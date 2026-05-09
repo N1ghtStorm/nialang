@@ -288,6 +288,9 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::Usize, Ty::Usize)
         | (Ty::U128, Ty::U128)
         | (Ty::Bool, Ty::Bool)
+        | (Ty::F16, Ty::F16)
+        | (Ty::F32, Ty::F32)
+        | (Ty::F64, Ty::F64)
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_equal(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
@@ -299,6 +302,10 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         _ => false,
     }
+}
+
+fn is_float_ty(t: &Ty) -> bool {
+    matches!(t, Ty::F16 | Ty::F32 | Ty::F64)
 }
 
 /// Returns whether type is one of supported integer primitives.
@@ -321,7 +328,7 @@ fn is_integer_ty(t: &Ty) -> bool {
 
 /// Returns whether type is a primitive printable scalar (`int` or `bool`).
 fn is_primitive_ty(t: &Ty) -> bool {
-    is_integer_ty(t) || matches!(t, Ty::Bool)
+    is_integer_ty(t) || is_float_ty(t) || matches!(t, Ty::Bool)
 }
 
 /// Public printable-type predicate used for builtin `println`.
@@ -420,9 +427,6 @@ fn infer_arithmetic_bin(
     if matches!(tl, Ty::Ptr(_)) {
         return Err(format!("cannot use `{op}` on a pointer value"));
     }
-    if !is_integer_ty(&tl) {
-        return Err(format!("cannot use `{op}` on non-integer type {tl:?}"));
-    }
     let tr = infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?;
     if matches!(tr, Ty::Unit) {
         return Err(format!("void value on the right of `{op}`"));
@@ -430,11 +434,17 @@ fn infer_arithmetic_bin(
     if matches!(tr, Ty::Ptr(_)) {
         return Err(format!("cannot use `{op}` on a pointer value"));
     }
-    if !is_integer_ty(&tr) {
-        return Err(format!("cannot use `{op}` on non-integer type {tr:?}"));
-    }
     if !types_equal(&tl, &tr) {
         return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
+    }
+    if is_float_ty(&tl) {
+        return Ok(tl);
+    }
+    if !is_integer_ty(&tl) {
+        return Err(format!("cannot use `{op}` on non-integer type {tl:?}"));
+    }
+    if !is_integer_ty(&tr) {
+        return Err(format!("cannot use `{op}` on non-integer type {tr:?}"));
     }
     Ok(tl)
 }
@@ -456,12 +466,17 @@ fn infer_comparison_bin(
         return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
     }
     if order_only {
-        if !is_integer_ty(&tl) {
-            return Err(format!("cannot use `{op}` on non-integer type {tl:?}"));
+        if !is_integer_ty(&tl) && !is_float_ty(&tl) {
+            return Err(format!(
+                "cannot use `{op}` on non-integer/non-float type {tl:?}"
+            ));
         }
-    } else if !(is_integer_ty(&tl) || matches!(tl, Ty::Bool | Ty::Ptr(_))) {
+    } else if !(is_integer_ty(&tl)
+        || is_float_ty(&tl)
+        || matches!(tl, Ty::Bool | Ty::Ptr(_)))
+    {
         return Err(format!(
-            "cannot use `{op}` on type {tl:?}; supported: integers, bool, pointers"
+            "cannot use `{op}` on type {tl:?}; supported: integers, floats, bool, pointers"
         ));
     }
     Ok(Ty::Bool)
@@ -480,6 +495,7 @@ fn infer_expr(
         Expr::Int(_) => match hint {
             None => Ok(Ty::I32),
             Some(other) if is_integer_ty(other) => Ok(other.clone()),
+            Some(other) if is_float_ty(other) => Ok(other.clone()),
             Some(Ty::Bool) => Err("integer literal cannot satisfy bool".into()),
             Some(Ty::Struct(name)) => Err(format!(
                 "integer literal cannot satisfy struct type `{name}`"
@@ -488,6 +504,21 @@ fn infer_expr(
             Some(Ty::Ptr(_)) => Err("integer literal cannot satisfy a pointer type".into()),
             Some(Ty::Array(_, _)) => Err("integer literal cannot satisfy array type".into()),
             Some(other) => Err(format!("integer literal cannot satisfy {other:?}")),
+        },
+        Expr::Float(_) => match hint {
+            None => Ok(Ty::F64),
+            Some(other) if is_float_ty(other) => Ok(other.clone()),
+            Some(Ty::Bool) => Err("float literal cannot satisfy bool".into()),
+            Some(Ty::Struct(name)) => Err(format!(
+                "float literal cannot satisfy struct type `{name}`"
+            )),
+            Some(Ty::Unit) => Err("float literal cannot satisfy `()`".into()),
+            Some(Ty::Ptr(_)) => Err("float literal cannot satisfy a pointer type".into()),
+            Some(Ty::Array(_, _)) => Err("float literal cannot satisfy array type".into()),
+            Some(other) if is_integer_ty(other) => Err(format!(
+                "float literal cannot satisfy integer type {other:?}"
+            )),
+            Some(other) => Err(format!("float literal cannot satisfy {other:?}")),
         },
         Expr::Bool(_) => match hint {
             Some(Ty::Bool) | None => Ok(Ty::Bool),
@@ -505,8 +536,8 @@ fn infer_expr(
             if matches!(t, Ty::Ptr(_)) {
                 return Err("cannot negate a pointer value".into());
             }
-            if !is_integer_ty(&t) {
-                return Err(format!("cannot negate non-integer type {t:?}"));
+            if !is_integer_ty(&t) && !is_float_ty(&t) {
+                return Err(format!("cannot negate non-numeric type {t:?}"));
             }
             Ok(t)
         }
@@ -515,7 +546,10 @@ fn infer_expr(
         Expr::Mul(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "*"),
         Expr::Div(l, r) => {
             if matches!(r.as_ref(), Expr::Int(0)) {
-                return Err("division by zero".into());
+                let tl = infer_expr(l, env, structs, enums, vectors, fns, None)?;
+                if is_integer_ty(&tl) {
+                    return Err("division by zero".into());
+                }
             }
             infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "/")
         }

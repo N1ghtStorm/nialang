@@ -1,0 +1,34 @@
+// Floating-point widths (LLVM: half, float, double).
+fn main() i32 {
+    let h: f16 = 1.25;
+    let s: f32 = 3.14159;
+    let d: f64 = 2.99792458e8;
+    let q: f64 = 1.0000000001;
+
+    // Integer literals coerce to the annotated float type.
+    let from_int: f32 = 42;
+
+    let sum_h: f16 = h + 0.25;
+    let prod_s: f32 = s * 2.0;
+    let ratio: f64 = d / 1.0e8;
+    let diff_q: f64 = q - 1.0;
+
+    let neg_s: f32 = -s;
+    let cmp_ok: bool = h < 2.0;
+    let eq_d: bool = d == d;
+
+    println(h);
+    println(s);
+    println(d);
+    println(q);
+    println(from_int);
+    println(sum_h);
+    println(prod_s);
+    println(ratio);
+    println(diff_q);
+    println(neg_s);
+    println(cmp_ok);
+    println(eq_d);
+
+    0
+}

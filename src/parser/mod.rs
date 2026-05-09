@@ -496,6 +496,9 @@ impl Parser {
             Token::TyUsize => Ok(Ty::Usize),
             Token::TyU128 => Ok(Ty::U128),
             Token::TyBool => Ok(Ty::Bool),
+            Token::TyF16 => Ok(Ty::F16),
+            Token::TyF32 => Ok(Ty::F32),
+            Token::TyF64 => Ok(Ty::F64),
             Token::Ident(n) => Ok(Ty::Struct(n)),
             other => Err(format!("expected type, got {other:?}")),
         }
@@ -702,6 +705,7 @@ impl Parser {
             }
             _ => match self.bump() {
                 Token::Int(n) => Ok(Expr::Int(n)),
+                Token::Float(x) => Ok(Expr::Float(x)),
                 Token::Bool(b) => Ok(Expr::Bool(b)),
                 Token::Ident(name) => {
                     if matches!(self.peek(), Token::DoubleColon) {

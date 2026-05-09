@@ -119,6 +119,59 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_float_arithmetic_emits_farith() {
+    let src = r#"
+fn main() i32 {
+    let a: f64 = 1.0 + 2.0;
+    let b: f64 = a * 3.0;
+    let c: f64 = b / 2.0;
+    let d: f64 = c - 1.0;
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("fadd double"), "IR:\n{ll}");
+    assert!(ll.contains("fmul double"), "IR:\n{ll}");
+    assert!(ll.contains("fdiv double"), "IR:\n{ll}");
+    assert!(ll.contains("fsub double"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_float_comparison_emits_fcmp() {
+    let src = r#"
+fn main() i32 {
+    let a: f64 = 1.0;
+    let b: bool = a < 2.0;
+    if b {
+        1
+    }
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("fcmp olt double"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_float_neg_emits_fneg() {
+    let src = r#"
+fn main() i32 {
+    let a: f64 = 1.0;
+    let b: f64 = -a;
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("fneg double"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_float_fixture_contains_half() {
+    let ll = emit(include_str!("../../../examples/tests/ok_floats.nia"));
+    assert!(ll.contains("half"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_println_array_uses_array_text_constants() {
     let ll = emit(include_str!("../../../examples/tests/ok_print_array.nia"));
     assert!(ll.contains("nialang.std.txt.arr_open"), "IR:\n{ll}");

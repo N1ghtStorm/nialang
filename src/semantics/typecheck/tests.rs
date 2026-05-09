@@ -51,11 +51,57 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_while.nia"),
         include_str!("../../../examples/tests/ok_loop.nia"),
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
+        include_str!("../../../examples/tests/ok_floats.nia"),
     ];
     for src in ok_files {
         let r = check_all(src);
         assert!(r.is_ok(), "{r:?}");
     }
+}
+
+#[test]
+fn typecheck_float_ops_and_comparisons_ok() {
+    let src = r#"
+fn main() i32 {
+    let a: f64 = 1.0 + 2.0;
+    let b: f64 = a * 3.0;
+    let c: f64 = b / 2.0;
+    let d: f64 = c - 1.0;
+    let _e: bool = d < 5.0;
+    let f: f64 = -d;
+    let _g: bool = f == f;
+    let h: f32 = 1.0;
+    let _i: f32 = h + 2.0;
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_float_literal_binop_assigned_to_narrower_float() {
+    let src = r#"
+fn main() i32 {
+    let x: f32 = 1.0 + 2.0;
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_add_f32_and_i32() {
+    let src = r#"
+fn main() i32 {
+    let x: f32 = 1.0;
+    let y: i32 = 2;
+    x + y
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
 }
 
 #[test]

@@ -13,6 +13,7 @@
 ///
 /// Variant groups:
 /// - integer primitives (`I8`..`U128`) and `Bool`,
+/// - float primitives (`F16`, `F32`, `F64`, same names as Rust),
 /// - composites (`Array`, `Struct`, `Enum`),
 /// - indirection (`Ptr`),
 /// - effect/absence type (`Unit`).
@@ -38,6 +39,9 @@ pub enum Ty {
     Usize,
     U128,
     Bool,
+    F16,
+    F32,
+    F64,
     Array(Box<Ty>, usize),
     Struct(String),
     Enum(String),
@@ -154,9 +158,11 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Int(i128),
+    /// Float literal; stored as `f64` and coerced in codegen to the target float type.
+    Float(f64),
     Bool(bool),
     Ident(String),
-    /// Unary `-` (integer only).
+    /// Unary `-` (integer and float).
     Neg(Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
