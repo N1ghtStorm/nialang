@@ -464,7 +464,7 @@ fn infer_arithmetic_bin(
     Ok(tl)
 }
 
-/// `*` : scalar × scalar, or scalar multiplication `vector × T` / `T × vector` where `T` is the axis type.
+/// `*` : scalar × scalar; scalar × vector / vector × scalar (axis type `T`); component-wise vector × vector (same type).
 fn infer_mul_bin(
     l: &Expr,
     r: &Expr,
@@ -497,16 +497,18 @@ fn infer_mul_bin(
             return Err("cannot use `*` on a pointer value".into());
         }
         if is_nia_vector_ty(&tr, vectors) {
-            return Err(
-                "cannot multiply two vectors with `*` (use scalar × vector with matching axis type)"
-                    .into(),
-            );
+            if types_equal(&tl, &tr) {
+                return Ok(tl);
+            }
+            return Err(format!(
+                "`*` on vectors requires the same vector type; got {tl:?} and {tr:?}"
+            ));
         }
         if types_equal(&tr, et) {
             return Ok(tl);
         }
         return Err(format!(
-            "vector `*` expects scalar of axis type {et:?}, got {tr:?}"
+            "vector `*` expects scalar of axis type {et:?} or a vector of the same type, got {tr:?}"
         ));
     }
 
@@ -533,16 +535,18 @@ fn infer_mul_bin(
             return Err("cannot use `*` on a pointer value".into());
         }
         if is_nia_vector_ty(&tl, vectors) {
-            return Err(
-                "cannot multiply two vectors with `*` (use scalar × vector with matching axis type)"
-                    .into(),
-            );
+            if types_equal(&tl, &tr) {
+                return Ok(tr);
+            }
+            return Err(format!(
+                "`*` on vectors requires the same vector type; got {tl:?} and {tr:?}"
+            ));
         }
         if types_equal(&tl, et) {
             return Ok(tr);
         }
         return Err(format!(
-            "vector `*` expects scalar of axis type {et:?}, got {tl:?}"
+            "vector `*` expects scalar of axis type {et:?} or a vector of the same type, got {tl:?}"
         ));
     }
 

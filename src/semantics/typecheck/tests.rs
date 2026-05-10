@@ -345,14 +345,31 @@ fn main() i32 {
 }
 
 #[test]
-fn typecheck_vector_mul_rejected() {
+fn typecheck_vector_mul_ok_same_type() {
     let src = r#"
 vector V2 i32 [ X, Y ]
 
 fn main() i32 {
     let u = V2 [X: 1, Y: 2];
     let v = V2 [X: 3, Y: 4];
-    u * v
+    let p = u * v;
+    p.X + p.Y
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_vector_mul_rejects_different_vector_types() {
+    let src = r#"
+vector A i32 [ X, Y ]
+vector B i32 [ X, Y ]
+
+fn main() i32 {
+    let a = A [X: 1, Y: 2];
+    let b = B [X: 3, Y: 4];
+    a * b
 }
 "#;
     assert!(check_all(src).is_err());
