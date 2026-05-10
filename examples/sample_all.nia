@@ -1,0 +1,189 @@
+// Kitchen-sink sample for NiaLang: one runnable file with the core language.
+
+struct Pair(i32, i32)
+
+struct Point {
+    x: i32,
+    y: i32
+}
+
+struct Bag {
+    pair: Pair,
+    point: Point,
+    data: [u8; 4]
+}
+
+enum Command {
+    Noop,
+    Add(i32, i32),
+    Move { dx: i32, dy: i32 },
+}
+
+vector Vec2 i32 [
+    X,
+    Y,
+]
+
+fn no_return_value(n: i32) {
+    println(n);
+}
+
+fn add(a: i32, b: i32) i32 {
+    a + b
+}
+
+fn command_score(cmd: Command) i32 {
+    match cmd {
+        Command::Noop => 0,
+        Command::Add(a, b) => a + b,
+        Command::Move { dx, dy } => dx * 10 + dy,
+    }
+}
+
+fn reverse4(arr: [u8; 4]) [u8; 4] {
+    for i in 0..len(arr) / 2 {
+        let tmp: u8 = arr[i];
+        arr[i] = arr[len(arr) - 1 - i];
+        arr[len(arr) - 1 - i] = tmp;
+    }
+    arr
+}
+
+fn mutate_array_through_ptr(arr_ptr: &[u8; 4]) {
+    (*arr_ptr)[1] = 99;
+}
+
+fn sum_until_three() i32 {
+    let i: i32 = 0;
+    let total: i32 = 0;
+
+    while i < 3 {
+        total += i;
+        i += 1;
+    }
+
+    total
+}
+
+fn main() i32 {
+    no_return_value(100);
+
+    let i8v: i8 = 1;
+    let u8v: u8 = 2;
+    let i16v: i16 = 3;
+    let u16v: u16 = 4;
+    let i32v: i32 = add(5, 6);
+    let i64v: i64 = 7;
+    let u64v: u64 = 8;
+    let i128v: i128 = 9;
+    let isizev: isize = 10;
+    let usizev: usize = 11;
+    let u128v: u128 = 12;
+    let flag: bool = true;
+    let half: f16 = 1.5;
+    let single: f32 = 2.5;
+    let double: f64 = 3.5e0;
+
+    println(i8v);
+    println(u8v);
+    println(i16v);
+    println(u16v);
+    println(i32v);
+    println(i64v);
+    println(u64v);
+    println(i128v);
+    println(isizev);
+    println(usizev);
+    println(u128v);
+    println(flag);
+    println(half + 0.5);
+    println(single * 2.0);
+    println(double / 2.0);
+
+    let pair = Pair(13, 21);
+    let point = Point { x: 8, y: 5 };
+    println(pair);
+    println(pair.0);
+    println(point);
+    println(point.x + point.y);
+
+    let arr: [u8; 4] = [4, 3, 2, 1];
+    println(arr);
+    println(arr[2]);
+    arr[2] = 42;
+    println(arr);
+    println(len(arr));
+    println(reverse4(arr));
+    mutate_array_through_ptr(&arr);
+    println(arr);
+
+    let bag = Bag {
+        pair: pair,
+        point: point,
+        data: arr
+    };
+    println(bag);
+    println(bag.pair.1);
+    println(bag.point.x);
+    println(bag.data[1]);
+
+    println(Command::Noop);
+    println(Command::Add(2, 3));
+    println(Command::Move { dx: 7, dy: 9 });
+    println(command_score(Command::Noop));
+    println(command_score(Command::Add(2, 3)));
+    println(command_score(Command::Move { dx: 7, dy: 9 }));
+
+    if flag {
+        println(1);
+    }
+
+    for n in 0..3 {
+        println(n);
+    }
+
+    println(sum_until_three());
+
+    loop {
+        println(777);
+        break;
+    }
+
+    let counter: i32 = 20;
+    counter += 5;
+    counter -= 3;
+    counter *= 2;
+    counter /= 4;
+    println(counter);
+
+    let stack_value: i32 = 55;
+    let stack_ptr: &i32 = &stack_value;
+    println(stack_ptr);
+    println(*stack_ptr);
+
+    let heap_ptr: &i32 = alloc(123);
+    println(*heap_ptr);
+    *heap_ptr = 124;
+    println(*heap_ptr);
+    let heap_ptr2: &i32 = realloc(heap_ptr, 222);
+    println(*heap_ptr2);
+    dealloc(heap_ptr2);
+
+    let pair_ptr: &Pair = alloc(Pair(1, 2));
+    println((*pair_ptr).0);
+    dealloc(pair_ptr);
+
+    let u: Vec2 = Vec2 [X: 3, Y: 4];
+    let v: Vec2 = Vec2 [X: 1, Y: 2];
+    let scale: i32 = 3;
+    println(u);
+    println(u.X);
+    println(u + v);
+    println(u - v);
+    println(u * v);
+    println(u * scale);
+    println(scale * v);
+    println(u @ v);
+
+    0
+}

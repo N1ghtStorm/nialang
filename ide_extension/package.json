@@ -68,12 +68,13 @@
           },
           {
             "scope": "variable.other.nia",
-            "settings": { "foreground": "#E06C75" }
+            "settings": { "foreground": "#ABB2BF" }
           },
           {
             "scope": [
               "constant.language.boolean.nia",
-              "constant.numeric.integer.nia"
+              "constant.numeric.integer.nia",
+              "constant.numeric.float.nia"
             ],
             "settings": { "foreground": "#D19A66" }
           },
