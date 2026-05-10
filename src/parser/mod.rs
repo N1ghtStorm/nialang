@@ -590,6 +590,11 @@ impl Parser {
                     let right = self.parse_unary()?;
                     left = Expr::Mul(Box::new(left), Box::new(right));
                 }
+                Token::At => {
+                    self.bump();
+                    let right = self.parse_unary()?;
+                    left = Expr::VecDot(Box::new(left), Box::new(right));
+                }
                 Token::Slash => {
                     self.bump();
                     let right = self.parse_unary()?;

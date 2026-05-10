@@ -167,6 +167,8 @@ pub enum Expr {
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
+    /// Dot product `u @ v` (same `vector` type; result has the axis scalar type).
+    VecDot(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
     Eq(Box<Expr>, Box<Expr>),
     Ne(Box<Expr>, Box<Expr>),

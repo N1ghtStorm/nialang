@@ -1341,6 +1341,45 @@ impl<'a> Gen<'a> {
         format!("%{loadt}")
     }
 
+    /// Dot product of two `vector` values (sum of per-axis products).
+    fn emit_nia_vector_dot(&mut self, vname: &str, vl: &str, vr: &str) -> (Ty, String) {
+        let vdef = self
+            .vectors
+            .iter()
+            .find(|v| v.name == vname)
+            .expect("typechecked vector dot");
+        let elem_ty = vdef.ty.clone();
+        let llvm_st = format!("%struct.{}", sanitize(vname));
+        assert!(
+            !vdef.fields.is_empty(),
+            "vector type must have at least one axis"
+        );
+        let mut acc: Option<String> = None;
+        for i in 0..vdef.fields.len() {
+            let ai = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                ai, llvm_st, vl, i
+            )
+            .unwrap();
+            let bi = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                bi, llvm_st, vr, i
+            )
+            .unwrap();
+            let pi = self.emit_scalar_vec_mul_pair(&elem_ty, &ai, &bi);
+            acc = Some(match acc {
+                None => pi,
+                Some(prev) => self.emit_scalar_vec_binop(&elem_ty, &prev, &pi, true),
+            });
+        }
+        let id = acc.expect("non-empty vector");
+        (elem_ty, format!("%{id}"))
+    }
+
     /// Emits one full LLVM function definition.
     ///
     /// ## Strategy
@@ -1967,6 +2006,16 @@ impl<'a> Gen<'a> {
                     }
                 }
                 (tl, format!("%{tmp}"))
+            }
+            Expr::VecDot(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, None);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let vname = self
+                    .as_nia_vector_name(&tl)
+                    .expect("typechecked `@` on vectors")
+                    .to_string();
+                self.emit_nia_vector_dot(&vname, &vl, &vr)
             }
             Expr::Div(l, r) => {
                 let (tl, vl) = self.emit_expr(l, locals, None);

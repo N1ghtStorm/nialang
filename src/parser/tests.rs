@@ -186,6 +186,19 @@ fn parse_fixture_array_len() {
 }
 
 #[test]
+fn parse_vector_dot_expression() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+fn main() i32 {
+    let u = V2 [X: 1, Y: 2];
+    let v = V2 [X: 3, Y: 4];
+    u @ v
+}
+"#;
+    parse_ok(src);
+}
+
+#[test]
 fn parse_comparison_expression() {
     let src = r#"
 fn main() i32 {
