@@ -437,6 +437,21 @@ fn infer_arithmetic_bin(
     if !types_equal(&tl, &tr) {
         return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
     }
+    // Component-wise linear algebra on fixed-size `vector` types (`vector Name Ty [ ... ]`).
+    if is_nia_vector_ty(&tl, vectors) {
+        let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
+        if !is_integer_ty(et) && !is_float_ty(et) {
+            return Err(format!(
+                "cannot use `{op}` on vectors with non-numeric axis type {et:?}"
+            ));
+        }
+        if op == "+" || op == "-" {
+            return Ok(tl);
+        }
+        return Err(format!(
+            "cannot use `{op}` on vector values (only `+` and `-` are supported)"
+        ));
+    }
     if is_float_ty(&tl) {
         return Ok(tl);
     }
@@ -447,6 +462,23 @@ fn infer_arithmetic_bin(
         return Err(format!("cannot use `{op}` on non-integer type {tr:?}"));
     }
     Ok(tl)
+}
+
+/// True if `t` is a user `vector` declaration (surface syntax uses `Struct(name)` for values).
+fn is_nia_vector_ty(t: &Ty, vectors: &HashMap<String, VectorDef>) -> bool {
+    match t {
+        Ty::Struct(n) => vectors.contains_key(n),
+        Ty::Vector(n, _) => vectors.contains_key(n),
+        _ => false,
+    }
+}
+
+fn nia_vector_elem_ty<'a>(t: &'a Ty, vectors: &'a HashMap<String, VectorDef>) -> Option<&'a Ty> {
+    match t {
+        Ty::Struct(n) => vectors.get(n).map(|v| &v.ty),
+        Ty::Vector(_, e) => Some(e.as_ref()),
+        _ => None,
+    }
 }
 
 fn infer_comparison_bin(

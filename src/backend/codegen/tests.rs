@@ -27,6 +27,58 @@ fn codegen_contains_tuple_struct_ops() {
 }
 
 #[test]
+fn codegen_vector_add_emits_extract_and_component_add() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let u = V2 [X: 1, Y: 2];
+    let v = V2 [X: 10, Y: 20];
+    let w = u + v;
+    w.X + w.Y
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("extractvalue %struct.V2"));
+    assert!(ll.contains("add nsw i32"));
+    assert!(ll.contains("insertvalue %struct.V2"));
+}
+
+#[test]
+fn codegen_vector_sub_emits_component_sub() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let u = V2 [X: 10, Y: 20];
+    let v = V2 [X: 1, Y: 2];
+    let w = u - v;
+    w.X + w.Y
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("sub nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.V2"));
+}
+
+#[test]
+fn codegen_vector_float_add_emits_fadd() {
+    let src = r#"
+vector Vf f64 [ X, Y ]
+
+fn main() i32 {
+    let u = Vf [X: 1.0, Y: 2.0];
+    let v = Vf [X: 3.0, Y: 4.0];
+    let _w = u + v;
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("fadd double"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.Vf"));
+}
+
+#[test]
 fn codegen_contains_print_for_primitives() {
     let ll = emit(include_str!(
         "../../../examples/tests/ok_print_primitives.nia"

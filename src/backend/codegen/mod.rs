@@ -996,6 +996,127 @@ impl<'a> Gen<'a> {
             .map(|i| i as u32)
     }
 
+    /// If `t` is a declared `vector Name ...`, returns `Name`.
+    fn as_nia_vector_name(&self, t: &Ty) -> Option<&str> {
+        match t {
+            Ty::Struct(s) => self
+                .vectors
+                .iter()
+                .find(|v| v.name == *s)
+                .map(|v| v.name.as_str()),
+            Ty::Vector(n, _) => self
+                .vectors
+                .iter()
+                .find(|v| v.name == *n)
+                .map(|v| v.name.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Single-axis `+` / `-` for vector components (matches scalar `Expr::Add` / `Sub`).
+    fn emit_scalar_vec_binop(&mut self, elem_ty: &Ty, a: &str, b: &str, is_add: bool) -> String {
+        let out = self.fresh();
+        match elem_ty {
+            Ty::I8 | Ty::U8 => {
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i8 %{}, %{}", out, op, a, b).unwrap();
+            }
+            Ty::I16 | Ty::U16 => {
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i16 %{}, %{}", out, op, a, b).unwrap();
+            }
+            Ty::I32 => {
+                let op = if is_add { "add nsw" } else { "sub nsw" };
+                writeln!(self.out, "  %{} = {} i32 %{}, %{}", out, op, a, b).unwrap();
+            }
+            Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i64 %{}, %{}", out, op, a, b).unwrap();
+            }
+            Ty::I128 | Ty::U128 => {
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i128 %{}, %{}", out, op, a, b).unwrap();
+            }
+            Ty::F16 | Ty::F32 | Ty::F64 => {
+                let op = if is_add { "fadd" } else { "fsub" };
+                let ll = llvm_ty(elem_ty, self.structs);
+                writeln!(
+                    self.out,
+                    "  %{} = {} {} %{}, %{}",
+                    out, op, ll, a, b
+                )
+                .unwrap();
+            }
+            _ => unreachable!("typechecked vector axis"),
+        }
+        out
+    }
+
+    /// Component-wise vector sum/difference (`vector` decl aggregates).
+    fn emit_nia_vector_binop(
+        &mut self,
+        vname: &str,
+        vl: &str,
+        vr: &str,
+        is_add: bool,
+    ) -> String {
+        let vdef = self
+            .vectors
+            .iter()
+            .find(|v| v.name == vname)
+            .expect("typechecked vector binop");
+        let llvm_st = format!("%struct.{}", sanitize(vname));
+        let elem_ty = &vdef.ty;
+        let mut agg = "poison".to_string();
+        for i in 0..vdef.fields.len() {
+            let ai = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                ai, llvm_st, vl, i
+            )
+            .unwrap();
+            let bi = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                bi, llvm_st, vr, i
+            )
+            .unwrap();
+            let ci = self.emit_scalar_vec_binop(elem_ty, &ai, &bi, is_add);
+            let ci_v = format!("%{}", ci);
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} {}, {}",
+                tmp,
+                llvm_st,
+                agg,
+                llvm_ty(elem_ty, self.structs),
+                ci_v,
+                i
+            )
+            .unwrap();
+            agg = format!("%{tmp}");
+        }
+        let slot = self.fresh();
+        writeln!(self.out, "  %{} = alloca {}", slot, llvm_st).unwrap();
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            llvm_st, agg, slot
+        )
+        .unwrap();
+        let loadt = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr %{}",
+            loadt, llvm_st, slot
+        )
+        .unwrap();
+        format!("%{loadt}")
+    }
+
     /// Emits one full LLVM function definition.
     ///
     /// ## Strategy
@@ -1471,6 +1592,10 @@ impl<'a> Gen<'a> {
                 let (tl, vl) = self.emit_expr(l, locals, None);
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
                 assert!(types_match(&tl, &tr));
+                if let Some(vname) = self.as_nia_vector_name(&tl).map(|s| s.to_string()) {
+                    let out_v = self.emit_nia_vector_binop(&vname, &vl, &vr, true);
+                    return (tl, out_v);
+                }
                 let tmp = self.fresh();
                 match tl {
                     Ty::I8 | Ty::U8 => {
@@ -1513,6 +1638,10 @@ impl<'a> Gen<'a> {
                 let (tl, vl) = self.emit_expr(l, locals, None);
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
                 assert!(types_match(&tl, &tr));
+                if let Some(vname) = self.as_nia_vector_name(&tl).map(|s| s.to_string()) {
+                    let out_v = self.emit_nia_vector_binop(&vname, &vl, &vr, false);
+                    return (tl, out_v);
+                }
                 let tmp = self.fresh();
                 match tl {
                     Ty::I8 | Ty::U8 => {
