@@ -437,6 +437,21 @@ fn infer_arithmetic_bin(
     if !types_equal(&tl, &tr) {
         return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
     }
+    // Component-wise linear algebra on fixed-size `vector` types (`vector Name Ty [ ... ]`).
+    if is_nia_vector_ty(&tl, vectors) {
+        let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
+        if !is_integer_ty(et) && !is_float_ty(et) {
+            return Err(format!(
+                "cannot use `{op}` on vectors with non-numeric axis type {et:?}"
+            ));
+        }
+        if op == "+" || op == "-" {
+            return Ok(tl);
+        }
+        return Err(format!(
+            "cannot use `{op}` on vector values (only `+` and `-` are supported)"
+        ));
+    }
     if is_float_ty(&tl) {
         return Ok(tl);
     }
@@ -447,6 +462,108 @@ fn infer_arithmetic_bin(
         return Err(format!("cannot use `{op}` on non-integer type {tr:?}"));
     }
     Ok(tl)
+}
+
+/// `*` : scalar × scalar, or scalar multiplication `vector × T` / `T × vector` where `T` is the axis type.
+fn infer_mul_bin(
+    l: &Expr,
+    r: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    let tl = infer_expr(l, env, structs, enums, vectors, fns, None)?;
+    if matches!(tl, Ty::Unit) {
+        return Err("void value on the left of `*`".into());
+    }
+    if matches!(tl, Ty::Ptr(_)) {
+        return Err("cannot use `*` on a pointer value".into());
+    }
+
+    if is_nia_vector_ty(&tl, vectors) {
+        let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
+        if !is_integer_ty(et) && !is_float_ty(et) {
+            return Err(format!(
+                "cannot use `*` on vectors with non-numeric axis type {et:?}"
+            ));
+        }
+        let tr = infer_expr(r, env, structs, enums, vectors, fns, Some(et))?;
+        if matches!(tr, Ty::Unit) {
+            return Err("void value on the right of `*`".into());
+        }
+        if matches!(tr, Ty::Ptr(_)) {
+            return Err("cannot use `*` on a pointer value".into());
+        }
+        if is_nia_vector_ty(&tr, vectors) {
+            return Err(
+                "cannot multiply two vectors with `*` (use scalar × vector with matching axis type)"
+                    .into(),
+            );
+        }
+        if types_equal(&tr, et) {
+            return Ok(tl);
+        }
+        return Err(format!(
+            "vector `*` expects scalar of axis type {et:?}, got {tr:?}"
+        ));
+    }
+
+    let tr = infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?;
+    if matches!(tr, Ty::Unit) {
+        return Err("void value on the right of `*`".into());
+    }
+    if matches!(tr, Ty::Ptr(_)) {
+        return Err("cannot use `*` on a pointer value".into());
+    }
+
+    if is_nia_vector_ty(&tr, vectors) {
+        let et = nia_vector_elem_ty(&tr, vectors).expect("vector type must exist in map");
+        if !is_integer_ty(et) && !is_float_ty(et) {
+            return Err(format!(
+                "cannot use `*` on vectors with non-numeric axis type {et:?}"
+            ));
+        }
+        let tl = infer_expr(l, env, structs, enums, vectors, fns, Some(et))?;
+        if matches!(tl, Ty::Unit) {
+            return Err("void value on the left of `*`".into());
+        }
+        if matches!(tl, Ty::Ptr(_)) {
+            return Err("cannot use `*` on a pointer value".into());
+        }
+        if is_nia_vector_ty(&tl, vectors) {
+            return Err(
+                "cannot multiply two vectors with `*` (use scalar × vector with matching axis type)"
+                    .into(),
+            );
+        }
+        if types_equal(&tl, et) {
+            return Ok(tr);
+        }
+        return Err(format!(
+            "vector `*` expects scalar of axis type {et:?}, got {tl:?}"
+        ));
+    }
+
+    infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "*")
+}
+
+/// True if `t` is a user `vector` declaration (surface syntax uses `Struct(name)` for values).
+fn is_nia_vector_ty(t: &Ty, vectors: &HashMap<String, VectorDef>) -> bool {
+    match t {
+        Ty::Struct(n) => vectors.contains_key(n),
+        Ty::Vector(n, _) => vectors.contains_key(n),
+        _ => false,
+    }
+}
+
+fn nia_vector_elem_ty<'a>(t: &'a Ty, vectors: &'a HashMap<String, VectorDef>) -> Option<&'a Ty> {
+    match t {
+        Ty::Struct(n) => vectors.get(n).map(|v| &v.ty),
+        Ty::Vector(_, e) => Some(e.as_ref()),
+        _ => None,
+    }
 }
 
 fn infer_comparison_bin(
@@ -543,7 +660,7 @@ fn infer_expr(
         }
         Expr::Add(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "+"),
         Expr::Sub(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "-"),
-        Expr::Mul(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "*"),
+        Expr::Mul(l, r) => infer_mul_bin(l, r, env, structs, enums, vectors, fns),
         Expr::Div(l, r) => {
             if matches!(r.as_ref(), Expr::Int(0)) {
                 let tl = infer_expr(l, env, structs, enums, vectors, fns, None)?;

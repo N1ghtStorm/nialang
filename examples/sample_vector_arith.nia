@@ -1,0 +1,33 @@
+// Fixed-size vectors: component-wise + and - (same vector type on both sides);
+// scalar multiplication `v * s` / `s * v` where `s` has the same type as each axis.
+
+vector Vec2 i32 [
+    X,
+    Y,
+]
+
+vector Vec3 i32 [
+    X,
+    Y,
+    Z,
+]
+
+fn main() i32 {
+    let u = Vec2 [X: 3, Y: 4];
+    let v = Vec2 [X: 1, Y: 2];
+    let sum2 = u + v;
+    let diff2 = u - v;
+    println(sum2);
+    println(diff2);
+
+    let a = Vec3 [X: 10, Y: 20, Z: 30];
+    let b = Vec3 [X: 1, Y: 2, Z: 3];
+    println(a + b);
+    println(a - b);
+
+    let s = 3;
+    println(Vec2 [X: 1, Y: 2] * s);
+    println(s * Vec3 [X: 10, Y: 20, Z: 30]);
+
+    0
+}

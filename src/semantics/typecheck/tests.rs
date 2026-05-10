@@ -297,3 +297,110 @@ fn main() i32 { 0 }
     let r = collect_sigs(&structs, &enums, &vectors, &fns);
     assert!(r.is_err());
 }
+
+#[test]
+fn typecheck_vector_add_sub_ok_same_type() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let u = V2 [X: 1, Y: 2];
+    let v = V2 [X: 3, Y: 4];
+    let s = u + v;
+    let d = s - u;
+    d.X + d.Y
+}
+"#;
+    assert!(check_all(src).is_ok());
+}
+
+#[test]
+fn typecheck_vector_scalar_mul_ok_both_orders() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let v = V2 [X: 2, Y: 3];
+    let a = v * 4;
+    let b = 10 * v;
+    a.X + a.Y + b.X + b.Y
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_vector_scalar_mul_wrong_scalar_ty_rejected() {
+    let src = r#"
+vector V2 i64 [ X, Y ]
+
+fn main() i32 {
+    let v = V2 [X: 1, Y: 2];
+    let k: i32 = 4;
+    v * k
+}
+"#;
+    assert!(check_all(src).is_err());
+}
+
+#[test]
+fn typecheck_vector_mul_rejected() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let u = V2 [X: 1, Y: 2];
+    let v = V2 [X: 3, Y: 4];
+    u * v
+}
+"#;
+    assert!(check_all(src).is_err());
+}
+
+#[test]
+fn typecheck_vector_add_rejects_different_vector_types() {
+    let src = r#"
+vector A i32 [ X, Y ]
+vector B i32 [ X, Y ]
+
+fn main() i32 {
+    let a = A [X: 1, Y: 2];
+    let b = B [X: 3, Y: 4];
+    a + b
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "expected mismatch, got {r:?}");
+}
+
+#[test]
+fn typecheck_vector_float_add_sub_ok() {
+    let src = r#"
+vector Vf f64 [ X, Y ]
+
+fn main() i32 {
+    let u = Vf [X: 1.0, Y: 2.0];
+    let v = Vf [X: 3.0, Y: 4.0];
+    let w = u + v;
+    let _z = w - u;
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_vector_div_rejected() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let u = V2 [X: 1, Y: 2];
+    let v = V2 [X: 3, Y: 4];
+    u / v
+}
+"#;
+    assert!(check_all(src).is_err());
+}
