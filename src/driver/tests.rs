@@ -70,6 +70,53 @@ fn compile_multiple_error_fixtures() {
 }
 
 #[test]
+fn compile_error_includes_problem_line_for_type_errors() {
+    let src = r#"
+fn main() i32 {
+    if 1 {
+        return 0
+    }
+    0
+}
+"#;
+    let err = crate::driver::pipeline::compile_to_ll(src).expect_err("type error");
+    assert!(err.contains("type error in function `main`"), "{err}");
+    assert!(err.contains("--> line 3"), "{err}");
+    assert!(err.contains("if 1 {"), "{err}");
+}
+
+#[test]
+fn compile_error_includes_source_line_for_parse_errors() {
+    let src = r#"
+fn main() i32 {
+    let x = 1
+    let y = 2;
+    0
+}
+"#;
+    let err = crate::driver::pipeline::compile_to_ll(src).expect_err("parse error");
+    assert!(err.contains("parse error:"), "{err}");
+    assert!(err.contains("|"), "{err}");
+    assert!(err.contains("let"), "{err}");
+}
+
+#[test]
+fn compile_error_reports_unsupported_characters_at_their_line() {
+    let src = r#"
+vector Vec2 i32 [
+    X,ыввыв
+    Y,
+]
+
+fn main() i32 { 0 }
+"#;
+    let err = crate::driver::pipeline::compile_to_ll(src).expect_err("lex error");
+    assert!(err.contains("lex error: unsupported character"), "{err}");
+    assert!(err.contains("--> line 3"), "{err}");
+    assert!(err.contains("X,ыввыв"), "{err}");
+}
+
+#[test]
 /// Verifies that relative fixture paths are discoverable by path resolver logic.
 fn resolve_input_path_works_for_existing_relative_fixture() {
     let p = std::path::PathBuf::from("examples/tests/ok_minimal.nia");
