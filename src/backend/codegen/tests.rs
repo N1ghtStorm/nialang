@@ -36,6 +36,41 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_vector_mul_emits_component_mul() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let u = V2 [X: 2, Y: 3];
+    let v = V2 [X: 4, Y: 5];
+    let w = u * v;
+    w.X + w.Y
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.V2"));
+    assert!(ll.contains("insertvalue %struct.V2"));
+}
+
+#[test]
+fn codegen_vector_dot_emits_mul_and_add() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let u = V2 [X: 2, Y: 3];
+    let v = V2 [X: 4, Y: 5];
+    u @ v
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.V2"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_contains_tuple_struct_ops() {
     let ll = emit(include_str!("../../../examples/tests/ok_tuple_struct.nia"));
     assert!(ll.contains("insertvalue %struct.Foo"));

@@ -35,6 +35,8 @@ pub enum Token {
     MinusEq,
     Star,
     StarEq,
+    /// `@` — vector dot product (only between two vectors in the typechecker).
+    At,
     Slash,
     SlashEq,
     Amp,
@@ -157,6 +159,7 @@ impl<'a> Lexer<'a> {
                 Token::StarEq
             }
             '*' => Token::Star,
+            '@' => Token::At,
             '/' if matches!(self.src.peek(), Some('=')) => {
                 self.src.next();
                 Token::SlashEq

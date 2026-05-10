@@ -146,9 +146,22 @@ fn lex_for_in_and_dotdot() {
 }
 
 #[test]
+fn lex_at_vector_dot() {
+    let toks = collect("u @ v");
+    assert_eq!(
+        toks,
+        vec![
+            Token::Ident("u".into()),
+            Token::At,
+            Token::Ident("v".into()),
+        ]
+    );
+}
+
+#[test]
 /// Verifies punctuation/operator tokens and comment skipping behavior.
 fn lex_symbols_and_comments() {
-    let src = "a: b, c; ( ) { } [ ] + * & . = // comment\n42";
+    let src = "a: b, c; ( ) { } [ ] + * @ & . = // comment\n42";
     let toks = collect(src);
     assert_eq!(
         toks,
@@ -167,6 +180,7 @@ fn lex_symbols_and_comments() {
             Token::RBracket,
             Token::Plus,
             Token::Star,
+            Token::At,
             Token::Amp,
             Token::Dot,
             Token::Eq,
@@ -187,11 +201,10 @@ fn lex_multiline_comments_whitespace_and_identifiers() {
 }
 
 #[test]
-/// Documents current fallback behavior for unknown characters (`@` => EOF).
+/// Documents current fallback behavior for unknown characters (`#` stops tokenization).
 fn lex_unknown_char_stops_token_stream() {
-    let src = "let x = 1 @ 2";
+    let src = "let x = 1 # 2";
     let toks = collect(src);
-    // Current lexer behavior returns EOF on unknown char.
     assert_eq!(
         toks,
         vec![Token::Let, Token::Ident("x".into()), Token::Eq, Token::Int(1)]

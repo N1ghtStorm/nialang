@@ -1052,6 +1052,44 @@ impl<'a> Gen<'a> {
         out
     }
 
+    /// Per-axis `*` between two vector components (matches scalar `Expr::Mul` on integers/floats).
+    fn emit_scalar_vec_mul_pair(&mut self, elem_ty: &Ty, a: &str, b: &str) -> String {
+        let out = self.fresh();
+        match elem_ty {
+            Ty::I8 | Ty::U8 => {
+                writeln!(self.out, "  %{} = mul i8 %{}, %{}", out, a, b).unwrap();
+            }
+            Ty::I16 | Ty::U16 => {
+                writeln!(self.out, "  %{} = mul i16 %{}, %{}", out, a, b).unwrap();
+            }
+            Ty::I32 => {
+                writeln!(
+                    self.out,
+                    "  %{} = mul nsw i32 %{}, %{}",
+                    out, a, b
+                )
+                .unwrap();
+            }
+            Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                writeln!(self.out, "  %{} = mul i64 %{}, %{}", out, a, b).unwrap();
+            }
+            Ty::I128 | Ty::U128 => {
+                writeln!(self.out, "  %{} = mul i128 %{}, %{}", out, a, b).unwrap();
+            }
+            Ty::F16 | Ty::F32 | Ty::F64 => {
+                let ll = llvm_ty(elem_ty, self.structs);
+                writeln!(
+                    self.out,
+                    "  %{} = fmul {} %{}, %{}",
+                    out, ll, a, b
+                )
+                .unwrap();
+            }
+            _ => unreachable!("typechecked vector axis"),
+        }
+        out
+    }
+
     fn emit_scalar_vec_mul(&mut self, elem_ty: &Ty, comp: &str, scalar_ssa: &str) -> String {
         let out = self.fresh();
         match elem_ty {
@@ -1237,6 +1275,109 @@ impl<'a> Gen<'a> {
         )
         .unwrap();
         format!("%{loadt}")
+    }
+
+    /// Component-wise vector product (`vector` decl aggregates).
+    fn emit_nia_vector_component_mul(
+        &mut self,
+        vname: &str,
+        vl: &str,
+        vr: &str,
+    ) -> String {
+        let vdef = self
+            .vectors
+            .iter()
+            .find(|v| v.name == vname)
+            .expect("typechecked vector component mul");
+        let llvm_st = format!("%struct.{}", sanitize(vname));
+        let elem_ty = &vdef.ty;
+        let mut agg = "poison".to_string();
+        for i in 0..vdef.fields.len() {
+            let ai = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                ai, llvm_st, vl, i
+            )
+            .unwrap();
+            let bi = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                bi, llvm_st, vr, i
+            )
+            .unwrap();
+            let ci = self.emit_scalar_vec_mul_pair(elem_ty, &ai, &bi);
+            let ci_v = format!("%{}", ci);
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} {}, {}",
+                tmp,
+                llvm_st,
+                agg,
+                llvm_ty(elem_ty, self.structs),
+                ci_v,
+                i
+            )
+            .unwrap();
+            agg = format!("%{tmp}");
+        }
+        let slot = self.fresh();
+        writeln!(self.out, "  %{} = alloca {}", slot, llvm_st).unwrap();
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            llvm_st, agg, slot
+        )
+        .unwrap();
+        let loadt = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr %{}",
+            loadt, llvm_st, slot
+        )
+        .unwrap();
+        format!("%{loadt}")
+    }
+
+    /// Dot product of two `vector` values (sum of per-axis products).
+    fn emit_nia_vector_dot(&mut self, vname: &str, vl: &str, vr: &str) -> (Ty, String) {
+        let vdef = self
+            .vectors
+            .iter()
+            .find(|v| v.name == vname)
+            .expect("typechecked vector dot");
+        let elem_ty = vdef.ty.clone();
+        let llvm_st = format!("%struct.{}", sanitize(vname));
+        assert!(
+            !vdef.fields.is_empty(),
+            "vector type must have at least one axis"
+        );
+        let mut acc: Option<String> = None;
+        for i in 0..vdef.fields.len() {
+            let ai = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                ai, llvm_st, vl, i
+            )
+            .unwrap();
+            let bi = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                bi, llvm_st, vr, i
+            )
+            .unwrap();
+            let pi = self.emit_scalar_vec_mul_pair(&elem_ty, &ai, &bi);
+            acc = Some(match acc {
+                None => pi,
+                Some(prev) => self.emit_scalar_vec_binop(&elem_ty, &prev, &pi, true),
+            });
+        }
+        let id = acc.expect("non-empty vector");
+        (elem_ty, format!("%{id}"))
     }
 
     /// Emits one full LLVM function definition.
@@ -1807,14 +1948,23 @@ impl<'a> Gen<'a> {
                 if let Some(vname) = self.as_nia_vector_name(&tl).map(|s| s.to_string()) {
                     let et = self.vector_axis_ty_cloned(&vname);
                     let (tr, vr) = self.emit_expr(r, locals, Some(&et));
-                    debug_assert!(!self.as_nia_vector_name(&tr).is_some());
+                    if self.as_nia_vector_name(&tr).is_some() && types_match(&tl, &tr) {
+                        let out_v =
+                            self.emit_nia_vector_component_mul(&vname, &vl, &vr);
+                        return (tl, out_v);
+                    }
                     let out_v = self.emit_nia_vector_scalar_mul(&vname, &vl, &vr);
                     return (tl, out_v);
                 }
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
                 if let Some(vname) = self.as_nia_vector_name(&tr).map(|s| s.to_string()) {
                     let et = self.vector_axis_ty_cloned(&vname);
-                    let (_t, vl2) = self.emit_expr(l, locals, Some(&et));
+                    let (tl2, vl2) = self.emit_expr(l, locals, Some(&et));
+                    if self.as_nia_vector_name(&tl2).is_some() && types_match(&tl2, &tr) {
+                        let out_v =
+                            self.emit_nia_vector_component_mul(&vname, &vl2, &vr);
+                        return (tr, out_v);
+                    }
                     let out_v = self.emit_nia_vector_scalar_mul(&vname, &vr, &vl2);
                     return (tr, out_v);
                 }
@@ -1856,6 +2006,16 @@ impl<'a> Gen<'a> {
                     }
                 }
                 (tl, format!("%{tmp}"))
+            }
+            Expr::VecDot(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, None);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let vname = self
+                    .as_nia_vector_name(&tl)
+                    .expect("typechecked `@` on vectors")
+                    .to_string();
+                self.emit_nia_vector_dot(&vname, &vl, &vr)
             }
             Expr::Div(l, r) => {
                 let (tl, vl) = self.emit_expr(l, locals, None);

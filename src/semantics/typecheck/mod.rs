@@ -464,7 +464,7 @@ fn infer_arithmetic_bin(
     Ok(tl)
 }
 
-/// `*` : scalar × scalar, or scalar multiplication `vector × T` / `T × vector` where `T` is the axis type.
+/// `*` : scalar × scalar; scalar × vector / vector × scalar (axis type `T`); component-wise vector × vector (same type).
 fn infer_mul_bin(
     l: &Expr,
     r: &Expr,
@@ -497,16 +497,18 @@ fn infer_mul_bin(
             return Err("cannot use `*` on a pointer value".into());
         }
         if is_nia_vector_ty(&tr, vectors) {
-            return Err(
-                "cannot multiply two vectors with `*` (use scalar × vector with matching axis type)"
-                    .into(),
-            );
+            if types_equal(&tl, &tr) {
+                return Ok(tl);
+            }
+            return Err(format!(
+                "`*` on vectors requires the same vector type; got {tl:?} and {tr:?}"
+            ));
         }
         if types_equal(&tr, et) {
             return Ok(tl);
         }
         return Err(format!(
-            "vector `*` expects scalar of axis type {et:?}, got {tr:?}"
+            "vector `*` expects scalar of axis type {et:?} or a vector of the same type, got {tr:?}"
         ));
     }
 
@@ -533,20 +535,65 @@ fn infer_mul_bin(
             return Err("cannot use `*` on a pointer value".into());
         }
         if is_nia_vector_ty(&tl, vectors) {
-            return Err(
-                "cannot multiply two vectors with `*` (use scalar × vector with matching axis type)"
-                    .into(),
-            );
+            if types_equal(&tl, &tr) {
+                return Ok(tr);
+            }
+            return Err(format!(
+                "`*` on vectors requires the same vector type; got {tl:?} and {tr:?}"
+            ));
         }
         if types_equal(&tl, et) {
             return Ok(tr);
         }
         return Err(format!(
-            "vector `*` expects scalar of axis type {et:?}, got {tl:?}"
+            "vector `*` expects scalar of axis type {et:?} or a vector of the same type, got {tl:?}"
         ));
     }
 
     infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "*")
+}
+
+/// `u @ v` — dot product; same `vector` type on both sides; result type is the axis type.
+fn infer_vec_dot_bin(
+    l: &Expr,
+    r: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    let tl = infer_expr(l, env, structs, enums, vectors, fns, None)?;
+    if matches!(tl, Ty::Unit) {
+        return Err("void value on the left of `@`".into());
+    }
+    if matches!(tl, Ty::Ptr(_)) {
+        return Err("cannot use `@` on a pointer value".into());
+    }
+    if !is_nia_vector_ty(&tl, vectors) {
+        return Err(format!(
+            "`@` (vector dot product) requires a vector on the left, got {tl:?}"
+        ));
+    }
+    let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
+    if !is_integer_ty(et) && !is_float_ty(et) {
+        return Err(format!(
+            "cannot use `@` on vectors with non-numeric axis type {et:?}"
+        ));
+    }
+    let tr = infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?;
+    if matches!(tr, Ty::Unit) {
+        return Err("void value on the right of `@`".into());
+    }
+    if matches!(tr, Ty::Ptr(_)) {
+        return Err("cannot use `@` on a pointer value".into());
+    }
+    if !types_equal(&tl, &tr) {
+        return Err(format!(
+            "`@` operands must be the same vector type; got {tl:?} and {tr:?}"
+        ));
+    }
+    Ok(et.clone())
 }
 
 /// True if `t` is a user `vector` declaration (surface syntax uses `Struct(name)` for values).
@@ -661,6 +708,7 @@ fn infer_expr(
         Expr::Add(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "+"),
         Expr::Sub(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "-"),
         Expr::Mul(l, r) => infer_mul_bin(l, r, env, structs, enums, vectors, fns),
+        Expr::VecDot(l, r) => infer_vec_dot_bin(l, r, env, structs, enums, vectors, fns),
         Expr::Div(l, r) => {
             if matches!(r.as_ref(), Expr::Int(0)) {
                 let tl = infer_expr(l, env, structs, enums, vectors, fns, None)?;

@@ -87,7 +87,7 @@
           "name": "keyword.operator.namespace.nia"
         },
         {
-          "match": "[=+*/-]",
+          "match": "[=+*/@-]",
           "name": "keyword.operator.nia"
         },
         {
