@@ -315,6 +315,36 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_vector_scalar_mul_ok_both_orders() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let v = V2 [X: 2, Y: 3];
+    let a = v * 4;
+    let b = 10 * v;
+    a.X + a.Y + b.X + b.Y
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_vector_scalar_mul_wrong_scalar_ty_rejected() {
+    let src = r#"
+vector V2 i64 [ X, Y ]
+
+fn main() i32 {
+    let v = V2 [X: 1, Y: 2];
+    let k: i32 = 4;
+    v * k
+}
+"#;
+    assert!(check_all(src).is_err());
+}
+
+#[test]
 fn typecheck_vector_mul_rejected() {
     let src = r#"
 vector V2 i32 [ X, Y ]

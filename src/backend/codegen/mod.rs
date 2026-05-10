@@ -1052,6 +1052,128 @@ impl<'a> Gen<'a> {
         out
     }
 
+    fn emit_scalar_vec_mul(&mut self, elem_ty: &Ty, comp: &str, scalar_ssa: &str) -> String {
+        let out = self.fresh();
+        match elem_ty {
+            Ty::I8 | Ty::U8 => {
+                writeln!(
+                    self.out,
+                    "  %{} = mul i8 %{}, {}",
+                    out, comp, scalar_ssa
+                )
+                .unwrap();
+            }
+            Ty::I16 | Ty::U16 => {
+                writeln!(
+                    self.out,
+                    "  %{} = mul i16 %{}, {}",
+                    out, comp, scalar_ssa
+                )
+                .unwrap();
+            }
+            Ty::I32 => {
+                writeln!(
+                    self.out,
+                    "  %{} = mul nsw i32 %{}, {}",
+                    out, comp, scalar_ssa
+                )
+                .unwrap();
+            }
+            Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
+                writeln!(
+                    self.out,
+                    "  %{} = mul i64 %{}, {}",
+                    out, comp, scalar_ssa
+                )
+                .unwrap();
+            }
+            Ty::I128 | Ty::U128 => {
+                writeln!(
+                    self.out,
+                    "  %{} = mul i128 %{}, {}",
+                    out, comp, scalar_ssa
+                )
+                .unwrap();
+            }
+            Ty::F16 | Ty::F32 | Ty::F64 => {
+                let ll = llvm_ty(elem_ty, self.structs);
+                writeln!(
+                    self.out,
+                    "  %{} = fmul {} %{}, {}",
+                    out, ll, comp, scalar_ssa
+                )
+                .unwrap();
+            }
+            _ => unreachable!("typechecked vector axis"),
+        }
+        out
+    }
+
+    fn vector_axis_ty_cloned(&self, vname: &str) -> Ty {
+        self.vectors
+            .iter()
+            .find(|v| v.name == vname)
+            .expect("vector decl")
+            .ty
+            .clone()
+    }
+
+    fn emit_nia_vector_scalar_mul(
+        &mut self,
+        vname: &str,
+        vec_val: &str,
+        scalar_ssa: &str,
+    ) -> String {
+        let vdef = self
+            .vectors
+            .iter()
+            .find(|v| v.name == vname)
+            .expect("typechecked vector scalar mul");
+        let llvm_st = format!("%struct.{}", sanitize(vname));
+        let elem_ty = &vdef.ty;
+        let mut agg = "poison".to_string();
+        for i in 0..vdef.fields.len() {
+            let ai = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                ai, llvm_st, vec_val, i
+            )
+            .unwrap();
+            let ci = self.emit_scalar_vec_mul(elem_ty, &ai, scalar_ssa);
+            let ci_v = format!("%{}", ci);
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} {}, {}",
+                tmp,
+                llvm_st,
+                agg,
+                llvm_ty(elem_ty, self.structs),
+                ci_v,
+                i
+            )
+            .unwrap();
+            agg = format!("%{tmp}");
+        }
+        let slot = self.fresh();
+        writeln!(self.out, "  %{} = alloca {}", slot, llvm_st).unwrap();
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            llvm_st, agg, slot
+        )
+        .unwrap();
+        let loadt = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr %{}",
+            loadt, llvm_st, slot
+        )
+        .unwrap();
+        format!("%{loadt}")
+    }
+
     /// Component-wise vector sum/difference (`vector` decl aggregates).
     fn emit_nia_vector_binop(
         &mut self,
@@ -1682,7 +1804,20 @@ impl<'a> Gen<'a> {
             }
             Expr::Mul(l, r) => {
                 let (tl, vl) = self.emit_expr(l, locals, None);
+                if let Some(vname) = self.as_nia_vector_name(&tl).map(|s| s.to_string()) {
+                    let et = self.vector_axis_ty_cloned(&vname);
+                    let (tr, vr) = self.emit_expr(r, locals, Some(&et));
+                    debug_assert!(!self.as_nia_vector_name(&tr).is_some());
+                    let out_v = self.emit_nia_vector_scalar_mul(&vname, &vl, &vr);
+                    return (tl, out_v);
+                }
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                if let Some(vname) = self.as_nia_vector_name(&tr).map(|s| s.to_string()) {
+                    let et = self.vector_axis_ty_cloned(&vname);
+                    let (_t, vl2) = self.emit_expr(l, locals, Some(&et));
+                    let out_v = self.emit_nia_vector_scalar_mul(&vname, &vr, &vl2);
+                    return (tr, out_v);
+                }
                 assert!(types_match(&tl, &tr));
                 let tmp = self.fresh();
                 match tl {

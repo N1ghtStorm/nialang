@@ -20,6 +20,22 @@ fn codegen_contains_if_branching() {
 }
 
 #[test]
+fn codegen_vector_scalar_mul_emits_mul_nsw() {
+    let src = r#"
+vector V2 i32 [ X, Y ]
+
+fn main() i32 {
+    let v = V2 [X: 2, Y: 3];
+    let w = v * 4;
+    w.X + w.Y
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.V2"));
+}
+
+#[test]
 fn codegen_contains_tuple_struct_ops() {
     let ll = emit(include_str!("../../../examples/tests/ok_tuple_struct.nia"));
     assert!(ll.contains("insertvalue %struct.Foo"));
