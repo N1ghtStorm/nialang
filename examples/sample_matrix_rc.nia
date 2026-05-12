@@ -18,11 +18,13 @@ fn main() i32 {
 
     println(matrix_get(m, 0, 1));
     matrix_set(m, 1, 2, 42);
+    println(m);
     println(matrix_get(m, 1, 2));
 
     println(matrix_refcount(m));
     let shared: Matrix = matrix_clone(m);
     println(matrix_refcount(m));
+    println(shared);
     println(matrix_get(shared, 1, 2));
 
     matrix_drop(shared);

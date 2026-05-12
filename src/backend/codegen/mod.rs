@@ -1017,7 +1017,7 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "{}:", cont_lbl).unwrap();
     }
 
-    fn emit_print_matrix(&mut self, matrix: &str, newline: bool) {
+    fn emit_print_matrix_summary(&mut self, matrix: &str, newline: bool) {
         let refs = self.matrix_load_i64_field(matrix, 0);
         let rows = self.matrix_load_i64_field(matrix, 2);
         let cols = self.matrix_load_i64_field(matrix, 3);
@@ -1033,6 +1033,145 @@ impl<'a> Gen<'a> {
             p, rows, cols, refs
         )
         .unwrap();
+    }
+
+    fn emit_print_matrix(&mut self, elem_ty: &Ty, matrix: &str, newline: bool) {
+        if matches!(elem_ty, Ty::Unit) {
+            self.emit_print_matrix_summary(matrix, newline);
+            return;
+        }
+
+        let rows = self.matrix_load_i64_field(matrix, 2);
+        let cols = self.matrix_load_i64_field(matrix, 3);
+        let data = self.matrix_load_data_ptr(matrix);
+        let row_addr = self.fresh();
+        let col_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca i64", row_addr).unwrap();
+        writeln!(self.out, "  %{} = alloca i64", col_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", row_addr).unwrap();
+
+        let row_cond = self.fresh_label("println.matrix.row.cond");
+        let row_body = self.fresh_label("println.matrix.row.body");
+        let row_sep = self.fresh_label("println.matrix.row.sep");
+        let row_item = self.fresh_label("println.matrix.row.item");
+        let row_latch = self.fresh_label("println.matrix.row.latch");
+        let row_done = self.fresh_label("println.matrix.row.done");
+        let col_cond = self.fresh_label("println.matrix.col.cond");
+        let col_body = self.fresh_label("println.matrix.col.body");
+        let col_sep = self.fresh_label("println.matrix.col.sep");
+        let col_item = self.fresh_label("println.matrix.col.item");
+        let col_latch = self.fresh_label("println.matrix.col.latch");
+        let col_done = self.fresh_label("println.matrix.col.done");
+
+        self.emit_printf_text("nialang.std.txt.arr_open", 2);
+        writeln!(self.out, "  br label %{}", row_cond).unwrap();
+
+        writeln!(self.out, "{}:", row_cond).unwrap();
+        let row = self.fresh();
+        let has_row = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", row, row_addr).unwrap();
+        writeln!(self.out, "  %{} = icmp slt i64 %{}, {}", has_row, row, rows).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_row, row_body, row_done
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", row_body).unwrap();
+        let first_row = self.fresh();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", first_row, row).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            first_row, row_item, row_sep
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", row_sep).unwrap();
+        self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+        writeln!(self.out, "  br label %{}", row_item).unwrap();
+
+        writeln!(self.out, "{}:", row_item).unwrap();
+        self.emit_printf_text("nialang.std.txt.arr_open", 2);
+        writeln!(self.out, "  store i64 0, ptr %{}", col_addr).unwrap();
+        writeln!(self.out, "  br label %{}", col_cond).unwrap();
+
+        writeln!(self.out, "{}:", col_cond).unwrap();
+        let col = self.fresh();
+        let has_col = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", col, col_addr).unwrap();
+        writeln!(self.out, "  %{} = icmp slt i64 %{}, {}", has_col, col, cols).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_col, col_body, col_done
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", col_body).unwrap();
+        let first_col = self.fresh();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", first_col, col).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            first_col, col_item, col_sep
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", col_sep).unwrap();
+        self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+        writeln!(self.out, "  br label %{}", col_item).unwrap();
+
+        writeln!(self.out, "{}:", col_item).unwrap();
+        let row_offset = self.fresh();
+        let index = self.fresh();
+        let cell_ptr = self.fresh();
+        let cell = self.fresh();
+        writeln!(self.out, "  %{} = mul i64 %{}, {}", row_offset, row, cols).unwrap();
+        writeln!(self.out, "  %{} = add i64 %{}, %{}", index, row_offset, col).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i64 %{}",
+            cell_ptr,
+            llvm_ty(elem_ty, self.structs),
+            data,
+            index
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr %{}",
+            cell,
+            llvm_ty(elem_ty, self.structs),
+            cell_ptr
+        )
+        .unwrap();
+        self.emit_print_value(elem_ty, &format!("%{cell}"), false);
+        writeln!(self.out, "  br label %{}", col_latch).unwrap();
+
+        writeln!(self.out, "{}:", col_latch).unwrap();
+        let col_next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", col_next, col).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", col_next, col_addr).unwrap();
+        writeln!(self.out, "  br label %{}", col_cond).unwrap();
+
+        writeln!(self.out, "{}:", col_done).unwrap();
+        self.emit_printf_text("nialang.std.txt.arr_close", 2);
+        writeln!(self.out, "  br label %{}", row_latch).unwrap();
+
+        writeln!(self.out, "{}:", row_latch).unwrap();
+        let row_next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", row_next, row).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", row_next, row_addr).unwrap();
+        writeln!(self.out, "  br label %{}", row_cond).unwrap();
+
+        writeln!(self.out, "{}:", row_done).unwrap();
+        if newline {
+            self.emit_printf_text("nialang.std.txt.arr_close_ln", 3);
+        } else {
+            self.emit_printf_text("nialang.std.txt.arr_close", 2);
+        }
     }
 
     /// Recursive dispatcher for printable value lowering.
@@ -1057,8 +1196,8 @@ impl<'a> Gen<'a> {
             Ty::Enum(ename) => {
                 self.emit_print_enum(ename, v, newline);
             }
-            Ty::Matrix(_) => {
-                self.emit_print_matrix(v, newline);
+            Ty::Matrix(elem_ty) => {
+                self.emit_print_matrix(elem_ty, v, newline);
             }
             _ => self.emit_print_primitive(ty, v, newline),
         }

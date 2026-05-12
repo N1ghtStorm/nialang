@@ -303,10 +303,8 @@ fn codegen_alloc_realloc_dealloc_calls_present() {
 fn codegen_matrix_rc_helpers_present() {
     let ll = emit(include_str!("../../../examples/sample_matrix_rc.nia"));
     assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
-    assert!(
-        ll.contains("Matrix(rows=%lld, cols=%lld, refs=%lld)"),
-        "IR:\n{ll}"
-    );
+    assert!(ll.contains("println.matrix.row.cond"), "IR:\n{ll}");
+    assert!(ll.contains("println.matrix.col.cond"), "IR:\n{ll}");
     assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
     assert!(
         ll.contains("getelementptr inbounds { i64, ptr, i64, i64 }"),

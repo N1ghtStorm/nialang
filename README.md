@@ -53,7 +53,7 @@ cargo test
 
 ### Builtins
 
-- `println(x)` — prints values (including arrays, structs, enums, pointers, **vectors**)
+- `println(x)` — prints values (including arrays, structs, enums, pointers, **vectors**, `Matrix`)
 - `len(arr)` — returns compile-time array length as `i32`
 - `alloc(v)` / `realloc(ptr, v)` / `dealloc(ptr)`
 - `matrix([[...], [...]])` — creates a `Matrix` from a rectangular array of numeric arrays
@@ -66,7 +66,8 @@ contiguous cells, row count, and column count. The constructor accepts only
 rectangular nested arrays whose cells are numeric primitives (`i*`, `u*`, `f*`).
 All cells must have one type: `matrix([[1, 2], [3, 4]])` is an `i32` matrix,
 while `matrix([[1.0, 2.0], [3.0, 4.0]])` is an `f64` matrix; mixing `i32` and
-`f64` in one matrix is rejected. The current surface is an explicit
+`f64` in one matrix is rejected. `println(m)` prints matrix contents in nested
+array form, e.g. `[[1, 2], [3, 4]]`. The current surface is an explicit
 reference-counted API: use `matrix_clone` when sharing and `matrix_drop` when a
 handle is no longer needed.
 
