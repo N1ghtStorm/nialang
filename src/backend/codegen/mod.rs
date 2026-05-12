@@ -4,7 +4,10 @@ use std::fmt::Write as _;
 use crate::ast::{
     EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
 };
-use crate::nia_std::{ALLOC, DEALLOC, LEN, PRINTLN, REALLOC};
+use crate::nia_std::{
+    ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
+    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, PRINTLN, REALLOC,
+};
 use crate::semantics::typecheck::FnSig;
 
 /// Emits complete textual LLVM module from already-validated AST.
@@ -110,6 +113,8 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::Ptr(inner) => format!("&{}", ty_print_label(inner)),
         Ty::Unit => "()".into(),
         Ty::Vector(n, inner) => format!("{} {}", n, ty_print_label(inner)),
+        Ty::Matrix(inner) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
+        Ty::Matrix(inner) => format!("Matrix<{}>", ty_print_label(inner)),
     }
 }
 
@@ -258,6 +263,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Ptr(_) => "ptr".into(),
         Ty::Unit => "void".into(),
         Ty::Vector(n, _) => format!("%struct.{}", sanitize(n)),
+        Ty::Matrix(_) => "ptr".into(),
     }
 }
 
@@ -359,6 +365,17 @@ fn collect_array_index_chain(mut e: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
             }
             _ => return None,
         }
+    }
+}
+
+fn matrix_elem_size(t: &Ty) -> usize {
+    match t {
+        Ty::I8 | Ty::U8 => 1,
+        Ty::I16 | Ty::U16 | Ty::F16 => 2,
+        Ty::I32 | Ty::F32 => 4,
+        Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize | Ty::F64 => 8,
+        Ty::I128 | Ty::U128 => 16,
+        _ => unreachable!("typechecked numeric matrix element"),
     }
 }
 
@@ -472,6 +489,60 @@ impl<'a> Gen<'a> {
         .unwrap();
         writeln!(self.out, "  %{} = ptrtoint ptr %{} to i64", sz, gep).unwrap();
         format!("%{sz}")
+    }
+
+    fn matrix_field_ptr(&mut self, matrix: &str, field: u32) -> String {
+        let out = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {{ i64, ptr, i64, i64 }}, ptr {}, i32 0, i32 {}",
+            out, matrix, field
+        )
+        .unwrap();
+        format!("%{out}")
+    }
+
+    fn matrix_load_i64_field(&mut self, matrix: &str, field: u32) -> String {
+        let ptr = self.matrix_field_ptr(matrix, field);
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr {}", out, ptr).unwrap();
+        format!("%{out}")
+    }
+
+    fn matrix_load_data_ptr(&mut self, matrix: &str) -> String {
+        let ptr = self.matrix_field_ptr(matrix, 1);
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load ptr, ptr {}", out, ptr).unwrap();
+        format!("%{out}")
+    }
+
+    fn matrix_cell_ptr(&mut self, matrix: &str, row: &str, col: &str, elem_ty: &Ty) -> String {
+        let cols = self.matrix_load_i64_field(matrix, 3);
+        let row64 = self.fresh();
+        let col64 = self.fresh();
+        let row_offset = self.fresh();
+        let index = self.fresh();
+        let data = self.matrix_load_data_ptr(matrix);
+        let cell = self.fresh();
+        writeln!(self.out, "  %{} = sext i32 {} to i64", row64, row).unwrap();
+        writeln!(self.out, "  %{} = sext i32 {} to i64", col64, col).unwrap();
+        writeln!(self.out, "  %{} = mul i64 %{}, {}", row_offset, row64, cols).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = add i64 %{}, %{}",
+            index, row_offset, col64
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i64 %{}",
+            cell,
+            llvm_ty(elem_ty, self.structs),
+            data,
+            index
+        )
+        .unwrap();
+        format!("%{cell}")
     }
 
     /// Emits primitive scalar printing (`int`, `bool`, pointer) with optional newline.
@@ -659,12 +730,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::F32 => {
                         let e = self.fresh();
-                        writeln!(
-                            self.out,
-                            "  %{} = fpext float {} to double",
-                            e, v
-                        )
-                        .unwrap();
+                        writeln!(self.out, "  %{} = fpext float {} to double", e, v).unwrap();
                         writeln!(
                             self.out,
                             "  call i32 (ptr, ...) @printf(ptr {}, double %{})",
@@ -674,12 +740,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::F16 => {
                         let e = self.fresh();
-                        writeln!(
-                            self.out,
-                            "  %{} = fpext half {} to double",
-                            e, v
-                        )
-                        .unwrap();
+                        writeln!(self.out, "  %{} = fpext half {} to double", e, v).unwrap();
                         writeln!(
                             self.out,
                             "  call i32 (ptr, ...) @printf(ptr {}, double %{})",
@@ -690,9 +751,12 @@ impl<'a> Gen<'a> {
                     _ => unreachable!(),
                 }
             }
-            Ty::Array(_, _) | Ty::Struct(_) | Ty::Enum(_) | Ty::Unit | Ty::Vector(_, _) => {
-                unreachable!("typechecked")
-            }
+            Ty::Array(_, _)
+            | Ty::Struct(_)
+            | Ty::Enum(_)
+            | Ty::Unit
+            | Ty::Vector(_, _)
+            | Ty::Matrix(_) => unreachable!("typechecked"),
         }
     }
 
@@ -953,6 +1017,24 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "{}:", cont_lbl).unwrap();
     }
 
+    fn emit_print_matrix(&mut self, matrix: &str, newline: bool) {
+        let refs = self.matrix_load_i64_field(matrix, 0);
+        let rows = self.matrix_load_i64_field(matrix, 2);
+        let cols = self.matrix_load_i64_field(matrix, 3);
+        let (sym, size) = if newline {
+            ("nialang.std.fmt.matrix", 41)
+        } else {
+            ("nialang.std.fmt.matrix.nn", 40)
+        };
+        let p = self.fmt_ptr(sym, size);
+        writeln!(
+            self.out,
+            "  call i32 (ptr, ...) @printf(ptr {}, i64 {}, i64 {}, i64 {})",
+            p, rows, cols, refs
+        )
+        .unwrap();
+    }
+
     /// Recursive dispatcher for printable value lowering.
     ///
     /// Keeps all `println` formatting behavior in one place and ensures nested
@@ -975,8 +1057,205 @@ impl<'a> Gen<'a> {
             Ty::Enum(ename) => {
                 self.emit_print_enum(ename, v, newline);
             }
+            Ty::Matrix(_) => {
+                self.emit_print_matrix(v, newline);
+            }
             _ => self.emit_print_primitive(ty, v, newline),
         }
+    }
+
+    fn emit_matrix_new(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (src_ty, src_val) = self.emit_expr(&args[0], locals, None);
+        let Ty::Array(row_ty, rows) = src_ty else {
+            unreachable!("typechecked matrix source")
+        };
+        let Ty::Array(cell_ty, cols) = row_ty.as_ref() else {
+            unreachable!("typechecked matrix source")
+        };
+        let len = rows * cols;
+        let bytes = len * matrix_elem_size(cell_ty);
+        let data = self.fresh();
+        let matrix = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", matrix).unwrap();
+
+        let rc_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 0);
+        let data_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 1);
+        let rows_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 2);
+        let cols_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 3);
+        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
+        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", rows, rows_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", cols, cols_ptr).unwrap();
+
+        let src_ll = llvm_ty(
+            &Ty::Array(Box::new(Ty::Array(cell_ty.clone(), *cols)), rows),
+            self.structs,
+        );
+        let row_ll = llvm_ty(&Ty::Array(cell_ty.clone(), *cols), self.structs);
+        for row in 0..rows {
+            let row_val = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                row_val, src_ll, src_val, row
+            )
+            .unwrap();
+            for col in 0..*cols {
+                let raw_cell = self.fresh();
+                let flat = row * *cols + col;
+                let cell_ptr = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {} %{}, {}",
+                    raw_cell, row_ll, row_val, col
+                )
+                .unwrap();
+                writeln!(
+                    self.out,
+                    "  %{} = getelementptr inbounds {}, ptr %{}, i64 {}",
+                    cell_ptr,
+                    llvm_ty(cell_ty, self.structs),
+                    data,
+                    flat
+                )
+                .unwrap();
+                writeln!(
+                    self.out,
+                    "  store {} %{}, ptr %{}",
+                    llvm_ty(cell_ty, self.structs),
+                    raw_cell,
+                    cell_ptr
+                )
+                .unwrap();
+            }
+        }
+
+        (Ty::Matrix(cell_ty.clone()), format!("%{matrix}"))
+    }
+
+    fn emit_matrix_clone(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (matrix_ty, matrix) = self.emit_expr(&args[0], locals, None);
+        let rc_ptr = self.matrix_field_ptr(&matrix, 0);
+        let old = self.fresh();
+        let new = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", new, old).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
+        (matrix_ty, matrix)
+    }
+
+    fn emit_matrix_drop(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (_, matrix) = self.emit_expr(&args[0], locals, None);
+        let rc_ptr = self.matrix_field_ptr(&matrix, 0);
+        let old = self.fresh();
+        let new = self.fresh();
+        let is_zero = self.fresh();
+        let free_lbl = self.fresh_label("matrix.drop.free");
+        let cont_lbl = self.fresh_label("matrix.drop.cont");
+        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = sub i64 %{}, 1", new, old).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_zero, new).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_zero, free_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", free_lbl).unwrap();
+        let data = self.matrix_load_data_ptr(&matrix);
+        writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
+        writeln!(self.out, "  call void @free(ptr {})", matrix).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        (Ty::Unit, String::new())
+    }
+
+    fn emit_matrix_get(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (matrix_ty, matrix) = self.emit_expr(&args[0], locals, None);
+        let Ty::Matrix(elem_ty) = matrix_ty else {
+            unreachable!("typechecked matrix_get")
+        };
+        let (_, row) = self.emit_expr(&args[1], locals, Some(&Ty::I32));
+        let (_, col) = self.emit_expr(&args[2], locals, Some(&Ty::I32));
+        let cell = self.matrix_cell_ptr(&matrix, &row, &col, &elem_ty);
+        let out = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            out,
+            llvm_ty(&elem_ty, self.structs),
+            cell
+        )
+        .unwrap();
+        ((*elem_ty).clone(), format!("%{out}"))
+    }
+
+    fn emit_matrix_set(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (matrix_ty, matrix) = self.emit_expr(&args[0], locals, None);
+        let Ty::Matrix(elem_ty) = matrix_ty else {
+            unreachable!("typechecked matrix_set")
+        };
+        let (_, row) = self.emit_expr(&args[1], locals, Some(&Ty::I32));
+        let (_, col) = self.emit_expr(&args[2], locals, Some(&Ty::I32));
+        let (value_ty, value) = self.emit_expr(&args[3], locals, Some(&elem_ty));
+        debug_assert!(types_match(&value_ty, &elem_ty));
+        let cell = self.matrix_cell_ptr(&matrix, &row, &col, &elem_ty);
+        writeln!(
+            self.out,
+            "  store {} {}, ptr {}",
+            llvm_ty(&elem_ty, self.structs),
+            value,
+            cell
+        )
+        .unwrap();
+        (Ty::Unit, String::new())
+    }
+
+    fn emit_matrix_info(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (_, matrix) = self.emit_expr(&args[0], locals, None);
+        let value64 = if name == MATRIX_ROWS {
+            self.matrix_load_i64_field(&matrix, 2)
+        } else if name == MATRIX_COLS {
+            self.matrix_load_i64_field(&matrix, 3)
+        } else if name == MATRIX_REFCOUNT {
+            self.matrix_load_i64_field(&matrix, 0)
+        } else {
+            let rows = self.matrix_load_i64_field(&matrix, 2);
+            let cols = self.matrix_load_i64_field(&matrix, 3);
+            let len = self.fresh();
+            writeln!(self.out, "  %{} = mul i64 {}, {}", len, rows, cols).unwrap();
+            format!("%{len}")
+        };
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = trunc i64 {} to i32", out, value64).unwrap();
+        (Ty::I32, format!("%{out}"))
     }
 
     /// Resolves numeric field index for named/tuple field access codegen.
@@ -990,10 +1269,7 @@ impl<'a> Gen<'a> {
 
     fn vector_idx(&self, vname: &str, field: &str) -> Option<u32> {
         let v = self.vectors.iter().find(|v| v.name == vname)?;
-        v.fields
-            .iter()
-            .position(|n| n == field)
-            .map(|i| i as u32)
+        v.fields.iter().position(|n| n == field).map(|i| i as u32)
     }
 
     /// If `t` is a declared `vector Name ...`, returns `Name`.
@@ -1040,12 +1316,7 @@ impl<'a> Gen<'a> {
             Ty::F16 | Ty::F32 | Ty::F64 => {
                 let op = if is_add { "fadd" } else { "fsub" };
                 let ll = llvm_ty(elem_ty, self.structs);
-                writeln!(
-                    self.out,
-                    "  %{} = {} {} %{}, %{}",
-                    out, op, ll, a, b
-                )
-                .unwrap();
+                writeln!(self.out, "  %{} = {} {} %{}, %{}", out, op, ll, a, b).unwrap();
             }
             _ => unreachable!("typechecked vector axis"),
         }
@@ -1063,12 +1334,7 @@ impl<'a> Gen<'a> {
                 writeln!(self.out, "  %{} = mul i16 %{}, %{}", out, a, b).unwrap();
             }
             Ty::I32 => {
-                writeln!(
-                    self.out,
-                    "  %{} = mul nsw i32 %{}, %{}",
-                    out, a, b
-                )
-                .unwrap();
+                writeln!(self.out, "  %{} = mul nsw i32 %{}, %{}", out, a, b).unwrap();
             }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                 writeln!(self.out, "  %{} = mul i64 %{}, %{}", out, a, b).unwrap();
@@ -1078,12 +1344,7 @@ impl<'a> Gen<'a> {
             }
             Ty::F16 | Ty::F32 | Ty::F64 => {
                 let ll = llvm_ty(elem_ty, self.structs);
-                writeln!(
-                    self.out,
-                    "  %{} = fmul {} %{}, %{}",
-                    out, ll, a, b
-                )
-                .unwrap();
+                writeln!(self.out, "  %{} = fmul {} %{}, %{}", out, ll, a, b).unwrap();
             }
             _ => unreachable!("typechecked vector axis"),
         }
@@ -1094,20 +1355,10 @@ impl<'a> Gen<'a> {
         let out = self.fresh();
         match elem_ty {
             Ty::I8 | Ty::U8 => {
-                writeln!(
-                    self.out,
-                    "  %{} = mul i8 %{}, {}",
-                    out, comp, scalar_ssa
-                )
-                .unwrap();
+                writeln!(self.out, "  %{} = mul i8 %{}, {}", out, comp, scalar_ssa).unwrap();
             }
             Ty::I16 | Ty::U16 => {
-                writeln!(
-                    self.out,
-                    "  %{} = mul i16 %{}, {}",
-                    out, comp, scalar_ssa
-                )
-                .unwrap();
+                writeln!(self.out, "  %{} = mul i16 %{}, {}", out, comp, scalar_ssa).unwrap();
             }
             Ty::I32 => {
                 writeln!(
@@ -1118,20 +1369,10 @@ impl<'a> Gen<'a> {
                 .unwrap();
             }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
-                writeln!(
-                    self.out,
-                    "  %{} = mul i64 %{}, {}",
-                    out, comp, scalar_ssa
-                )
-                .unwrap();
+                writeln!(self.out, "  %{} = mul i64 %{}, {}", out, comp, scalar_ssa).unwrap();
             }
             Ty::I128 | Ty::U128 => {
-                writeln!(
-                    self.out,
-                    "  %{} = mul i128 %{}, {}",
-                    out, comp, scalar_ssa
-                )
-                .unwrap();
+                writeln!(self.out, "  %{} = mul i128 %{}, {}", out, comp, scalar_ssa).unwrap();
             }
             Ty::F16 | Ty::F32 | Ty::F64 => {
                 let ll = llvm_ty(elem_ty, self.structs);
@@ -1196,30 +1437,14 @@ impl<'a> Gen<'a> {
         }
         let slot = self.fresh();
         writeln!(self.out, "  %{} = alloca {}", slot, llvm_st).unwrap();
-        writeln!(
-            self.out,
-            "  store {} {}, ptr %{}",
-            llvm_st, agg, slot
-        )
-        .unwrap();
+        writeln!(self.out, "  store {} {}, ptr %{}", llvm_st, agg, slot).unwrap();
         let loadt = self.fresh();
-        writeln!(
-            self.out,
-            "  %{} = load {}, ptr %{}",
-            loadt, llvm_st, slot
-        )
-        .unwrap();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, slot).unwrap();
         format!("%{loadt}")
     }
 
     /// Component-wise vector sum/difference (`vector` decl aggregates).
-    fn emit_nia_vector_binop(
-        &mut self,
-        vname: &str,
-        vl: &str,
-        vr: &str,
-        is_add: bool,
-    ) -> String {
+    fn emit_nia_vector_binop(&mut self, vname: &str, vl: &str, vr: &str, is_add: bool) -> String {
         let vdef = self
             .vectors
             .iter()
@@ -1261,29 +1486,14 @@ impl<'a> Gen<'a> {
         }
         let slot = self.fresh();
         writeln!(self.out, "  %{} = alloca {}", slot, llvm_st).unwrap();
-        writeln!(
-            self.out,
-            "  store {} {}, ptr %{}",
-            llvm_st, agg, slot
-        )
-        .unwrap();
+        writeln!(self.out, "  store {} {}, ptr %{}", llvm_st, agg, slot).unwrap();
         let loadt = self.fresh();
-        writeln!(
-            self.out,
-            "  %{} = load {}, ptr %{}",
-            loadt, llvm_st, slot
-        )
-        .unwrap();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, slot).unwrap();
         format!("%{loadt}")
     }
 
     /// Component-wise vector product (`vector` decl aggregates).
-    fn emit_nia_vector_component_mul(
-        &mut self,
-        vname: &str,
-        vl: &str,
-        vr: &str,
-    ) -> String {
+    fn emit_nia_vector_component_mul(&mut self, vname: &str, vl: &str, vr: &str) -> String {
         let vdef = self
             .vectors
             .iter()
@@ -1325,19 +1535,9 @@ impl<'a> Gen<'a> {
         }
         let slot = self.fresh();
         writeln!(self.out, "  %{} = alloca {}", slot, llvm_st).unwrap();
-        writeln!(
-            self.out,
-            "  store {} {}, ptr %{}",
-            llvm_st, agg, slot
-        )
-        .unwrap();
+        writeln!(self.out, "  store {} {}, ptr %{}", llvm_st, agg, slot).unwrap();
         let loadt = self.fresh();
-        writeln!(
-            self.out,
-            "  %{} = load {}, ptr %{}",
-            loadt, llvm_st, slot
-        )
-        .unwrap();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, slot).unwrap();
         format!("%{loadt}")
     }
 
@@ -1711,7 +1911,8 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
-                    | Ty::Vector(_, _) => unreachable!("typechecked for range"),
+                    | Ty::Vector(_, _)
+                    | Ty::Matrix(_) => unreachable!("typechecked for range"),
                 }
                 writeln!(self.out, "  br label %{}", header).unwrap();
 
@@ -1763,7 +1964,8 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
                 | Some(Ty::Bool)
-                | Some(Ty::Array(_, _)) => {
+                | Some(Ty::Array(_, _))
+                | Some(Ty::Matrix(_)) => {
                     unreachable!("typechecked")
                 }
             },
@@ -1771,32 +1973,18 @@ impl<'a> Gen<'a> {
                 let lit = format!("{:.17e}", v);
                 let target = hint.cloned().unwrap_or(Ty::F64);
                 let dbl = self.fresh();
-                writeln!(
-                    self.out,
-                    "  %{} = fadd double {}, 0.0",
-                    dbl, lit
-                )
-                .unwrap();
+                writeln!(self.out, "  %{} = fadd double {}, 0.0", dbl, lit).unwrap();
                 match target {
                     Ty::F64 => (Ty::F64, format!("%{dbl}")),
                     Ty::F32 => {
                         let tmp = self.fresh();
-                        writeln!(
-                            self.out,
-                            "  %{} = fptrunc double %{} to float",
-                            tmp, dbl
-                        )
-                        .unwrap();
+                        writeln!(self.out, "  %{} = fptrunc double %{} to float", tmp, dbl)
+                            .unwrap();
                         (Ty::F32, format!("%{tmp}"))
                     }
                     Ty::F16 => {
                         let tmp = self.fresh();
-                        writeln!(
-                            self.out,
-                            "  %{} = fptrunc double %{} to half",
-                            tmp, dbl
-                        )
-                        .unwrap();
+                        writeln!(self.out, "  %{} = fptrunc double %{} to half", tmp, dbl).unwrap();
                         (Ty::F16, format!("%{tmp}"))
                     }
                     _ => unreachable!("typechecked float literal"),
@@ -1845,7 +2033,8 @@ impl<'a> Gen<'a> {
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
-                    | Ty::Bool => {
+                    | Ty::Bool
+                    | Ty::Matrix(_) => {
                         unreachable!("typechecked neg")
                     }
                 }
@@ -1878,12 +2067,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::F16 | Ty::F32 | Ty::F64 => {
                         let ll = llvm_ty(&tl, self.structs);
-                        writeln!(
-                            self.out,
-                            "  %{} = fadd {} {}, {}",
-                            tmp, ll, vl, vr
-                        )
-                        .unwrap();
+                        writeln!(self.out, "  %{} = fadd {} {}, {}", tmp, ll, vl, vr).unwrap();
                     }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
@@ -1891,7 +2075,8 @@ impl<'a> Gen<'a> {
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
-                    | Ty::Bool => {
+                    | Ty::Bool
+                    | Ty::Matrix(_) => {
                         unreachable!("add on non-numeric")
                     }
                 }
@@ -1924,12 +2109,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::F16 | Ty::F32 | Ty::F64 => {
                         let ll = llvm_ty(&tl, self.structs);
-                        writeln!(
-                            self.out,
-                            "  %{} = fsub {} {}, {}",
-                            tmp, ll, vl, vr
-                        )
-                        .unwrap();
+                        writeln!(self.out, "  %{} = fsub {} {}, {}", tmp, ll, vl, vr).unwrap();
                     }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
@@ -1937,7 +2117,8 @@ impl<'a> Gen<'a> {
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
-                    | Ty::Bool => {
+                    | Ty::Bool
+                    | Ty::Matrix(_) => {
                         unreachable!("sub on non-numeric")
                     }
                 }
@@ -1949,8 +2130,7 @@ impl<'a> Gen<'a> {
                     let et = self.vector_axis_ty_cloned(&vname);
                     let (tr, vr) = self.emit_expr(r, locals, Some(&et));
                     if self.as_nia_vector_name(&tr).is_some() && types_match(&tl, &tr) {
-                        let out_v =
-                            self.emit_nia_vector_component_mul(&vname, &vl, &vr);
+                        let out_v = self.emit_nia_vector_component_mul(&vname, &vl, &vr);
                         return (tl, out_v);
                     }
                     let out_v = self.emit_nia_vector_scalar_mul(&vname, &vl, &vr);
@@ -1961,8 +2141,7 @@ impl<'a> Gen<'a> {
                     let et = self.vector_axis_ty_cloned(&vname);
                     let (tl2, vl2) = self.emit_expr(l, locals, Some(&et));
                     if self.as_nia_vector_name(&tl2).is_some() && types_match(&tl2, &tr) {
-                        let out_v =
-                            self.emit_nia_vector_component_mul(&vname, &vl2, &vr);
+                        let out_v = self.emit_nia_vector_component_mul(&vname, &vl2, &vr);
                         return (tr, out_v);
                     }
                     let out_v = self.emit_nia_vector_scalar_mul(&vname, &vr, &vl2);
@@ -1988,12 +2167,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::F16 | Ty::F32 | Ty::F64 => {
                         let ll = llvm_ty(&tl, self.structs);
-                        writeln!(
-                            self.out,
-                            "  %{} = fmul {} {}, {}",
-                            tmp, ll, vl, vr
-                        )
-                        .unwrap();
+                        writeln!(self.out, "  %{} = fmul {} {}, {}", tmp, ll, vl, vr).unwrap();
                     }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
@@ -2001,7 +2175,8 @@ impl<'a> Gen<'a> {
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
-                    | Ty::Bool => {
+                    | Ty::Bool
+                    | Ty::Matrix(_) => {
                         unreachable!("mul on non-numeric")
                     }
                 }
@@ -2061,12 +2236,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::F16 | Ty::F32 | Ty::F64 => {
                         let ll = llvm_ty(&tl, self.structs);
-                        writeln!(
-                            self.out,
-                            "  %{} = fdiv {} {}, {}",
-                            tmp, ll, vl, vr
-                        )
-                        .unwrap();
+                        writeln!(self.out, "  %{} = fdiv {} {}, {}", tmp, ll, vl, vr).unwrap();
                     }
                     Ty::Array(_, _)
                     | Ty::Struct(_)
@@ -2074,7 +2244,8 @@ impl<'a> Gen<'a> {
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
-                    | Ty::Bool => {
+                    | Ty::Bool
+                    | Ty::Matrix(_) => {
                         unreachable!("div on non-numeric")
                     }
                 }
@@ -2169,6 +2340,28 @@ impl<'a> Gen<'a> {
                         unreachable!("typechecked len")
                     };
                     return (Ty::I32, format!("{n}"));
+                }
+                if name == MATRIX_NEW {
+                    return self.emit_matrix_new(args, locals);
+                }
+                if name == MATRIX_GET {
+                    return self.emit_matrix_get(args, locals);
+                }
+                if name == MATRIX_SET {
+                    return self.emit_matrix_set(args, locals);
+                }
+                if name == MATRIX_ROWS
+                    || name == MATRIX_COLS
+                    || name == MATRIX_LEN
+                    || name == MATRIX_REFCOUNT
+                {
+                    return self.emit_matrix_info(name, args, locals);
+                }
+                if name == MATRIX_CLONE {
+                    return self.emit_matrix_clone(args, locals);
+                }
+                if name == MATRIX_DROP {
+                    return self.emit_matrix_drop(args, locals);
                 }
                 if name == ALLOC {
                     let (at, av) = self.emit_expr(&args[0], locals, None);
@@ -2949,6 +3142,9 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),
+        (Ty::Matrix(x), Ty::Matrix(y)) => {
+            matches!(x.as_ref(), Ty::Unit) || matches!(y.as_ref(), Ty::Unit) || types_match(x, y)
+        }
         _ => false,
     }
 }

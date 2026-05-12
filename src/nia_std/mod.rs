@@ -6,6 +6,16 @@ pub const LEN: &str = "len";
 pub const ALLOC: &str = "alloc";
 pub const DEALLOC: &str = "dealloc";
 pub const REALLOC: &str = "realloc";
+pub const MATRIX_TYPE: &str = "Matrix";
+pub const MATRIX_NEW: &str = "matrix";
+pub const MATRIX_GET: &str = "matrix_get";
+pub const MATRIX_SET: &str = "matrix_set";
+pub const MATRIX_ROWS: &str = "matrix_rows";
+pub const MATRIX_COLS: &str = "matrix_cols";
+pub const MATRIX_LEN: &str = "matrix_len";
+pub const MATRIX_CLONE: &str = "matrix_clone";
+pub const MATRIX_REFCOUNT: &str = "matrix_refcount";
+pub const MATRIX_DROP: &str = "matrix_drop";
 
 /// LLVM IR prelude used by builtin `println` codegen.
 ///
@@ -21,6 +31,8 @@ pub fn llvm_prelude() -> &'static str {
 @nialang.std.fmt.u64 = private unnamed_addr constant [6 x i8] c"%llu\0A\00", align 1
 @nialang.std.fmt.i128hex = private unnamed_addr constant [18 x i8] c"0x%016llx%016llx\0A\00", align 1
 @nialang.std.fmt.ptrhex = private unnamed_addr constant [8 x i8] c"0x%llx\0A\00", align 1
+@nialang.std.fmt.matrix = private unnamed_addr constant [41 x i8] c"Matrix(rows=%lld, cols=%lld, refs=%lld)\0A\00", align 1
+@nialang.std.fmt.matrix.nn = private unnamed_addr constant [40 x i8] c"Matrix(rows=%lld, cols=%lld, refs=%lld)\00", align 1
 @nialang.std.fmt.f64 = private unnamed_addr constant [4 x i8] c"%f\0A\00", align 1
 @nialang.std.fmt.f64.nn = private unnamed_addr constant [3 x i8] c"%f\00", align 1
 @nialang.std.fmt.i32.nn = private unnamed_addr constant [3 x i8] c"%d\00", align 1

@@ -50,6 +50,8 @@ pub enum Ty {
     /// Result of a void call or `println`; not storable in `let`.
     Unit,
     Vector(String, Box<Ty>),
+    /// Built-in reference-counted heap matrix with one numeric cell type.
+    Matrix(Box<Ty>),
 }
 
 #[derive(Debug, Clone)]

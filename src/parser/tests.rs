@@ -103,6 +103,11 @@ fn parse_fixture_readme_pointers() {
 }
 
 #[test]
+fn parse_fixture_matrix_rc() {
+    parse_ok(include_str!("../../examples/sample_matrix_rc.nia"));
+}
+
+#[test]
 fn parse_fixture_enum_match() {
     parse_ok(include_str!("../../examples/tests/ok_enum_match.nia"));
 }

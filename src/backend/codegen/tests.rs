@@ -1,5 +1,5 @@
 use super::*;
-use crate::parser::{Parser, tokenize};
+use crate::parser::{tokenize, Parser};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
 
 fn emit(src: &str) -> String {
@@ -297,6 +297,23 @@ fn codegen_alloc_realloc_dealloc_calls_present() {
     assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
     assert!(ll.contains("call ptr @realloc"), "IR:\n{ll}");
     assert!(ll.contains("call void @free"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_matrix_rc_helpers_present() {
+    let ll = emit(include_str!("../../../examples/sample_matrix_rc.nia"));
+    assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
+    assert!(
+        ll.contains("Matrix(rows=%lld, cols=%lld, refs=%lld)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
+    assert!(
+        ll.contains("getelementptr inbounds { i64, ptr, i64, i64 }"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("getelementptr inbounds i32"), "IR:\n{ll}");
+    assert!(ll.contains("load i32"), "IR:\n{ll}");
 }
 
 #[test]

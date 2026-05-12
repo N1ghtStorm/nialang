@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     ast::VectorDef,
-    parser::{Parser, tokenize},
+    parser::{tokenize, Parser},
 };
 
 fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>, Vec<VectorDef>) {
@@ -52,6 +52,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_loop.nia"),
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
+        include_str!("../../../examples/sample_matrix_rc.nia"),
     ];
     for src in ok_files {
         let r = check_all(src);
@@ -98,6 +99,82 @@ fn main() i32 {
     let x: f32 = 1.0;
     let y: i32 = 2;
     x + y
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_accepts_nested_numeric_arrays() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    matrix_drop(m);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_rejects_mixed_numeric_cell_types() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3.5, 4.5],
+    ]);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_rejects_int_literal_inside_float_matrix() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1.0, 2],
+        [3.0, 4.0],
+    ]);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_rejects_bool_cells() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, true],
+        [3, 4],
+    ]);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_rejects_ragged_rows() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4, 5],
+    ]);
+    0
 }
 "#;
     let r = check_all(src);

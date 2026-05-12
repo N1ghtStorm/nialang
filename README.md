@@ -40,6 +40,7 @@ cargo test
 - Pointers: `&T`
 - Structs / Enums
 - **Vectors** (user-defined fixed-size aggregates): see [Fixed-size vectors](#fixed-size-vectors) below.
+- `Matrix` — built-in ref-counted heap matrix of one numeric cell type.
 
 ### Expressions and Operators
 
@@ -55,6 +56,19 @@ cargo test
 - `println(x)` — prints values (including arrays, structs, enums, pointers, **vectors**)
 - `len(arr)` — returns compile-time array length as `i32`
 - `alloc(v)` / `realloc(ptr, v)` / `dealloc(ptr)`
+- `matrix([[...], [...]])` — creates a `Matrix` from a rectangular array of numeric arrays
+- `matrix_get(m, row, col)` / `matrix_set(m, row, col, value)`
+- `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
+- `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
+
+`Matrix` is a compiler-known heap object with a reference counter, a pointer to
+contiguous cells, row count, and column count. The constructor accepts only
+rectangular nested arrays whose cells are numeric primitives (`i*`, `u*`, `f*`).
+All cells must have one type: `matrix([[1, 2], [3, 4]])` is an `i32` matrix,
+while `matrix([[1.0, 2.0], [3.0, 4.0]])` is an `f64` matrix; mixing `i32` and
+`f64` in one matrix is rejected. The current surface is an explicit
+reference-counted API: use `matrix_clone` when sharing and `matrix_drop` when a
+handle is no longer needed.
 
 ### Fixed-size vectors
 
@@ -300,4 +314,3 @@ Tests for each component live in separate files alongside modules:
 - `src/semantics/typecheck/tests.rs`
 - `src/backend/codegen/tests.rs`
 - `src/driver/tests.rs`
-
