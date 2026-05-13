@@ -8,6 +8,7 @@ The project currently focuses on a compact but expressive core:
 - structs (named and tuple), enums and `match`,
 - loops (`for`, `while`, `loop` + `break`),
 - pointers and simple heap builtins (`alloc`, `realloc`, `dealloc`),
+- built-in reference-counted matrices,
 - builtin `println` and `len`.
 
 ## Quick Start
@@ -61,15 +62,159 @@ cargo test
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
 
-`Matrix` is a compiler-known heap object with a reference counter, a pointer to
-contiguous cells, row count, and column count. The constructor accepts only
-rectangular nested arrays whose cells are numeric primitives (`i*`, `u*`, `f*`).
-All cells must have one type: `matrix([[1, 2], [3, 4]])` is an `i32` matrix,
-while `matrix([[1.0, 2.0], [3.0, 4.0]])` is an `f64` matrix; mixing `i32` and
-`f64` in one matrix is rejected. `println(m)` prints matrix contents in nested
-array form, e.g. `[[1, 2], [3, 4]]`. The current surface is an explicit
-reference-counted API: use `matrix_clone` when sharing and `matrix_drop` when a
-handle is no longer needed.
+`Matrix` is a compiler-known heap object with explicit reference counting.
+See [Matrices](#matrices) for construction, printing, indexing, and lifetime
+rules.
+
+### Matrices
+
+`Matrix` is a built-in reference-counted heap handle for a rectangular 2D block
+of numeric cells. Source code writes the surface type simply as `Matrix`; inside
+the compiler the handle still remembers the element type, such as `Matrix<i32>`
+or `Matrix<f64>`.
+
+#### Creating a matrix
+
+Use `matrix([...])` with an array of rows:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+```
+
+Rules:
+
+- The outer array must contain at least one row.
+- Every row must contain at least one cell.
+- Every row must have the same length.
+- Every cell must be a numeric primitive: integer types (`i8`, `u8`, `i16`, ...)
+  or float types (`f16`, `f32`, `f64`).
+- All cells must have exactly one element type. Integer literals default to
+  `i32`; float literals default to `f64`.
+
+Valid:
+
+```nia
+let ints: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let floats: Matrix = matrix([
+    [1.0, 2.0],
+    [3.5, 4.5],
+]);
+```
+
+Rejected:
+
+```nia
+let mixed: Matrix = matrix([
+    [1, 2],
+    [3.5, 4.5],
+]);
+```
+
+The rejected example mixes `i32` and `f64`. If the matrix should be floating
+point, write the integer-looking cells with a decimal point (`1.0`, `2.0`, ...).
+
+#### Printing
+
+`println(m)` prints the matrix contents as nested arrays:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+
+println(m); // [[1, 2, 3], [4, 5, 6]]
+```
+
+Float cells use the same float formatting as normal `println`:
+
+```nia
+let f: Matrix = matrix([
+    [1.0, 2.5],
+    [3.0, 4.75],
+]);
+
+println(f); // [[1.000000, 2.500000], [3.000000, 4.750000]]
+```
+
+#### Shape and length
+
+Use the shape helpers when you need dimensions at runtime:
+
+```nia
+println(matrix_rows(m)); // number of rows
+println(matrix_cols(m)); // number of columns
+println(matrix_len(m));  // rows * columns
+```
+
+Each helper returns `i32`.
+
+#### Reading and writing cells
+
+Cells are addressed by zero-based row and column indices:
+
+```nia
+let value = matrix_get(m, 0, 1); // row 0, column 1
+matrix_set(m, 1, 2, 42);        // row 1, column 2
+```
+
+`matrix_get` returns the matrix element type. `matrix_set` requires a value of
+that same type:
+
+```nia
+let ints: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+matrix_set(ints, 0, 0, 99);   // ok: i32 matrix, i32 value
+// matrix_set(ints, 0, 0, 1.5); // rejected: f64 value for i32 matrix
+```
+
+Current runtime note: indices are assumed valid. There is no bounds check yet,
+so `matrix_get(m, 100, 100)` is invalid program behavior.
+
+#### Reference counting
+
+A `Matrix` handle owns a heap allocation with an explicit reference counter.
+The compiler does not insert automatic clone/drop calls yet, so code must manage
+sharing explicitly:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+
+println(matrix_refcount(m)); // 1
+
+let shared: Matrix = matrix_clone(m);
+println(matrix_refcount(m)); // 2
+
+println(shared);             // prints the same heap data
+
+matrix_drop(shared);
+println(matrix_refcount(m)); // 1
+
+matrix_drop(m);              // frees when the counter reaches zero
+```
+
+Use `matrix_clone(m)` whenever another handle should share the same matrix data.
+Use `matrix_drop(m)` exactly once for each live handle when it is no longer
+needed. Do not use a handle after dropping it.
+
+#### Complete example
+
+See `examples/sample_matrix_rc.nia` for a runnable sample covering construction,
+printing, shape queries, cell get/set, cloning, reference count inspection, and
+dropping.
 
 ### Fixed-size vectors
 
