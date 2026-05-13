@@ -569,13 +569,15 @@ fn infer_arithmetic_bin(
         return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
     }
     if let (Ty::Matrix(left_elem), Ty::Matrix(right_elem)) = (&tl, &tr) {
-        if op != "+" {
+        if op != "+" && op != "-" {
             return Err(format!(
-                "cannot use `{op}` on Matrix values (only `+` is supported)"
+                "cannot use `{op}` on Matrix values (only `+` and `-` are supported)"
             ));
         }
         if matches!(left_elem.as_ref(), Ty::Unit) || matches!(right_elem.as_ref(), Ty::Unit) {
-            return Err("cannot use `+` on Matrix values with unknown element type".into());
+            return Err(format!(
+                "cannot use `{op}` on Matrix values with unknown element type"
+            ));
         }
         return Ok(tl);
     }

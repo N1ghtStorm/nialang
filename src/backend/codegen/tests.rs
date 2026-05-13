@@ -315,13 +315,17 @@ fn codegen_matrix_rc_helpers_present() {
 }
 
 #[test]
-fn codegen_matrix_add_helpers_present() {
+fn codegen_matrix_arith_helpers_present() {
     let ll = emit(include_str!("../../../examples/sample_matrix_arith.nia"));
     assert!(ll.contains("matrix.add.shape.ok"), "IR:\n{ll}");
     assert!(ll.contains("matrix.add.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.sub.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.sub.cond"), "IR:\n{ll}");
     assert!(ll.contains("call void @abort()"), "IR:\n{ll}");
     assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("sub nsw i32"), "IR:\n{ll}");
     assert!(ll.contains("fadd double"), "IR:\n{ll}");
+    assert!(ll.contains("fsub double"), "IR:\n{ll}");
 }
 
 #[test]

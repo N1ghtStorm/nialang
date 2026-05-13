@@ -1397,34 +1397,53 @@ impl<'a> Gen<'a> {
         (Ty::I32, format!("%{out}"))
     }
 
-    fn emit_matrix_elem_add(&mut self, elem_ty: &Ty, left: &str, right: &str) -> String {
+    fn emit_matrix_elem_binop(
+        &mut self,
+        elem_ty: &Ty,
+        left: &str,
+        right: &str,
+        is_add: bool,
+    ) -> String {
         let out = self.fresh();
         match elem_ty {
             Ty::I8 | Ty::U8 => {
-                writeln!(self.out, "  %{} = add i8 {}, {}", out, left, right).unwrap();
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i8 {}, {}", out, op, left, right).unwrap();
             }
             Ty::I16 | Ty::U16 => {
-                writeln!(self.out, "  %{} = add i16 {}, {}", out, left, right).unwrap();
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i16 {}, {}", out, op, left, right).unwrap();
             }
             Ty::I32 => {
-                writeln!(self.out, "  %{} = add nsw i32 {}, {}", out, left, right).unwrap();
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} nsw i32 {}, {}", out, op, left, right).unwrap();
             }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
-                writeln!(self.out, "  %{} = add i64 {}, {}", out, left, right).unwrap();
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i64 {}, {}", out, op, left, right).unwrap();
             }
             Ty::I128 | Ty::U128 => {
-                writeln!(self.out, "  %{} = add i128 {}, {}", out, left, right).unwrap();
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i128 {}, {}", out, op, left, right).unwrap();
             }
             Ty::F16 | Ty::F32 | Ty::F64 => {
                 let ll = llvm_ty(elem_ty, self.structs);
-                writeln!(self.out, "  %{} = fadd {} {}, {}", out, ll, left, right).unwrap();
+                let op = if is_add { "fadd" } else { "fsub" };
+                writeln!(self.out, "  %{} = {} {} {}, {}", out, op, ll, left, right).unwrap();
             }
             _ => unreachable!("typechecked numeric matrix element"),
         }
         format!("%{out}")
     }
 
-    fn emit_matrix_add(&mut self, left: &str, right: &str, elem_ty: &Ty) -> (Ty, String) {
+    fn emit_matrix_binop(
+        &mut self,
+        left: &str,
+        right: &str,
+        elem_ty: &Ty,
+        is_add: bool,
+    ) -> (Ty, String) {
+        let label_op = if is_add { "add" } else { "sub" };
         let left_rows = self.matrix_load_i64_field(left, 2);
         let left_cols = self.matrix_load_i64_field(left, 3);
         let right_rows = self.matrix_load_i64_field(right, 2);
@@ -1432,8 +1451,8 @@ impl<'a> Gen<'a> {
         let rows_match = self.fresh();
         let cols_match = self.fresh();
         let shape_match = self.fresh();
-        let ok_lbl = self.fresh_label("matrix.add.shape.ok");
-        let abort_lbl = self.fresh_label("matrix.add.shape.abort");
+        let ok_lbl = self.fresh_label(&format!("matrix.{label_op}.shape.ok"));
+        let abort_lbl = self.fresh_label(&format!("matrix.{label_op}.shape.abort"));
         writeln!(
             self.out,
             "  %{} = icmp eq i64 {}, {}",
@@ -1505,10 +1524,10 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
         writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
 
-        let cond_lbl = self.fresh_label("matrix.add.cond");
-        let body_lbl = self.fresh_label("matrix.add.body");
-        let latch_lbl = self.fresh_label("matrix.add.latch");
-        let done_lbl = self.fresh_label("matrix.add.done");
+        let cond_lbl = self.fresh_label(&format!("matrix.{label_op}.cond"));
+        let body_lbl = self.fresh_label(&format!("matrix.{label_op}.body"));
+        let latch_lbl = self.fresh_label(&format!("matrix.{label_op}.latch"));
+        let done_lbl = self.fresh_label(&format!("matrix.{label_op}.done"));
         writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
 
         writeln!(self.out, "{}:", cond_lbl).unwrap();
@@ -1565,9 +1584,13 @@ impl<'a> Gen<'a> {
             right_cell, ll, right_cell_ptr
         )
         .unwrap();
-        let sum =
-            self.emit_matrix_elem_add(elem_ty, &format!("%{left_cell}"), &format!("%{right_cell}"));
-        writeln!(self.out, "  store {} {}, ptr %{}", ll, sum, out_cell_ptr).unwrap();
+        let value = self.emit_matrix_elem_binop(
+            elem_ty,
+            &format!("%{left_cell}"),
+            &format!("%{right_cell}"),
+            is_add,
+        );
+        writeln!(self.out, "  store {} {}, ptr %{}", ll, value, out_cell_ptr).unwrap();
         writeln!(self.out, "  br label %{}", latch_lbl).unwrap();
 
         writeln!(self.out, "{}:", latch_lbl).unwrap();
@@ -2371,7 +2394,7 @@ impl<'a> Gen<'a> {
                     return (tl, out_v);
                 }
                 if let Ty::Matrix(elem_ty) = &tl {
-                    return self.emit_matrix_add(&vl, &vr, elem_ty);
+                    return self.emit_matrix_binop(&vl, &vr, elem_ty, true);
                 }
                 let tmp = self.fresh();
                 match tl {
@@ -2414,6 +2437,9 @@ impl<'a> Gen<'a> {
                 if let Some(vname) = self.as_nia_vector_name(&tl).map(|s| s.to_string()) {
                     let out_v = self.emit_nia_vector_binop(&vname, &vl, &vr, false);
                     return (tl, out_v);
+                }
+                if let Ty::Matrix(elem_ty) = &tl {
+                    return self.emit_matrix_binop(&vl, &vr, elem_ty, false);
                 }
                 let tmp = self.fresh();
                 match tl {
