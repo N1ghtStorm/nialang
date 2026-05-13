@@ -491,15 +491,7 @@ fn infer_matrix_source(
                 expected_cols = Some(cells.len());
             }
             for cell in cells {
-                let ty = infer_expr(
-                    cell,
-                    env,
-                    structs,
-                    enums,
-                    vectors,
-                    fns,
-                    None,
-                )?;
+                let ty = infer_expr(cell, env, structs, enums, vectors, fns, None)?;
                 if !is_numeric_ty(&ty) {
                     return Err(format!("`matrix` cells must be numeric, got {ty:?}"));
                 }
@@ -575,6 +567,17 @@ fn infer_arithmetic_bin(
     }
     if !types_equal(&tl, &tr) {
         return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
+    }
+    if let (Ty::Matrix(left_elem), Ty::Matrix(right_elem)) = (&tl, &tr) {
+        if op != "+" {
+            return Err(format!(
+                "cannot use `{op}` on Matrix values (only `+` is supported)"
+            ));
+        }
+        if matches!(left_elem.as_ref(), Ty::Unit) || matches!(right_elem.as_ref(), Ty::Unit) {
+            return Err("cannot use `+` on Matrix values with unknown element type".into());
+        }
+        return Ok(tl);
     }
     // Component-wise linear algebra on fixed-size `vector` types (`vector Name Ty [ ... ]`).
     if is_nia_vector_ty(&tl, vectors) {

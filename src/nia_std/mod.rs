@@ -56,6 +56,7 @@ declare i32 @printf(ptr nocapture, ...)
 declare ptr @malloc(i64)
 declare void @free(ptr)
 declare ptr @realloc(ptr, i64)
+declare void @abort()
 
 "#
 }

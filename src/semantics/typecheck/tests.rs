@@ -53,6 +53,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/sample_matrix_rc.nia"),
+        include_str!("../../../examples/sample_matrix_arith.nia"),
     ];
     for src in ok_files {
         let r = check_all(src);
@@ -119,6 +120,76 @@ fn main() i32 {
 "#;
     let r = check_all(src);
     assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_add_ok_same_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [10, 20],
+        [30, 40],
+    ]);
+    let c: Matrix = a + b;
+    println(c);
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_add_rejects_different_cell_types() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let c: Matrix = a + b;
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_sub_rejected() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [10, 20],
+        [30, 40],
+    ]);
+    let c: Matrix = a - b;
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
 }
 
 #[test]

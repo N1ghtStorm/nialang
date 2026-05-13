@@ -315,6 +315,16 @@ fn codegen_matrix_rc_helpers_present() {
 }
 
 #[test]
+fn codegen_matrix_add_helpers_present() {
+    let ll = emit(include_str!("../../../examples/sample_matrix_arith.nia"));
+    assert!(ll.contains("matrix.add.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.add.cond"), "IR:\n{ll}");
+    assert!(ll.contains("call void @abort()"), "IR:\n{ll}");
+    assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("fadd double"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_pointer_write_emits_store_through_ptr() {
     let ll = emit(include_str!("../../../examples/tests/ok_ptr_write.nia"));
     assert!(ll.contains("store i32 99, ptr %"), "IR:\n{ll}");

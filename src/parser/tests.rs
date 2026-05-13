@@ -108,6 +108,11 @@ fn parse_fixture_matrix_rc() {
 }
 
 #[test]
+fn parse_fixture_matrix_arith() {
+    parse_ok(include_str!("../../examples/sample_matrix_arith.nia"));
+}
+
+#[test]
 fn parse_fixture_enum_match() {
     parse_ok(include_str!("../../examples/tests/ok_enum_match.nia"));
 }

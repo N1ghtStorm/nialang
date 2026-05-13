@@ -61,6 +61,7 @@ cargo test
 - `matrix_get(m, row, col)` / `matrix_set(m, row, col, value)`
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
+- `a + b` — component-wise addition of two matrices with the same element type and shape
 
 `Matrix` is a compiler-known heap object with explicit reference counting.
 See [Matrices](#matrices) for construction, printing, indexing, and lifetime
@@ -181,6 +182,52 @@ matrix_set(ints, 0, 0, 99);   // ok: i32 matrix, i32 value
 Current runtime note: indices are assumed valid. There is no bounds check yet,
 so `matrix_get(m, 100, 100)` is invalid program behavior.
 
+#### Matrix addition
+
+Use `+` to add two matrices component by component:
+
+```nia
+let a: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let b: Matrix = matrix([
+    [10, 20],
+    [30, 40],
+]);
+
+let c: Matrix = a + b;
+println(c); // [[11, 22], [33, 44]]
+```
+
+The result is a new `Matrix` allocation with reference count `1`; it does not
+modify either operand. Both operands must have the same element type:
+
+```nia
+let ints: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let floats: Matrix = matrix([
+    [1.0, 2.0],
+    [3.0, 4.0],
+]);
+
+// let bad: Matrix = ints + floats; // rejected: Matrix<i32> + Matrix<f64>
+```
+
+Both operands must also have the same runtime shape (`rows` and `cols`). The
+generated code checks the shape before adding; a mismatch aborts the program.
+Drop the result when it is no longer needed:
+
+```nia
+matrix_drop(c);
+matrix_drop(b);
+matrix_drop(a);
+```
+
 #### Reference counting
 
 A `Matrix` handle owns a heap allocation with an explicit reference counter.
@@ -214,7 +261,8 @@ needed. Do not use a handle after dropping it.
 
 See `examples/sample_matrix_rc.nia` for a runnable sample covering construction,
 printing, shape queries, cell get/set, cloning, reference count inspection, and
-dropping.
+dropping. See `examples/sample_matrix_arith.nia` for a separate arithmetic
+sample focused on `+`.
 
 ### Fixed-size vectors
 
