@@ -321,11 +321,15 @@ fn codegen_matrix_arith_helpers_present() {
     assert!(ll.contains("matrix.add.cond"), "IR:\n{ll}");
     assert!(ll.contains("matrix.sub.shape.ok"), "IR:\n{ll}");
     assert!(ll.contains("matrix.sub.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.mul.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.mul.cond"), "IR:\n{ll}");
     assert!(ll.contains("call void @abort()"), "IR:\n{ll}");
     assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
     assert!(ll.contains("sub nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
     assert!(ll.contains("fadd double"), "IR:\n{ll}");
     assert!(ll.contains("fsub double"), "IR:\n{ll}");
+    assert!(ll.contains("fmul double"), "IR:\n{ll}");
 }
 
 #[test]

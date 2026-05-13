@@ -379,6 +379,33 @@ fn matrix_elem_size(t: &Ty) -> usize {
     }
 }
 
+fn matrix_binop_label(op: &str) -> &'static str {
+    match op {
+        "+" => "add",
+        "-" => "sub",
+        "*" => "mul",
+        _ => unreachable!("typechecked matrix operator"),
+    }
+}
+
+fn matrix_int_binop_instruction(op: &str) -> &'static str {
+    match op {
+        "+" => "add",
+        "-" => "sub",
+        "*" => "mul",
+        _ => unreachable!("typechecked matrix operator"),
+    }
+}
+
+fn matrix_float_binop_instruction(op: &str) -> &'static str {
+    match op {
+        "+" => "fadd",
+        "-" => "fsub",
+        "*" => "fmul",
+        _ => unreachable!("typechecked matrix operator"),
+    }
+}
+
 struct Gen<'a> {
     structs: &'a [StructDef],
     enums: &'a [EnumDef],
@@ -1402,34 +1429,49 @@ impl<'a> Gen<'a> {
         elem_ty: &Ty,
         left: &str,
         right: &str,
-        is_add: bool,
+        op: &str,
     ) -> String {
         let out = self.fresh();
         match elem_ty {
             Ty::I8 | Ty::U8 => {
-                let op = if is_add { "add" } else { "sub" };
-                writeln!(self.out, "  %{} = {} i8 {}, {}", out, op, left, right).unwrap();
+                let llvm_op = matrix_int_binop_instruction(op);
+                writeln!(self.out, "  %{} = {} i8 {}, {}", out, llvm_op, left, right).unwrap();
             }
             Ty::I16 | Ty::U16 => {
-                let op = if is_add { "add" } else { "sub" };
-                writeln!(self.out, "  %{} = {} i16 {}, {}", out, op, left, right).unwrap();
+                let llvm_op = matrix_int_binop_instruction(op);
+                writeln!(self.out, "  %{} = {} i16 {}, {}", out, llvm_op, left, right).unwrap();
             }
             Ty::I32 => {
-                let op = if is_add { "add" } else { "sub" };
-                writeln!(self.out, "  %{} = {} nsw i32 {}, {}", out, op, left, right).unwrap();
+                let llvm_op = matrix_int_binop_instruction(op);
+                writeln!(
+                    self.out,
+                    "  %{} = {} nsw i32 {}, {}",
+                    out, llvm_op, left, right
+                )
+                .unwrap();
             }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
-                let op = if is_add { "add" } else { "sub" };
-                writeln!(self.out, "  %{} = {} i64 {}, {}", out, op, left, right).unwrap();
+                let llvm_op = matrix_int_binop_instruction(op);
+                writeln!(self.out, "  %{} = {} i64 {}, {}", out, llvm_op, left, right).unwrap();
             }
             Ty::I128 | Ty::U128 => {
-                let op = if is_add { "add" } else { "sub" };
-                writeln!(self.out, "  %{} = {} i128 {}, {}", out, op, left, right).unwrap();
+                let llvm_op = matrix_int_binop_instruction(op);
+                writeln!(
+                    self.out,
+                    "  %{} = {} i128 {}, {}",
+                    out, llvm_op, left, right
+                )
+                .unwrap();
             }
             Ty::F16 | Ty::F32 | Ty::F64 => {
                 let ll = llvm_ty(elem_ty, self.structs);
-                let op = if is_add { "fadd" } else { "fsub" };
-                writeln!(self.out, "  %{} = {} {} {}, {}", out, op, ll, left, right).unwrap();
+                let llvm_op = matrix_float_binop_instruction(op);
+                writeln!(
+                    self.out,
+                    "  %{} = {} {} {}, {}",
+                    out, llvm_op, ll, left, right
+                )
+                .unwrap();
             }
             _ => unreachable!("typechecked numeric matrix element"),
         }
@@ -1441,9 +1483,9 @@ impl<'a> Gen<'a> {
         left: &str,
         right: &str,
         elem_ty: &Ty,
-        is_add: bool,
+        op: &str,
     ) -> (Ty, String) {
-        let label_op = if is_add { "add" } else { "sub" };
+        let label_op = matrix_binop_label(op);
         let left_rows = self.matrix_load_i64_field(left, 2);
         let left_cols = self.matrix_load_i64_field(left, 3);
         let right_rows = self.matrix_load_i64_field(right, 2);
@@ -1588,7 +1630,7 @@ impl<'a> Gen<'a> {
             elem_ty,
             &format!("%{left_cell}"),
             &format!("%{right_cell}"),
-            is_add,
+            op,
         );
         writeln!(self.out, "  store {} {}, ptr %{}", ll, value, out_cell_ptr).unwrap();
         writeln!(self.out, "  br label %{}", latch_lbl).unwrap();
@@ -2394,7 +2436,7 @@ impl<'a> Gen<'a> {
                     return (tl, out_v);
                 }
                 if let Ty::Matrix(elem_ty) = &tl {
-                    return self.emit_matrix_binop(&vl, &vr, elem_ty, true);
+                    return self.emit_matrix_binop(&vl, &vr, elem_ty, "+");
                 }
                 let tmp = self.fresh();
                 match tl {
@@ -2439,7 +2481,7 @@ impl<'a> Gen<'a> {
                     return (tl, out_v);
                 }
                 if let Ty::Matrix(elem_ty) = &tl {
-                    return self.emit_matrix_binop(&vl, &vr, elem_ty, false);
+                    return self.emit_matrix_binop(&vl, &vr, elem_ty, "-");
                 }
                 let tmp = self.fresh();
                 match tl {
@@ -2499,6 +2541,9 @@ impl<'a> Gen<'a> {
                     return (tr, out_v);
                 }
                 assert!(types_match(&tl, &tr));
+                if let Ty::Matrix(elem_ty) = &tl {
+                    return self.emit_matrix_binop(&vl, &vr, elem_ty, "*");
+                }
                 let tmp = self.fresh();
                 match tl {
                     Ty::I8 | Ty::U8 => {

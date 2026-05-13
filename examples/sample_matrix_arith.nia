@@ -1,6 +1,6 @@
 // Matrix arithmetic.
 //
-// `+` and `-` are component-wise matrix arithmetic:
+// `+`, `-`, and `*` are component-wise matrix arithmetic:
 // - both operands must have the same numeric cell type,
 // - both operands must have the same runtime shape,
 // - the result is a new Matrix allocation with refcount 1.
@@ -16,13 +16,16 @@ fn main() i32 {
     ]);
     let sum: Matrix = a + b;
     let diff: Matrix = b - a;
+    let prod: Matrix = a * b;
 
     println(a);
     println(b);
     println(sum);
     println(diff);
+    println(prod);
     println(matrix_get(sum, 1, 2));
     println(matrix_get(diff, 1, 2));
+    println(matrix_get(prod, 1, 2));
 
     let fa: Matrix = matrix([
         [1.0, 2.5],
@@ -34,13 +37,17 @@ fn main() i32 {
     ]);
     let fsum: Matrix = fa + fb;
     let fdiff: Matrix = fb - fa;
+    let fprod: Matrix = fa * fb;
     println(fsum);
     println(fdiff);
+    println(fprod);
 
+    matrix_drop(fprod);
     matrix_drop(fdiff);
     matrix_drop(fsum);
     matrix_drop(fb);
     matrix_drop(fa);
+    matrix_drop(prod);
     matrix_drop(diff);
     matrix_drop(sum);
     matrix_drop(b);

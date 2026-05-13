@@ -61,7 +61,7 @@ cargo test
 - `matrix_get(m, row, col)` / `matrix_set(m, row, col, value)`
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
-- `a + b` / `a - b` — component-wise matrix arithmetic with the same element type and shape
+- `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
 
 `Matrix` is a compiler-known heap object with explicit reference counting.
 See [Matrices](#matrices) for construction, printing, indexing, and lifetime
@@ -182,9 +182,9 @@ matrix_set(ints, 0, 0, 99);   // ok: i32 matrix, i32 value
 Current runtime note: indices are assumed valid. There is no bounds check yet,
 so `matrix_get(m, 100, 100)` is invalid program behavior.
 
-#### Matrix addition and subtraction
+#### Matrix arithmetic
 
-Use `+` and `-` for component-wise matrix arithmetic:
+Use `+`, `-`, and `*` for component-wise matrix arithmetic:
 
 ```nia
 let a: Matrix = matrix([
@@ -199,8 +199,10 @@ let b: Matrix = matrix([
 
 let c: Matrix = a + b;
 let d: Matrix = b - a;
+let e: Matrix = a * b;
 println(c); // [[11, 22], [33, 44]]
 println(d); // [[9, 18], [27, 36]]
+println(e); // [[10, 40], [90, 160]]
 ```
 
 The result is a new `Matrix` allocation with reference count `1`; it does not
@@ -219,6 +221,7 @@ let floats: Matrix = matrix([
 
 // let bad_sum: Matrix = ints + floats;  // rejected: Matrix<i32> + Matrix<f64>
 // let bad_diff: Matrix = ints - floats; // rejected: Matrix<i32> - Matrix<f64>
+// let bad_prod: Matrix = ints * floats; // rejected: Matrix<i32> * Matrix<f64>
 ```
 
 Both operands must also have the same runtime shape (`rows` and `cols`). The
@@ -226,6 +229,7 @@ generated code checks the shape before doing arithmetic; a mismatch aborts the
 program. Drop each result when it is no longer needed:
 
 ```nia
+matrix_drop(e);
 matrix_drop(d);
 matrix_drop(c);
 matrix_drop(b);
@@ -266,7 +270,7 @@ needed. Do not use a handle after dropping it.
 See `examples/sample_matrix_rc.nia` for a runnable sample covering construction,
 printing, shape queries, cell get/set, cloning, reference count inspection, and
 dropping. See `examples/sample_matrix_arith.nia` for a separate arithmetic
-sample focused on `+`.
+sample focused on `+`, `-`, and `*`.
 
 ### Fixed-size vectors
 
