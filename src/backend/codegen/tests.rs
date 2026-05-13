@@ -323,6 +323,7 @@ fn codegen_matrix_arith_helpers_present() {
     assert!(ll.contains("matrix.sub.cond"), "IR:\n{ll}");
     assert!(ll.contains("matrix.mul.shape.ok"), "IR:\n{ll}");
     assert!(ll.contains("matrix.mul.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.scalar.mul.cond"), "IR:\n{ll}");
     assert!(ll.contains("call void @abort()"), "IR:\n{ll}");
     assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
     assert!(ll.contains("sub nsw i32"), "IR:\n{ll}");

@@ -1645,6 +1645,102 @@ impl<'a> Gen<'a> {
         (Ty::Matrix(Box::new(elem_ty.clone())), format!("%{matrix}"))
     }
 
+    fn emit_matrix_scalar_mul(&mut self, matrix: &str, scalar: &str, elem_ty: &Ty) -> (Ty, String) {
+        let rows = self.matrix_load_i64_field(matrix, 2);
+        let cols = self.matrix_load_i64_field(matrix, 3);
+        let len = self.fresh();
+        writeln!(self.out, "  %{} = mul i64 {}, {}", len, rows, cols).unwrap();
+        let bytes = if matrix_elem_size(elem_ty) == 1 {
+            format!("%{len}")
+        } else {
+            let bytes = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = mul i64 %{}, {}",
+                bytes,
+                len,
+                matrix_elem_size(elem_ty)
+            )
+            .unwrap();
+            format!("%{bytes}")
+        };
+        let data = self.fresh();
+        let out_matrix = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", out_matrix).unwrap();
+
+        let rc_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 0);
+        let data_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 1);
+        let rows_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 2);
+        let cols_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 3);
+        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
+        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", rows, rows_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", cols, cols_ptr).unwrap();
+
+        let matrix_data = self.matrix_load_data_ptr(matrix);
+        let idx_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+
+        let cond_lbl = self.fresh_label("matrix.scalar.mul.cond");
+        let body_lbl = self.fresh_label("matrix.scalar.mul.body");
+        let latch_lbl = self.fresh_label("matrix.scalar.mul.latch");
+        let done_lbl = self.fresh_label("matrix.scalar.mul.done");
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", cond_lbl).unwrap();
+        let idx = self.fresh();
+        let has_item = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, %{}",
+            has_item, idx, len
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_item, body_lbl, done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let ll = llvm_ty(elem_ty, self.structs);
+        let cell_ptr = self.fresh();
+        let out_cell_ptr = self.fresh();
+        let cell = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i64 %{}",
+            cell_ptr, ll, matrix_data, idx
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr %{}, i64 %{}",
+            out_cell_ptr, ll, data, idx
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", cell, ll, cell_ptr).unwrap();
+        let value = self.emit_matrix_elem_binop(elem_ty, &format!("%{cell}"), scalar, "*");
+        writeln!(self.out, "  store {} {}, ptr %{}", ll, value, out_cell_ptr).unwrap();
+        writeln!(self.out, "  br label %{}", latch_lbl).unwrap();
+
+        writeln!(self.out, "{}:", latch_lbl).unwrap();
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        (
+            Ty::Matrix(Box::new(elem_ty.clone())),
+            format!("%{out_matrix}"),
+        )
+    }
+
     /// Resolves numeric field index for named/tuple field access codegen.
     fn struct_idx(&self, sname: &str, field: &str) -> Option<u32> {
         let s = self.structs.iter().find(|s| s.name == sname)?;
@@ -2529,6 +2625,15 @@ impl<'a> Gen<'a> {
                     let out_v = self.emit_nia_vector_scalar_mul(&vname, &vl, &vr);
                     return (tl, out_v);
                 }
+                if let Ty::Matrix(elem_ty) = &tl {
+                    let (tr, vr) = self.emit_expr(r, locals, None);
+                    if let Ty::Matrix(_) = tr {
+                        debug_assert!(types_match(&tl, &tr));
+                        return self.emit_matrix_binop(&vl, &vr, elem_ty, "*");
+                    }
+                    debug_assert!(types_match(&tr, elem_ty));
+                    return self.emit_matrix_scalar_mul(&vl, &vr, elem_ty);
+                }
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
                 if let Some(vname) = self.as_nia_vector_name(&tr).map(|s| s.to_string()) {
                     let et = self.vector_axis_ty_cloned(&vname);
@@ -2539,6 +2644,10 @@ impl<'a> Gen<'a> {
                     }
                     let out_v = self.emit_nia_vector_scalar_mul(&vname, &vr, &vl2);
                     return (tr, out_v);
+                }
+                if let Ty::Matrix(elem_ty) = &tr {
+                    debug_assert!(types_match(&tl, elem_ty));
+                    return self.emit_matrix_scalar_mul(&vr, &vl, elem_ty);
                 }
                 assert!(types_match(&tl, &tr));
                 if let Ty::Matrix(elem_ty) = &tl {

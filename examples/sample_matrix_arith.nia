@@ -17,15 +17,21 @@ fn main() i32 {
     let sum: Matrix = a + b;
     let diff: Matrix = b - a;
     let prod: Matrix = a * b;
+    let scaled_right: Matrix = a * 3;
+    let scaled_left: Matrix = 2 * b;
 
     println(a);
     println(b);
     println(sum);
     println(diff);
     println(prod);
+    println(scaled_right);
+    println(scaled_left);
     println(matrix_get(sum, 1, 2));
     println(matrix_get(diff, 1, 2));
     println(matrix_get(prod, 1, 2));
+    println(matrix_get(scaled_right, 1, 2));
+    println(matrix_get(scaled_left, 1, 2));
 
     let fa: Matrix = matrix([
         [1.0, 2.5],
@@ -38,15 +44,20 @@ fn main() i32 {
     let fsum: Matrix = fa + fb;
     let fdiff: Matrix = fb - fa;
     let fprod: Matrix = fa * fb;
+    let fscaled: Matrix = fa * 2.0;
     println(fsum);
     println(fdiff);
     println(fprod);
+    println(fscaled);
 
+    matrix_drop(fscaled);
     matrix_drop(fprod);
     matrix_drop(fdiff);
     matrix_drop(fsum);
     matrix_drop(fb);
     matrix_drop(fa);
+    matrix_drop(scaled_left);
+    matrix_drop(scaled_right);
     matrix_drop(prod);
     matrix_drop(diff);
     matrix_drop(sum);

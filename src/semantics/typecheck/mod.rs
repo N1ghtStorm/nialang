@@ -626,6 +626,33 @@ fn infer_mul_bin(
         return Err("cannot use `*` on a pointer value".into());
     }
 
+    if let Ty::Matrix(elem_ty) = &tl {
+        if matches!(elem_ty.as_ref(), Ty::Unit) {
+            return Err("cannot use `*` on Matrix values with unknown element type".into());
+        }
+        let tr = infer_expr(r, env, structs, enums, vectors, fns, None)?;
+        if matches!(tr, Ty::Unit) {
+            return Err("void value on the right of `*`".into());
+        }
+        if matches!(tr, Ty::Ptr(_)) {
+            return Err("cannot use `*` on a pointer value".into());
+        }
+        if matches!(tr, Ty::Matrix(_)) {
+            if types_equal(&tl, &tr) {
+                return Ok(tl);
+            }
+            return Err(format!(
+                "`*` on matrices requires the same element type; got {tl:?} and {tr:?}"
+            ));
+        }
+        if is_numeric_ty(&tr) && types_equal(&tr, elem_ty) {
+            return Ok(tl);
+        }
+        return Err(format!(
+            "matrix `*` expects a Matrix with the same element type or scalar {elem_ty:?}, got {tr:?}"
+        ));
+    }
+
     if is_nia_vector_ty(&tl, vectors) {
         let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
         if !is_integer_ty(et) && !is_float_ty(et) {
@@ -662,6 +689,18 @@ fn infer_mul_bin(
     }
     if matches!(tr, Ty::Ptr(_)) {
         return Err("cannot use `*` on a pointer value".into());
+    }
+
+    if let Ty::Matrix(elem_ty) = &tr {
+        if matches!(elem_ty.as_ref(), Ty::Unit) {
+            return Err("cannot use `*` on Matrix values with unknown element type".into());
+        }
+        if is_numeric_ty(&tl) && types_equal(&tl, elem_ty) {
+            return Ok(tr);
+        }
+        return Err(format!(
+            "matrix `*` expects scalar {elem_ty:?} on the left, got {tl:?}"
+        ));
     }
 
     if is_nia_vector_ty(&tr, vectors) {

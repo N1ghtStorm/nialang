@@ -62,6 +62,7 @@ cargo test
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
 - `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
+- `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
 
 `Matrix` is a compiler-known heap object with explicit reference counting.
 See [Matrices](#matrices) for construction, printing, indexing, and lifetime
@@ -234,6 +235,33 @@ matrix_drop(d);
 matrix_drop(c);
 matrix_drop(b);
 matrix_drop(a);
+```
+
+Use `*` with a scalar to multiply every cell by one number:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let right: Matrix = m * 3;
+let left: Matrix = 2 * m;
+println(right); // [[3, 6], [9, 12]]
+println(left);  // [[2, 4], [6, 8]]
+```
+
+The scalar type must match the matrix cell type exactly. Integer literals are
+`i32`; float literals are `f64`:
+
+```nia
+let f: Matrix = matrix([
+    [1.0, 2.0],
+    [3.0, 4.0],
+]);
+
+let ok: Matrix = f * 2.0;
+// let bad: Matrix = f * 2; // rejected: Matrix<f64> * i32
 ```
 
 #### Reference counting

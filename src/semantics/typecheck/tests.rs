@@ -264,6 +264,83 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_matrix_scalar_mul_ok_same_cell_type_both_orders() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let right: Matrix = a * 3;
+    let left: Matrix = 2 * a;
+    println(right);
+    println(left);
+    matrix_drop(left);
+    matrix_drop(right);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_scalar_mul_float_ok() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let scaled: Matrix = a * 2.0;
+    println(scaled);
+    matrix_drop(scaled);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_scalar_mul_rejects_different_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let scaled: Matrix = a * 2.0;
+    matrix_drop(scaled);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_float_scalar_mul_rejects_int_literal() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let scaled: Matrix = a * 2;
+    matrix_drop(scaled);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn typecheck_matrix_rejects_mixed_numeric_cell_types() {
     let src = r#"
 fn main() i32 {
