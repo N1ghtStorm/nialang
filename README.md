@@ -37,13 +37,13 @@ cargo test
 - Arrays: `[T; N]`
 - Pointers: `&T`
 - Structs / Enums
-- **Vectors** (user-defined fixed-size aggregates): see [Fixed-size vectors](#fixed-size-vectors) below.
+- **Vectors**: named fixed-size aggregates and anonymous `<...>` vectors; see [Fixed-size vectors](#fixed-size-vectors) below.
 - `Matrix` — built-in ref-counted heap matrix of one numeric cell type.
 
 ### Expressions and Operators
 
 - Arithmetic: `+`, `-`, `*`, `/`
-- Vector-only: `@` (dot product of two values of the *same* `vector` type); component-wise `+`, `-`, `*` on two such vectors; `*` between a vector and a scalar of the **axis** type (either order). See [Fixed-size vectors](#fixed-size-vectors).
+- Vector-only: `@` (dot product); component-wise `+`, `-`, `*`; `*` between a vector and a scalar of the **axis** type (either order). Named vectors require the same declared type; anonymous vectors require the same element type and length. See [Fixed-size vectors](#fixed-size-vectors).
 - Matrix-only: `@` (matrix multiplication); component-wise `+`, `-`, `*`; `*` with a scalar of the exact cell type.
 - Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
 - Indexing: `arr[i]`
@@ -373,12 +373,13 @@ sample focused on `+`, `-`, and `*`.
 
 ### Fixed-size vectors
 
-Vectors are a small **linear-algebra-friendly** layer on top of the same value-type model as structs: a `vector` declaration introduces a named aggregate with **named axes** and a single **element** (axis) type. They are meant for 2D/3D-style math (positions, deltas, RGB-like triples) where you want field names (`X`, `Y`, …) and a fixed set of operations, not arbitrary struct logic. In textbook terms, each value of type `Vec2` / `Vec3` / … behaves like a column vector in **R**^2, **R**^3, … with the usual dot product written as `@`.
+Vectors are a small **linear-algebra-friendly** layer on top of the same value-type model as structs. NiaLang has two fixed-size vector forms: named `vector` declarations with **named axes**, and anonymous `<...>` literals for one-off fixed-size numeric values. They are meant for 2D/3D-style math (positions, deltas, RGB-like triples) where you want a compact fixed set of operations, not arbitrary struct logic. In textbook terms, each vector value behaves like a column vector in **R**^n with the usual dot product written as `@`.
 
 #### What a vector is (and is not)
 
-- **Is:** A value type known to the compiler by its **declared name** (e.g. `Vec2`). Binary vector operators (`+`, `-`, `*`, `@`) take two operands of that **same** declared type — nominal typing, not structural equivalence. Distinct declarations (e.g. `A` and `B`) are different types even if their axes and element type match.
-- **Is:** Lowered to LLVM as a plain struct with one field per axis (same layout idea as a named struct with those fields).
+- **Is:** A named value type known to the compiler by its **declared name** (e.g. `Vec2`). Binary operators on named vectors (`+`, `-`, `*`, `@`) take two operands of that **same** declared type — nominal typing, not structural equivalence. Distinct declarations (e.g. `A` and `B`) are different types even if their axes and element type match.
+- **Is:** An anonymous value type written as `<1, 2, 3>` when you do not need axis names. Anonymous vectors are structural: element type plus length, e.g. `<i32; 3>`.
+- **Is:** Lowered to LLVM as a plain aggregate with one field per component.
 - **Is not:** A generic `Vec<T>` or a dynamically sized array; size is fixed by the axis list.
 - **Is not:** SIMD or a matrix type; **`@`** is the dot product of two values of the **same** vector type.
 
@@ -414,17 +415,63 @@ let q: Vec2 = Vec2 [X: 0, Y: 0];
 
 Reading axes is ordinary field syntax: `p.X`, `p.Y`. That yields the element type (`i32` / `f64` / …).
 
+#### Anonymous vector literals
+
+Use `<...>` when you need a fixed-size vector without declaring axis names:
+
+```nia
+let a = <1, 2, 3>;
+let b = <4, 5, 6>;
+
+println(a + b); // [5, 7, 9]
+println(b - a); // [3, 3, 3]
+println(a * b); // [4, 10, 18]
+println(a * 3); // [3, 6, 9]
+println(2 * b); // [8, 10, 12]
+println(a @ b); // 32
+```
+
+The element type is inferred from the literal. Integer literals default to
+`i32`; float literals default to `f64`:
+
+```nia
+let ints = <1, 2, 3>;       // anonymous <i32; 3>
+let floats = <1.0, 2.0>;    // anonymous <f64; 2>
+```
+
+All elements inside one anonymous vector must have exactly the same type, and
+vector-vector arithmetic requires the same element type and length on both
+sides:
+
+```nia
+let ok = <1, 2, 3> + <4, 5, 6>;
+
+// let bad_len = <1, 2> + <3, 4, 5>;       // rejected: different lengths
+// let bad_ty = <1, 2> + <3.0, 4.0>;       // rejected: i32 vs f64
+```
+
+Anonymous vectors work with `outer` too:
+
+```nia
+let m: Matrix = outer(<1, 2, 3>, <4, 5>);
+println(m); // [[4, 5], [8, 10], [12, 15]]
+matrix_drop(m);
+```
+
+`println` prints anonymous vectors like arrays (`[1, 2, 3]`) because they do not
+have axis names.
+
 #### Typed operations (summary)
 
-All vector-vector operators use **the same vector type** on both sides. The element type is a **numeric** primitive (integer or float); arithmetic follows that element type.
+Named vector-vector operators use **the same vector type** on both sides. Anonymous vector-vector operators use the same **element type** and **length** on both sides. The element type is a **numeric** primitive (integer or float); arithmetic follows that element type.
 
 | Operator | Operands | Result type | Meaning |
 |----------|-----------|---------------|---------|
-| `+` | two same `vector` | that `vector` | Component-wise sum |
-| `-` | two same `vector` | that `vector` | Component-wise difference |
-| `*` | two same `vector` | that `vector` | Component-wise (Hadamard) product |
-| `*` | `vector` and scalar, or scalar and `vector` | that `vector` | **Scale** every axis; the scalar has the **same** type as each axis (the declared element type, e.g. `i32` on `vector V i32 [...]`) |
-| `@` | two same `vector` | **element type** | Dot product: `u.X*v.X + u.Y*v.Y + …` |
+| `+` | two compatible vectors | same vector kind | Component-wise sum |
+| `-` | two compatible vectors | same vector kind | Component-wise difference |
+| `*` | two compatible vectors | same vector kind | Component-wise (Hadamard) product |
+| `*` | vector and scalar, or scalar and vector | same vector kind | **Scale** every component; the scalar has the **same** type as each component |
+| `@` | two compatible vectors | **element type** | Dot product: `u0*v0 + u1*v1 + ...` |
 
 Integer element types use LLVM `nsw` where applicable for add/sub/mul; floats use `fadd` / `fmul` / `fadd` for the dot-product reduction.
 
@@ -438,7 +485,7 @@ Integer element types use LLVM `nsw` where applicable for add/sub/mul; floats us
 
 `*`, `/`, and `@` share one **multiplicative** precedence level and bind **tighter** than `+` and `-`. They group **left-to-right** among themselves.
 
-Examples (with `u`, `v`, `w` of the same `vector` type, `s` of the element type):
+Examples (with `u`, `v`, `w` of the same named `vector` type or compatible anonymous vector type, `s` of the element type):
 
 - `u + v * w` is `u + (v * w)` — Hadamard product first, then component-wise sum.
 - `u * v @ w` is `(u * v) @ w` — dot product of the Hadamard result with `w` (left-to-right among `*`, `/`, `@`).
@@ -455,6 +502,7 @@ Statements like `u += v`, `u -= v`, and `u *= rhs` expand to `u = u + v`, `u = u
 #### Further examples
 
 - Extended demo (two types, `Vec2` and `Vec3`, more `println` cases): `examples/sample_vector_arith.nia`.
+- Anonymous vectors (`<...>`), scalar scaling, dot product, and `outer`: `examples/sample_anon_vector.nia`.
 - Minimal walk-through (single `Vec2` type): see **example 4** under [Large Working Examples](#large-working-examples) below.
 - Stricter typing rules and rejected forms: [docs/vector-limitations.md](docs/vector-limitations.md).
 
@@ -464,7 +512,7 @@ The types and operators above are chosen so that **familiar math notation** has 
 
 | Idea | In NiaLang | Notes |
 |------|------------|--------|
-| Vector in **R**^n (fixed dimension) | `vector` + literal `Ty [ X: …, Y: … ]` | Nominal type per declaration; axes are named fields. |
+| Vector in **R**^n (fixed dimension) | `vector` + literal `Ty [ X: …, Y: … ]`, or anonymous `<1, 2, 3>` | Named vectors are nominal with axis fields; anonymous vectors are structural by element type and length. |
 | Inner product *u·v* (standard dot) | `u @ v` | Result is the **scalar** element type of that vector. |
 | Hadamard product *u* ∘ *v* | `u * v` | Same vector type on both sides. |
 | Scalar multiplication α*v* | `v * alpha` or `alpha * v` | `alpha` must match the vector’s element type. |
@@ -535,6 +583,7 @@ fn main() i32 {
 |------|---------------------|
 | `examples/sample_vector.nia` | One `vector` type, literal, `println`. |
 | `examples/sample_vector_arith.nia` | Two vector types, component ops, dot product, more `println`. |
+| `examples/sample_anon_vector.nia` | Anonymous `<...>` vectors, compatible arithmetic, `@`, scalar scaling, `outer`. |
 | `examples/sample_matrix_rc.nia` | `Matrix` lifecycle: build, print, clone, refcount, `matrix_drop`. |
 | `examples/sample_matrix_arith.nia` | Matrix `+`, `-`, `*`, `@`, scalar `*`, `def`. |
 
@@ -677,7 +726,7 @@ fn main() i32 {
 }
 ```
 
-See also: `examples/sample_vector_arith.nia` (includes a second vector type `Vec3`).
+See also: `examples/sample_vector_arith.nia` (includes a second vector type `Vec3`) and `examples/sample_anon_vector.nia` (uses `<1, 2, 3>` without a named declaration).
 
 ## Project Layout
 

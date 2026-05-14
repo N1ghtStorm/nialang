@@ -926,3 +926,87 @@ fn main() i32 {
 "#;
     assert!(check_all(src).is_err());
 }
+
+#[test]
+fn typecheck_anon_vector_arithmetic_ok() {
+    let src = r#"
+fn main() i32 {
+    let a = <1, 2, 3>;
+    let b = <4, 5, 6>;
+    let sum = a + b;
+    let diff = b - a;
+    let prod = a * b;
+    let scaled = a * 3;
+    let left_scaled = 2 * b;
+    let dot: i32 = a @ b;
+    println(sum);
+    println(diff);
+    println(prod);
+    println(scaled);
+    println(left_scaled);
+    dot
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_anon_vector_float_arithmetic_ok() {
+    let src = r#"
+fn main() i32 {
+    let a = <1.0, 2.0, 3.0>;
+    let b = <4.0, 5.0, 6.0>;
+    println(a + b);
+    println(a * 2.0);
+    println(a @ b);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_anon_vector_rejects_different_lengths() {
+    let src = r#"
+fn main() i32 {
+    let a = <1, 2, 3>;
+    let b = <4, 5>;
+    let c = a + b;
+    println(c);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_anon_vector_rejects_different_element_types() {
+    let src = r#"
+fn main() i32 {
+    let a = <1, 2, 3>;
+    let b = <1.0, 2.0, 3.0>;
+    let c = a * b;
+    println(c);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_anon_vector_outer_ok() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = outer(<1, 2, 3>, <4, 5>);
+    println(m);
+    matrix_drop(m);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}

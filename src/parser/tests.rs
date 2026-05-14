@@ -113,6 +113,11 @@ fn parse_fixture_matrix_arith() {
 }
 
 #[test]
+fn parse_fixture_anon_vector() {
+    parse_ok(include_str!("../../examples/sample_anon_vector.nia"));
+}
+
+#[test]
 fn parse_fixture_enum_match() {
     parse_ok(include_str!("../../examples/tests/ok_enum_match.nia"));
 }

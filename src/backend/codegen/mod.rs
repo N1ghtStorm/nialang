@@ -49,6 +49,11 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
                 collect_string_literals_expr(fe, out);
             }
         }
+        Expr::AnonVectorLit(elems) => {
+            for elem in elems {
+                collect_string_literals_expr(elem, out);
+            }
+        }
         Expr::ArrayLit(elems) => {
             for elem in elems {
                 collect_string_literals_expr(elem, out);
@@ -253,6 +258,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::Ptr(inner) => format!("&{}", ty_print_label(inner)),
         Ty::Unit => "()".into(),
         Ty::Vector(n, inner) => format!("{} {}", n, ty_print_label(inner)),
+        Ty::AnonVector(inner, n) => format!("<{}; {}>", ty_print_label(inner), n),
         Ty::Matrix(inner) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
         Ty::Matrix(inner) => format!("Matrix<{}>", ty_print_label(inner)),
     }
@@ -404,6 +410,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Ptr(_) => "ptr".into(),
         Ty::Unit => "void".into(),
         Ty::Vector(n, _) => format!("%struct.{}", sanitize(n)),
+        Ty::AnonVector(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
         Ty::Matrix(_) => "ptr".into(),
     }
 }
@@ -977,6 +984,7 @@ impl<'a> Gen<'a> {
             | Ty::Enum(_)
             | Ty::Unit
             | Ty::Vector(_, _)
+            | Ty::AnonVector(_, _)
             | Ty::Matrix(_) => unreachable!("typechecked"),
         }
     }
@@ -1413,6 +1421,9 @@ impl<'a> Gen<'a> {
             }
             Ty::Vector(vname, _) => {
                 self.emit_print_vector(vname, v, newline);
+            }
+            Ty::AnonVector(elem_ty, n) => {
+                self.emit_print_array(elem_ty, *n, v, newline);
             }
             Ty::Enum(ename) => {
                 self.emit_print_enum(ename, v, newline);
@@ -2648,6 +2659,21 @@ impl<'a> Gen<'a> {
         }
     }
 
+    fn vector_value_meta(&self, t: &Ty) -> Option<(Ty, usize, String)> {
+        match t {
+            Ty::Struct(name) | Ty::Vector(name, _) => {
+                let v = self.vectors.iter().find(|v| v.name == *name)?;
+                Some((
+                    v.ty.clone(),
+                    v.fields.len(),
+                    format!("%struct.{}", sanitize(&v.name)),
+                ))
+            }
+            Ty::AnonVector(elem, n) => Some((elem.as_ref().clone(), *n, llvm_ty(t, self.structs))),
+            _ => None,
+        }
+    }
+
     /// Single-axis `+` / `-` for vector components (matches scalar `Expr::Add` / `Sub`).
     fn emit_scalar_vec_binop(&mut self, elem_ty: &Ty, a: &str, b: &str, is_add: bool) -> String {
         let out = self.fresh();
@@ -2939,38 +2965,210 @@ impl<'a> Gen<'a> {
         (elem_ty, format!("%{id}"))
     }
 
+    fn emit_anon_vector_lit(
+        &mut self,
+        elems: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+        hint: Option<&Ty>,
+    ) -> (Ty, String) {
+        let mut emitted: Vec<String> = Vec::new();
+        let (elem_ty, n) = match hint {
+            Some(Ty::AnonVector(elem_ty, n)) => (elem_ty.as_ref().clone(), *n),
+            _ => {
+                let first = elems.first().expect("typechecked non-empty anonymous vector");
+                let (first_ty, first_value) = self.emit_expr(first, locals, None);
+                emitted.push(first_value);
+                (first_ty, elems.len())
+            }
+        };
+        let vec_ty = Ty::AnonVector(Box::new(elem_ty.clone()), n);
+        let llvm_vec = llvm_ty(&vec_ty, self.structs);
+        let mut agg = "poison".to_string();
+        for (i, elem) in elems.iter().enumerate() {
+            let value = if i < emitted.len() {
+                emitted[i].clone()
+            } else {
+                let (_, value) = self.emit_expr(elem, locals, Some(&elem_ty));
+                value
+            };
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} {}, {}",
+                tmp,
+                llvm_vec,
+                agg,
+                llvm_ty(&elem_ty, self.structs),
+                value,
+                i
+            )
+            .unwrap();
+            agg = format!("%{tmp}");
+        }
+        (vec_ty, agg)
+    }
+
+    fn emit_anon_vector_binop(
+        &mut self,
+        elem_ty: &Ty,
+        n: usize,
+        vl: &str,
+        vr: &str,
+        is_add: bool,
+    ) -> String {
+        let vec_ty = Ty::AnonVector(Box::new(elem_ty.clone()), n);
+        let llvm_vec = llvm_ty(&vec_ty, self.structs);
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        let mut agg = "poison".to_string();
+        for i in 0..n {
+            let left = self.fresh();
+            let right = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                left, llvm_vec, vl, i
+            )
+            .unwrap();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                right, llvm_vec, vr, i
+            )
+            .unwrap();
+            let value = self.emit_scalar_vec_binop(elem_ty, &left, &right, is_add);
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} %{}, {}",
+                tmp, llvm_vec, agg, elem_ll, value, i
+            )
+            .unwrap();
+            agg = format!("%{tmp}");
+        }
+        agg
+    }
+
+    fn emit_anon_vector_component_mul(
+        &mut self,
+        elem_ty: &Ty,
+        n: usize,
+        vl: &str,
+        vr: &str,
+    ) -> String {
+        let vec_ty = Ty::AnonVector(Box::new(elem_ty.clone()), n);
+        let llvm_vec = llvm_ty(&vec_ty, self.structs);
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        let mut agg = "poison".to_string();
+        for i in 0..n {
+            let left = self.fresh();
+            let right = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                left, llvm_vec, vl, i
+            )
+            .unwrap();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                right, llvm_vec, vr, i
+            )
+            .unwrap();
+            let value = self.emit_scalar_vec_mul_pair(elem_ty, &left, &right);
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} %{}, {}",
+                tmp, llvm_vec, agg, elem_ll, value, i
+            )
+            .unwrap();
+            agg = format!("%{tmp}");
+        }
+        agg
+    }
+
+    fn emit_anon_vector_scalar_mul(
+        &mut self,
+        elem_ty: &Ty,
+        n: usize,
+        vec_val: &str,
+        scalar: &str,
+    ) -> String {
+        let vec_ty = Ty::AnonVector(Box::new(elem_ty.clone()), n);
+        let llvm_vec = llvm_ty(&vec_ty, self.structs);
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        let mut agg = "poison".to_string();
+        for i in 0..n {
+            let cell = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                cell, llvm_vec, vec_val, i
+            )
+            .unwrap();
+            let value = self.emit_scalar_vec_mul(elem_ty, &cell, scalar);
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} %{}, {}",
+                tmp, llvm_vec, agg, elem_ll, value, i
+            )
+            .unwrap();
+            agg = format!("%{tmp}");
+        }
+        agg
+    }
+
+    fn emit_anon_vector_dot(
+        &mut self,
+        elem_ty: &Ty,
+        n: usize,
+        vl: &str,
+        vr: &str,
+    ) -> (Ty, String) {
+        let vec_ty = Ty::AnonVector(Box::new(elem_ty.clone()), n);
+        let llvm_vec = llvm_ty(&vec_ty, self.structs);
+        let mut acc: Option<String> = None;
+        for i in 0..n {
+            let left = self.fresh();
+            let right = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                left, llvm_vec, vl, i
+            )
+            .unwrap();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                right, llvm_vec, vr, i
+            )
+            .unwrap();
+            let product = self.emit_scalar_vec_mul_pair(elem_ty, &left, &right);
+            acc = Some(match acc {
+                None => product,
+                Some(prev) => self.emit_scalar_vec_binop(elem_ty, &prev, &product, true),
+            });
+        }
+        let id = acc.expect("typechecked non-empty anonymous vector");
+        (elem_ty.clone(), format!("%{id}"))
+    }
+
     fn emit_outer(
         &mut self,
         args: &[Expr],
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
         let (left_ty, left_val) = self.emit_expr(&args[0], locals, None);
-        let left_name = self
-            .as_nia_vector_name(&left_ty)
-            .expect("typechecked outer left vector")
-            .to_string();
         let (right_ty, right_val) = self.emit_expr(&args[1], locals, None);
-        let right_name = self
-            .as_nia_vector_name(&right_ty)
-            .expect("typechecked outer right vector")
-            .to_string();
-        let left_def = self
-            .vectors
-            .iter()
-            .find(|v| v.name == left_name)
-            .expect("checked vector decl")
-            .clone();
-        let right_def = self
-            .vectors
-            .iter()
-            .find(|v| v.name == right_name)
-            .expect("checked vector decl")
-            .clone();
-        debug_assert!(types_match(&left_def.ty, &right_def.ty));
+        let (elem_ty, rows, left_ll) = self
+            .vector_value_meta(&left_ty)
+            .expect("typechecked outer left vector");
+        let (right_elem_ty, cols, right_ll) = self
+            .vector_value_meta(&right_ty)
+            .expect("typechecked outer right vector");
+        debug_assert!(types_match(&elem_ty, &right_elem_ty));
 
-        let elem_ty = left_def.ty.clone();
-        let rows = left_def.fields.len();
-        let cols = right_def.fields.len();
         let len = rows * cols;
         let bytes = len * matrix_elem_size(&elem_ty);
         let data = self.fresh();
@@ -2989,8 +3187,6 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  store i64 {}, ptr {}", cols, cols_ptr).unwrap();
 
         let ll = llvm_ty(&elem_ty, self.structs);
-        let left_ll = format!("%struct.{}", sanitize(&left_name));
-        let right_ll = format!("%struct.{}", sanitize(&right_name));
         for i in 0..rows {
             let left_cell = self.fresh();
             writeln!(
@@ -3361,6 +3557,7 @@ impl<'a> Gen<'a> {
                     | Ty::Bool
                     | Ty::String
                     | Ty::Vector(_, _)
+                    | Ty::AnonVector(_, _)
                     | Ty::Matrix(_) => unreachable!("typechecked for range"),
                 }
                 writeln!(self.out, "  br label %{}", header).unwrap();
@@ -3409,6 +3606,7 @@ impl<'a> Gen<'a> {
                 Some(Ty::U128) => (Ty::U128, format!("{n}")),
                 Some(Ty::Struct(_))
                 | Some(Ty::Vector(_, _))
+                | Some(Ty::AnonVector(_, _))
                 | Some(Ty::Enum(_))
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
@@ -3495,6 +3693,7 @@ impl<'a> Gen<'a> {
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
+                    | Ty::AnonVector(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -3512,6 +3711,10 @@ impl<'a> Gen<'a> {
                 assert!(types_match(&tl, &tr));
                 if let Some(vname) = self.as_nia_vector_name(&tl).map(|s| s.to_string()) {
                     let out_v = self.emit_nia_vector_binop(&vname, &vl, &vr, true);
+                    return (tl, out_v);
+                }
+                if let Ty::AnonVector(elem_ty, n) = &tl {
+                    let out_v = self.emit_anon_vector_binop(elem_ty, *n, &vl, &vr, true);
                     return (tl, out_v);
                 }
                 if let Ty::Matrix(elem_ty) = &tl {
@@ -3541,6 +3744,7 @@ impl<'a> Gen<'a> {
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
+                    | Ty::AnonVector(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -3558,6 +3762,10 @@ impl<'a> Gen<'a> {
                 assert!(types_match(&tl, &tr));
                 if let Some(vname) = self.as_nia_vector_name(&tl).map(|s| s.to_string()) {
                     let out_v = self.emit_nia_vector_binop(&vname, &vl, &vr, false);
+                    return (tl, out_v);
+                }
+                if let Ty::AnonVector(elem_ty, n) = &tl {
+                    let out_v = self.emit_anon_vector_binop(elem_ty, *n, &vl, &vr, false);
                     return (tl, out_v);
                 }
                 if let Ty::Matrix(elem_ty) = &tl {
@@ -3587,6 +3795,7 @@ impl<'a> Gen<'a> {
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
+                    | Ty::AnonVector(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -3610,6 +3819,20 @@ impl<'a> Gen<'a> {
                     let out_v = self.emit_nia_vector_scalar_mul(&vname, &vl, &vr);
                     return (tl, out_v);
                 }
+                if let Ty::AnonVector(elem_ty, n) = &tl {
+                    let (tr, vr) = match r.as_ref() {
+                        Expr::AnonVectorLit(_) => self.emit_expr(r, locals, Some(&tl)),
+                        _ => self.emit_expr(r, locals, Some(elem_ty)),
+                    };
+                    if matches!(tr, Ty::AnonVector(_, _)) {
+                        debug_assert!(types_match(&tl, &tr));
+                        let out_v = self.emit_anon_vector_component_mul(elem_ty, *n, &vl, &vr);
+                        return (tl, out_v);
+                    }
+                    debug_assert!(types_match(&tr, elem_ty));
+                    let out_v = self.emit_anon_vector_scalar_mul(elem_ty, *n, &vl, &vr);
+                    return (tl, out_v);
+                }
                 if let Ty::Matrix(elem_ty) = &tl {
                     let (tr, vr) = self.emit_expr(r, locals, None);
                     if let Ty::Matrix(_) = tr {
@@ -3619,7 +3842,10 @@ impl<'a> Gen<'a> {
                     debug_assert!(types_match(&tr, elem_ty));
                     return self.emit_matrix_scalar_mul(&vl, &vr, elem_ty);
                 }
-                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                let (tr, vr) = match r.as_ref() {
+                    Expr::AnonVectorLit(_) => self.emit_expr(r, locals, None),
+                    _ => self.emit_expr(r, locals, Some(&tl)),
+                };
                 if let Some(vname) = self.as_nia_vector_name(&tr).map(|s| s.to_string()) {
                     let et = self.vector_axis_ty_cloned(&vname);
                     let (tl2, vl2) = self.emit_expr(l, locals, Some(&et));
@@ -3628,6 +3854,11 @@ impl<'a> Gen<'a> {
                         return (tr, out_v);
                     }
                     let out_v = self.emit_nia_vector_scalar_mul(&vname, &vr, &vl2);
+                    return (tr, out_v);
+                }
+                if let Ty::AnonVector(elem_ty, n) = &tr {
+                    debug_assert!(types_match(&tl, elem_ty));
+                    let out_v = self.emit_anon_vector_scalar_mul(elem_ty, *n, &vr, &vl);
                     return (tr, out_v);
                 }
                 if let Ty::Matrix(elem_ty) = &tr {
@@ -3662,6 +3893,7 @@ impl<'a> Gen<'a> {
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
+                    | Ty::AnonVector(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -3679,6 +3911,9 @@ impl<'a> Gen<'a> {
                 assert!(types_match(&tl, &tr));
                 if let Ty::Matrix(elem_ty) = &tl {
                     return self.emit_matrix_matmul(&vl, &vr, elem_ty);
+                }
+                if let Ty::AnonVector(elem_ty, n) = &tl {
+                    return self.emit_anon_vector_dot(elem_ty, *n, &vl, &vr);
                 }
                 let vname = self
                     .as_nia_vector_name(&tl)
@@ -3735,6 +3970,7 @@ impl<'a> Gen<'a> {
                     Ty::Array(_, _)
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
+                    | Ty::AnonVector(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -4049,6 +4285,7 @@ impl<'a> Gen<'a> {
                 writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, tmp).unwrap();
                 (Ty::Struct(sname), format!("%{loadt}"))
             }
+            Expr::AnonVectorLit(elems) => self.emit_anon_vector_lit(elems, locals, hint),
             Expr::EnumVariant { enum_name, variant } => {
                 let tag = self
                     .enum_tag(enum_name, variant)
@@ -4660,6 +4897,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_match(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Vector(xn, xt), Ty::Vector(yn, yt)) => xn == yn && types_match(xt, yt),
+        (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_match(xt, yt),
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),

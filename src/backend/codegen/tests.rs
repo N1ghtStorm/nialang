@@ -71,6 +71,28 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_anon_vector_arithmetic_emits_array_aggregate_ops() {
+    let src = r#"
+fn main() i32 {
+    let a = <1, 2, 3>;
+    let b = <4, 5, 6>;
+    let c = a + b;
+    let d = c * b;
+    let e = d * 2;
+    let dot = e @ a;
+    println(e);
+    dot
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("[3 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [3 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue [3 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_outer_emits_matrix_allocation_and_products() {
     let src = r#"
 vector V3 i32 [ X, Y, Z ]

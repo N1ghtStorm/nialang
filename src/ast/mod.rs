@@ -52,6 +52,8 @@ pub enum Ty {
     /// Result of a void call or `println`; not storable in `let`.
     Unit,
     Vector(String, Box<Ty>),
+    /// Anonymous fixed-size vector literal `<...>` with homogeneous element type.
+    AnonVector(Box<Ty>, usize),
     /// Built-in reference-counted heap matrix with one numeric cell type.
     Matrix(Box<Ty>),
 }
@@ -194,6 +196,7 @@ pub enum Expr {
         name: String,
         fields: Vec<(String, Expr)>,
     },
+    AnonVectorLit(Vec<Expr>),
     ArrayLit(Vec<Expr>),
     EnumVariant {
         enum_name: String,

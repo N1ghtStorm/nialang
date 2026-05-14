@@ -321,6 +321,9 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_equal(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Vector(xn, xt), Ty::Vector(yn, yt)) => xn == yn && types_equal(xt, yt),
+        (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => {
+            xn == yn && types_equal(xt, yt)
+        }
         // Vector values are currently represented as struct-shaped aggregates in AST/codegen.
         // Accept name-equivalence across these forms at semantic boundaries.
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
@@ -394,6 +397,7 @@ fn is_printable_ty_inner(
         Ty::Ptr(_) => true,
         Ty::Matrix(_) => true,
         Ty::Vector(_, elem) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
+        Ty::AnonVector(elem, _) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
         Ty::Struct(name) => {
             if !seen.insert(name.clone()) {
                 return true;
@@ -664,7 +668,10 @@ fn infer_mul_bin(
                 "cannot use `*` on vectors with non-numeric axis type {et:?}"
             ));
         }
-        let tr = infer_expr(r, env, structs, enums, vectors, fns, Some(et))?;
+        let tr = match r {
+            Expr::AnonVectorLit(_) => infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?,
+            _ => infer_expr(r, env, structs, enums, vectors, fns, Some(et))?,
+        };
         if matches!(tr, Ty::Unit) {
             return Err("void value on the right of `*`".into());
         }
@@ -687,7 +694,10 @@ fn infer_mul_bin(
         ));
     }
 
-    let tr = infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?;
+    let tr = match r {
+        Expr::AnonVectorLit(_) => infer_expr(r, env, structs, enums, vectors, fns, None)?,
+        _ => infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?,
+    };
     if matches!(tr, Ty::Unit) {
         return Err("void value on the right of `*`".into());
     }
@@ -814,6 +824,7 @@ fn is_nia_vector_ty(t: &Ty, vectors: &HashMap<String, VectorDef>) -> bool {
     match t {
         Ty::Struct(n) => vectors.contains_key(n),
         Ty::Vector(n, _) => vectors.contains_key(n),
+        Ty::AnonVector(_, _) => true,
         _ => false,
     }
 }
@@ -822,6 +833,7 @@ fn nia_vector_elem_ty<'a>(t: &'a Ty, vectors: &'a HashMap<String, VectorDef>) ->
     match t {
         Ty::Struct(n) => vectors.get(n).map(|v| &v.ty),
         Ty::Vector(_, e) => Some(e.as_ref()),
+        Ty::AnonVector(e, _) => Some(e.as_ref()),
         _ => None,
     }
 }
@@ -1502,6 +1514,48 @@ fn infer_expr(
                 }
             }
             Ok(Ty::Struct(name.clone()))
+        }
+        Expr::AnonVectorLit(elems) => {
+            if elems.is_empty() {
+                return Err("anonymous vector literal must not be empty".into());
+            }
+            match hint {
+                Some(Ty::AnonVector(elem_ty, n)) => {
+                    if elems.len() != *n {
+                        return Err(format!(
+                            "anonymous vector literal length mismatch: expected {n}, got {}",
+                            elems.len()
+                        ));
+                    }
+                    for e in elems {
+                        let et = infer_expr(e, env, structs, enums, vectors, fns, Some(elem_ty))?;
+                        if !types_equal(&et, elem_ty) {
+                            return Err(format!(
+                                "anonymous vector element type mismatch: expected {elem_ty:?}, got {et:?}"
+                            ));
+                        }
+                    }
+                    Ok(Ty::AnonVector(elem_ty.clone(), *n))
+                }
+                Some(other) => Err(format!(
+                    "anonymous vector literal cannot satisfy {other:?}"
+                )),
+                None => {
+                    let first_ty = infer_expr(&elems[0], env, structs, enums, vectors, fns, None)?;
+                    if matches!(first_ty, Ty::Unit) {
+                        return Err("anonymous vector elements cannot be void".into());
+                    }
+                    for e in elems.iter().skip(1) {
+                        let et = infer_expr(e, env, structs, enums, vectors, fns, Some(&first_ty))?;
+                        if !types_equal(&et, &first_ty) {
+                            return Err(format!(
+                                "anonymous vector elements differ: expected {first_ty:?}, got {et:?}"
+                            ));
+                        }
+                    }
+                    Ok(Ty::AnonVector(Box::new(first_ty), elems.len()))
+                }
+            }
         }
         Expr::ArrayLit(elems) => match hint {
             Some(Ty::Array(elem_ty, n)) => {
