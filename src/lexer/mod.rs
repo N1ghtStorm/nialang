@@ -20,6 +20,8 @@ pub enum Token {
     Int(i128),
     Float(f64),
     Bool(bool),
+    /// Decoded UTF-8 contents (no surrounding quotes).
+    StrLit(String),
     Colon,
     Comma,
     Semi,
@@ -66,6 +68,7 @@ pub enum Token {
     TyF16,
     TyF32,
     TyF64,
+    TyString,
     Eof,
 }
 
@@ -81,6 +84,30 @@ impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
             src: input.chars().peekable(),
+        }
+    }
+
+    /// Reads a double-quoted string; opening `"` already consumed.
+    fn lex_string_literal(&mut self) -> Token {
+        let mut s = String::new();
+        loop {
+            let Some(c) = self.src.next() else {
+                return Token::StrLit(s);
+            };
+            match c {
+                '"' => return Token::StrLit(s),
+                '\\' => match self.src.next() {
+                    Some('n') => s.push('\n'),
+                    Some('t') => s.push('\t'),
+                    Some('r') => s.push('\r'),
+                    Some('0') => s.push('\0'),
+                    Some('"') => s.push('"'),
+                    Some('\\') => s.push('\\'),
+                    Some(other) => s.push(other),
+                    None => return Token::StrLit(s),
+                },
+                other => s.push(other),
+            }
         }
     }
 
@@ -121,6 +148,7 @@ impl<'a> Lexer<'a> {
     /// ## Current behavior details
     /// - Skips whitespace/comments first.
     /// - Parses decimal integers only.
+    /// - Parses double-quoted string literals with escapes (`\\`, `\"`, `\n`, `\t`, `\r`, `\0`).
     /// - Parses identifiers/keywords with ASCII alnum + `_` rule.
     /// - On unknown characters returns `Token::Eof` (simple fail-stop behavior).
     ///
@@ -194,6 +222,7 @@ impl<'a> Lexer<'a> {
                 Token::Ge
             }
             '>' => Token::Gt,
+            '"' => self.lex_string_literal(),
             '0'..='9' => {
                 let mut buf = String::new();
                 buf.push(c);
@@ -267,6 +296,7 @@ impl<'a> Lexer<'a> {
                     "f16" => Token::TyF16,
                     "f32" => Token::TyF32,
                     "f64" => Token::TyF64,
+                    "string" => Token::TyString,
                     _ => Token::Ident(s),
                 }
             }

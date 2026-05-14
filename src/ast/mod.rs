@@ -42,6 +42,8 @@ pub enum Ty {
     F16,
     F32,
     F64,
+    /// UTF-8 text; lowered as null-terminated `ptr` to bytes in LLVM.
+    String,
     Array(Box<Ty>, usize),
     Struct(String),
     Enum(String),
@@ -163,6 +165,8 @@ pub enum Expr {
     /// Float literal; stored as `f64` and coerced in codegen to the target float type.
     Float(f64),
     Bool(bool),
+    /// UTF-8 string literal (source escapes decoded).
+    String(String),
     Ident(String),
     /// Unary `-` (integer and float).
     Neg(Box<Expr>),

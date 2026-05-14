@@ -80,12 +80,50 @@ fn format_diagnostic_at_line(src: &str, header: &str, line_no: usize, column: us
 
 fn find_unsupported_char(src: &str) -> Option<(usize, usize, char)> {
     for (line_idx, line) in src.lines().enumerate() {
-        let code = line.split_once("//").map(|(code, _)| code).unwrap_or(line);
-        for (column_idx, ch) in code.chars().enumerate() {
-            if ch.is_whitespace() || is_supported_source_char(ch) {
+        let line_no = line_idx + 1;
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0usize;
+        let mut in_string = false;
+        let mut escape = false;
+        while i < chars.len() {
+            let ch = chars[i];
+            let column = i + 1;
+
+            if !in_string && ch == '/' && chars.get(i + 1) == Some(&'/') {
+                break;
+            }
+
+            if in_string {
+                if escape {
+                    escape = false;
+                    i += 1;
+                    continue;
+                }
+                if ch == '\\' {
+                    escape = true;
+                    i += 1;
+                    continue;
+                }
+                if ch == '"' {
+                    in_string = false;
+                    i += 1;
+                    continue;
+                }
+                i += 1;
                 continue;
             }
-            return Some((line_idx + 1, column_idx + 1, ch));
+
+            if ch == '"' {
+                in_string = true;
+                i += 1;
+                continue;
+            }
+
+            if ch.is_whitespace() || is_supported_source_char(ch) {
+                i += 1;
+                continue;
+            }
+            return Some((line_no, column, ch));
         }
     }
     None
@@ -115,6 +153,8 @@ fn is_supported_source_char(ch: char) -> bool {
                 | '!'
                 | '<'
                 | '>'
+                | '"'
+                | '\\'
         )
 }
 

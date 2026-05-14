@@ -1,0 +1,10 @@
+fn main() i32 {
+    let a: string = "hello";
+    println(a);
+    println("line\nbreak");
+    println("пр");
+    if a == "hello" {
+        return 0
+    }
+    1
+}

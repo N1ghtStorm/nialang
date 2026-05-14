@@ -37,6 +37,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_while.nia",
         "examples/tests/ok_loop.nia",
         "examples/tests/ok_compound_assign.nia",
+        "examples/tests/ok_string.nia",
         "examples/sample_all.nia",
         "examples/sample_matrix_rc.nia",
         "examples/sample_matrix_arith.nia",

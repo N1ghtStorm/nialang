@@ -52,6 +52,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_loop.nia"),
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
+        include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_matrix_rc.nia"),
         include_str!("../../../examples/sample_matrix_arith.nia"),
     ];

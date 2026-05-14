@@ -316,6 +316,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::F16, Ty::F16)
         | (Ty::F32, Ty::F32)
         | (Ty::F64, Ty::F64)
+        | (Ty::String, Ty::String)
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_equal(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
@@ -388,6 +389,7 @@ fn is_printable_ty_inner(
 ) -> bool {
     match t {
         x if is_primitive_ty(x) => true,
+        Ty::String => true,
         Ty::Array(elem, _) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
         Ty::Ptr(_) => true,
         Ty::Matrix(_) => true,
@@ -846,9 +848,9 @@ fn infer_comparison_bin(
                 "cannot use `{op}` on non-integer/non-float type {tl:?}"
             ));
         }
-    } else if !(is_integer_ty(&tl) || is_float_ty(&tl) || matches!(tl, Ty::Bool | Ty::Ptr(_))) {
+    } else if !(is_integer_ty(&tl) || is_float_ty(&tl) || matches!(tl, Ty::Bool | Ty::Ptr(_) | Ty::String)) {
         return Err(format!(
-            "cannot use `{op}` on type {tl:?}; supported: integers, floats, bool, pointers"
+            "cannot use `{op}` on type {tl:?}; supported: integers, floats, bool, pointers, strings"
         ));
     }
     Ok(Ty::Bool)
@@ -895,6 +897,10 @@ fn infer_expr(
         Expr::Bool(_) => match hint {
             Some(Ty::Bool) | None => Ok(Ty::Bool),
             Some(other) => Err(format!("bool literal cannot satisfy {other:?}")),
+        },
+        Expr::String(_) => match hint {
+            Some(Ty::String) | None => Ok(Ty::String),
+            Some(other) => Err(format!("string literal cannot satisfy {other:?}")),
         },
         Expr::Ident(name) => env
             .get(name)

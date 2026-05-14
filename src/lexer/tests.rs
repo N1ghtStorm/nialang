@@ -210,3 +210,17 @@ fn lex_unknown_char_stops_token_stream() {
         vec![Token::Let, Token::Ident("x".into()), Token::Eq, Token::Int(1)]
     );
 }
+
+#[test]
+fn lex_string_type_and_literals() {
+    let src = r#"string x "hi" "a\nb""#;
+    assert_eq!(
+        collect(src),
+        vec![
+            Token::TyString,
+            Token::Ident("x".into()),
+            Token::StrLit("hi".into()),
+            Token::StrLit("a\nb".into()),
+        ]
+    );
+}

@@ -1,14 +1,144 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use crate::ast::{
-    EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
+    Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
 };
 use crate::nia_std::{
     ALLOC, DEALLOC, DEF, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC,
 };
 use crate::semantics::typecheck::FnSig;
+
+/// Walks all functions and collects UTF-8 string literal payloads for module-level globals.
+fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
+    match e {
+        Expr::String(s) => {
+            out.insert(s.clone());
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Ident(_)
+        | Expr::EnumVariant { .. } => {}
+        Expr::Neg(inner)
+        | Expr::AddrOf(inner)
+        | Expr::Deref(inner)
+        | Expr::Field(inner, _) => collect_string_literals_expr(inner, out),
+        Expr::Add(a, b)
+        | Expr::Sub(a, b)
+        | Expr::Mul(a, b)
+        | Expr::VecDot(a, b)
+        | Expr::Div(a, b)
+        | Expr::Eq(a, b)
+        | Expr::Ne(a, b)
+        | Expr::Lt(a, b)
+        | Expr::Le(a, b)
+        | Expr::Gt(a, b)
+        | Expr::Ge(a, b) => {
+            collect_string_literals_expr(a, out);
+            collect_string_literals_expr(b, out);
+        }
+        Expr::Call { args, .. } => {
+            for a in args {
+                collect_string_literals_expr(a, out);
+            }
+        }
+        Expr::StructLit { fields, .. } | Expr::VectorLit { fields, .. } => {
+            for (_, fe) in fields {
+                collect_string_literals_expr(fe, out);
+            }
+        }
+        Expr::ArrayLit(elems) => {
+            for elem in elems {
+                collect_string_literals_expr(elem, out);
+            }
+        }
+        Expr::EnumTuple { args, .. } => {
+            for a in args {
+                collect_string_literals_expr(a, out);
+            }
+        }
+        Expr::EnumStruct { fields, .. } => {
+            for (_, fe) in fields {
+                collect_string_literals_expr(fe, out);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            collect_string_literals_expr(scrutinee, out);
+            for (_, ae) in arms {
+                collect_string_literals_expr(ae, out);
+            }
+        }
+        Expr::Index(a, i) => {
+            collect_string_literals_expr(a, out);
+            collect_string_literals_expr(i, out);
+        }
+    }
+}
+
+fn collect_string_literals_block(b: &Block, out: &mut BTreeSet<String>) {
+    for st in &b.stmts {
+        collect_string_literals_stmt(st, out);
+    }
+    if let Some(e) = &b.tail {
+        collect_string_literals_expr(e, out);
+    }
+}
+
+fn collect_string_literals_stmt(st: &Stmt, out: &mut BTreeSet<String>) {
+    match st {
+        Stmt::Let { init, .. } => collect_string_literals_expr(init, out),
+        Stmt::Expr(e) | Stmt::Return(e) => collect_string_literals_expr(e, out),
+        Stmt::Assign { target, value } => {
+            collect_string_literals_expr(target, out);
+            collect_string_literals_expr(value, out);
+        }
+        Stmt::If { cond, then_block } => {
+            collect_string_literals_expr(cond, out);
+            collect_string_literals_block(then_block, out);
+        }
+        Stmt::While { cond, body } => {
+            collect_string_literals_expr(cond, out);
+            collect_string_literals_block(body, out);
+        }
+        Stmt::Loop { body } => collect_string_literals_block(body, out),
+        Stmt::For { start, end, body, .. } => {
+            collect_string_literals_expr(start, out);
+            collect_string_literals_expr(end, out);
+            collect_string_literals_block(body, out);
+        }
+        Stmt::Break => {}
+    }
+}
+
+/// Returns `(literal -> @symbol)` and LLVM IR for private string globals (NUL-terminated).
+fn build_string_literal_section(fns: &[FnDef]) -> (HashMap<String, String>, String) {
+    let mut set = BTreeSet::new();
+    for f in fns {
+        collect_string_literals_block(&f.body, &mut set);
+    }
+    let mut map = HashMap::new();
+    let mut ir = String::new();
+    for (i, s) in set.into_iter().enumerate() {
+        let sym = format!("nialang.strlit.{i}");
+        map.insert(s.clone(), sym.clone());
+        let mut bytes = s.as_bytes().to_vec();
+        bytes.push(0);
+        let lit = llvm_c_escape(&bytes);
+        let _ = writeln!(
+            ir,
+            "@{} = private unnamed_addr constant [{} x i8] c\"{}\", align 1",
+            sym,
+            bytes.len(),
+            lit
+        );
+    }
+    if !ir.is_empty() {
+        ir.push('\n');
+    }
+    (map, ir)
+}
 
 /// Emits complete textual LLVM module from already-validated AST.
 ///
@@ -33,6 +163,8 @@ pub fn emit_module(
     out.push_str("target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n");
     out.push_str("target triple = \"unknown-unknown-unknown\"\n\n");
     out.push_str(crate::nia_std::llvm_prelude());
+    let (str_lit_syms, str_lit_ir) = build_string_literal_section(fns);
+    out.push_str(&str_lit_ir);
     out.push_str(&emit_struct_print_constants(structs));
     out.push_str(&emit_vector_print_constants(vectors));
     out.push_str(&emit_enum_print_constants(enums));
@@ -56,7 +188,14 @@ pub fn emit_module(
     }
 
     for f in fns {
-        out.push_str(&emit_fn(f, structs, enums, vectors, fn_sigs));
+        out.push_str(&emit_fn(
+            f,
+            structs,
+            enums,
+            vectors,
+            fn_sigs,
+            &str_lit_syms,
+        ));
         out.push('\n');
     }
     out
@@ -107,6 +246,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::F16 => "f16".into(),
         Ty::F32 => "f32".into(),
         Ty::F64 => "f64".into(),
+        Ty::String => "string".into(),
         Ty::Array(inner, n) => format!("[{}; {}]", ty_print_label(inner), n),
         Ty::Struct(n) => n.clone(),
         Ty::Enum(n) => n.clone(),
@@ -257,6 +397,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::F16 => "half".into(),
         Ty::F32 => "float".into(),
         Ty::F64 => "double".into(),
+        Ty::String => "ptr".into(),
         Ty::Array(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
         Ty::Struct(n) => format!("%struct.{}", sanitize(n)),
         Ty::Enum(n) => format!("%enum.{}", sanitize(n)),
@@ -447,6 +588,7 @@ struct Gen<'a> {
     enums: &'a [EnumDef],
     vectors: &'a [VectorDef],
     fn_sigs: &'a HashMap<String, FnSig>,
+    str_lit_syms: &'a HashMap<String, String>,
     tmp: u32,
     lbl: u32,
     out: String,
@@ -462,12 +604,14 @@ impl<'a> Gen<'a> {
         enums: &'a [EnumDef],
         vectors: &'a [VectorDef],
         fn_sigs: &'a HashMap<String, FnSig>,
+        str_lit_syms: &'a HashMap<String, String>,
     ) -> Self {
         Self {
             structs,
             enums,
             vectors,
             fn_sigs,
+            str_lit_syms,
             tmp: 0,
             lbl: 0,
             out: String::new(),
@@ -736,6 +880,20 @@ impl<'a> Gen<'a> {
                     self.out,
                     "  call i32 (ptr, ...) @printf(ptr {}, i32 %{})",
                     p, t
+                )
+                .unwrap();
+            }
+            Ty::String => {
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.str", 4)
+                } else {
+                    ("nialang.std.fmt.str.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, ptr {})",
+                    p, v
                 )
                 .unwrap();
             }
@@ -3201,6 +3359,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::String
                     | Ty::Vector(_, _)
                     | Ty::Matrix(_) => unreachable!("typechecked for range"),
                 }
@@ -3254,6 +3413,7 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
                 | Some(Ty::Bool)
+                | Some(Ty::String)
                 | Some(Ty::Array(_, _))
                 | Some(Ty::Matrix(_)) => {
                     unreachable!("typechecked")
@@ -3281,6 +3441,21 @@ impl<'a> Gen<'a> {
                 }
             }
             Expr::Bool(b) => (Ty::Bool, if *b { "1".into() } else { "0".into() }),
+            Expr::String(s) => {
+                let sym = self
+                    .str_lit_syms
+                    .get(s)
+                    .unwrap_or_else(|| panic!("missing string literal global for {s:?}"));
+                let nbytes = s.len() + 1;
+                let tmp = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = getelementptr inbounds [{} x i8], ptr @{}, i64 0, i64 0",
+                    tmp, nbytes, sym
+                )
+                .unwrap();
+                (Ty::String, format!("%{tmp}"))
+            }
             Expr::Ident(name) => {
                 let (ty, ptr) = locals.get(name).expect("checked var");
                 let tmp = self.fresh();
@@ -3324,6 +3499,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::String
                     | Ty::Matrix(_) => {
                         unreachable!("typechecked neg")
                     }
@@ -3369,6 +3545,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::String
                     | Ty::Matrix(_) => {
                         unreachable!("add on non-numeric")
                     }
@@ -3414,6 +3591,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::String
                     | Ty::Matrix(_) => {
                         unreachable!("sub on non-numeric")
                     }
@@ -3488,6 +3666,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::String
                     | Ty::Matrix(_) => {
                         unreachable!("mul on non-numeric")
                     }
@@ -3560,6 +3739,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::String
                     | Ty::Matrix(_) => {
                         unreachable!("div on non-numeric")
                     }
@@ -3576,7 +3756,26 @@ impl<'a> Gen<'a> {
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
                 assert!(types_match(&tl, &tr));
                 let tmp = self.fresh();
-                if is_float_ty(&tl) {
+                if matches!(tl, Ty::String) {
+                    let cmp = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = call i32 @strcmp(ptr {}, ptr {})",
+                        cmp, vl, vr
+                    )
+                    .unwrap();
+                    let pred = match e {
+                        Expr::Eq(_, _) => "eq",
+                        Expr::Ne(_, _) => "ne",
+                        _ => unreachable!("typechecked string ordering"),
+                    };
+                    writeln!(
+                        self.out,
+                        "  %{} = icmp {} i32 %{}, 0",
+                        tmp, pred, cmp
+                    )
+                    .unwrap();
+                } else if is_float_ty(&tl) {
                     let pred = match e {
                         Expr::Eq(_, _) => "oeq",
                         Expr::Ne(_, _) => "one",
@@ -4456,6 +4655,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::F32, Ty::F32)
         | (Ty::F64, Ty::F64)
         | (Ty::Bool, Ty::Bool)
+        | (Ty::String, Ty::String)
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_match(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
@@ -4477,8 +4677,9 @@ fn emit_fn(
     enums: &[EnumDef],
     vectors: &[VectorDef],
     fn_sigs: &HashMap<String, FnSig>,
+    str_lit_syms: &HashMap<String, String>,
 ) -> String {
-    Gen::new(structs, enums, vectors, fn_sigs).emit_fn(f)
+    Gen::new(structs, enums, vectors, fn_sigs, str_lit_syms).emit_fn(f)
 }
 
 #[cfg(test)]
