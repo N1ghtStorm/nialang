@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     ast::VectorDef,
-    parser::{Parser, tokenize},
+    parser::{tokenize, Parser},
 };
 
 fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>, Vec<VectorDef>) {
@@ -52,6 +52,8 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_loop.nia"),
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
+        include_str!("../../../examples/sample_matrix_rc.nia"),
+        include_str!("../../../examples/sample_matrix_arith.nia"),
     ];
     for src in ok_files {
         let r = check_all(src);
@@ -98,6 +100,401 @@ fn main() i32 {
     let x: f32 = 1.0;
     let y: i32 = 2;
     x + y
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_accepts_nested_numeric_arrays() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    matrix_drop(m);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_add_ok_same_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [10, 20],
+        [30, 40],
+    ]);
+    let c: Matrix = a + b;
+    println(c);
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_add_rejects_different_cell_types() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let c: Matrix = a + b;
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_sub_ok_same_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [10, 20],
+        [30, 40],
+    ]);
+    let c: Matrix = a - b;
+    println(c);
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_sub_rejects_different_cell_types() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let c: Matrix = a - b;
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_mul_ok_same_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [10, 20],
+        [30, 40],
+    ]);
+    let c: Matrix = a * b;
+    println(c);
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_mul_rejects_different_cell_types() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let c: Matrix = a * b;
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_matmul_ok_same_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2, 3],
+        [4, 5, 6],
+    ]);
+    let b: Matrix = matrix([
+        [7, 8],
+        [9, 10],
+        [11, 12],
+    ]);
+    let c: Matrix = a @ b;
+    println(c);
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_matmul_rejects_different_cell_types() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let c: Matrix = a @ b;
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_outer_ok_same_numeric_element_type() {
+    let src = r#"
+vector Vec3i i32 [X, Y, Z]
+vector Vec2i i32 [U, V]
+
+fn main() i32 {
+    let a = Vec3i [X: 1, Y: 2, Z: 3];
+    let b = Vec2i [U: 4, V: 5];
+    let c: Matrix = outer(a, b);
+    println(c);
+    matrix_drop(c);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_outer_rejects_different_element_types() {
+    let src = r#"
+vector Vec2i i32 [X, Y]
+vector Vec2f f64 [X, Y]
+
+fn main() i32 {
+    let a = Vec2i [X: 1, Y: 2];
+    let b = Vec2f [X: 1.0, Y: 2.0];
+    let c: Matrix = outer(a, b);
+    matrix_drop(c);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_outer_rejects_non_vector_argument() {
+    let src = r#"
+vector Vec2i i32 [X, Y]
+
+fn main() i32 {
+    let a = Vec2i [X: 1, Y: 2];
+    let c: Matrix = outer(a, 3);
+    matrix_drop(c);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_scalar_mul_ok_same_cell_type_both_orders() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let right: Matrix = a * 3;
+    let left: Matrix = 2 * a;
+    println(right);
+    println(left);
+    matrix_drop(left);
+    matrix_drop(right);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_scalar_mul_float_ok() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let scaled: Matrix = a * 2.0;
+    println(scaled);
+    matrix_drop(scaled);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_scalar_mul_rejects_different_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let scaled: Matrix = a * 2.0;
+    matrix_drop(scaled);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_float_scalar_mul_rejects_int_literal() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let scaled: Matrix = a * 2;
+    matrix_drop(scaled);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_rejects_mixed_numeric_cell_types() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3.5, 4.5],
+    ]);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_rejects_int_literal_inside_float_matrix() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1.0, 2],
+        [3.0, 4.0],
+    ]);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_rejects_bool_cells() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, true],
+        [3, 4],
+    ]);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_rejects_ragged_rows() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4, 5],
+    ]);
+    0
 }
 "#;
     let r = check_all(src);

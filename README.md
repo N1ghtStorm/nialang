@@ -8,6 +8,7 @@ The project currently focuses on a compact but expressive core:
 - structs (named and tuple), enums and `match`,
 - loops (`for`, `while`, `loop` + `break`),
 - pointers and simple heap builtins (`alloc`, `realloc`, `dealloc`),
+- built-in reference-counted matrices,
 - builtin `println` and `len`.
 
 ## Quick Start
@@ -40,11 +41,13 @@ cargo test
 - Pointers: `&T`
 - Structs / Enums
 - **Vectors** (user-defined fixed-size aggregates): see [Fixed-size vectors](#fixed-size-vectors) below.
+- `Matrix` — built-in ref-counted heap matrix of one numeric cell type.
 
 ### Expressions and Operators
 
 - Arithmetic: `+`, `-`, `*`, `/`
 - Vector-only: `@` (dot product of two values of the *same* `vector` type); component-wise `+`, `-`, `*` on two such vectors; `*` between a vector and a scalar of the **axis** type (either order). See [Fixed-size vectors](#fixed-size-vectors).
+- Matrix-only: `@` (matrix multiplication); component-wise `+`, `-`, `*`; `*` with a scalar of the exact cell type.
 - Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
 - Indexing: `arr[i]`
 - Field access: `obj.x`, `tuple.0`
@@ -52,9 +55,305 @@ cargo test
 
 ### Builtins
 
-- `println(x)` — prints values (including arrays, structs, enums, pointers, **vectors**)
+- `println(x)` — prints values (including arrays, structs, enums, pointers, **vectors**, `Matrix`)
 - `len(arr)` — returns compile-time array length as `i32`
 - `alloc(v)` / `realloc(ptr, v)` / `dealloc(ptr)`
+- `matrix([[...], [...]])` — creates a `Matrix` from a rectangular array of numeric arrays
+- `matrix_get(m, row, col)` / `matrix_set(m, row, col, value)`
+- `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
+- `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
+- `outer(a, b)` — outer product of two vectors; returns a `Matrix`
+- `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
+- `a @ b` — matrix multiplication; `matrix_cols(a)` must equal `matrix_rows(b)`
+- `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
+
+`Matrix` is a compiler-known heap object with explicit reference counting.
+See [Matrices](#matrices) for construction, printing, indexing, and lifetime
+rules.
+
+### Matrices
+
+`Matrix` is a built-in reference-counted heap handle for a rectangular 2D block
+of numeric cells. Source code writes the surface type simply as `Matrix`; inside
+the compiler the handle still remembers the element type, such as `Matrix<i32>`
+or `Matrix<f64>`.
+
+#### Creating a matrix
+
+Use `matrix([...])` with an array of rows:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+```
+
+Rules:
+
+- The outer array must contain at least one row.
+- Every row must contain at least one cell.
+- Every row must have the same length.
+- Every cell must be a numeric primitive: integer types (`i8`, `u8`, `i16`, ...)
+  or float types (`f16`, `f32`, `f64`).
+- All cells must have exactly one element type. Integer literals default to
+  `i32`; float literals default to `f64`.
+
+Valid:
+
+```nia
+let ints: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let floats: Matrix = matrix([
+    [1.0, 2.0],
+    [3.5, 4.5],
+]);
+```
+
+Rejected:
+
+```nia
+let mixed: Matrix = matrix([
+    [1, 2],
+    [3.5, 4.5],
+]);
+```
+
+The rejected example mixes `i32` and `f64`. If the matrix should be floating
+point, write the integer-looking cells with a decimal point (`1.0`, `2.0`, ...).
+
+#### Printing
+
+`println(m)` prints the matrix contents as nested arrays:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+
+println(m); // [[1, 2, 3], [4, 5, 6]]
+```
+
+Float cells use the same float formatting as normal `println`:
+
+```nia
+let f: Matrix = matrix([
+    [1.0, 2.5],
+    [3.0, 4.75],
+]);
+
+println(f); // [[1.000000, 2.500000], [3.000000, 4.750000]]
+```
+
+#### Shape and length
+
+Use the shape helpers when you need dimensions at runtime:
+
+```nia
+println(matrix_rows(m)); // number of rows
+println(matrix_cols(m)); // number of columns
+println(matrix_len(m));  // rows * columns
+```
+
+Each helper returns `i32`.
+
+#### Reading and writing cells
+
+Cells are addressed by zero-based row and column indices:
+
+```nia
+let value = matrix_get(m, 0, 1); // row 0, column 1
+matrix_set(m, 1, 2, 42);        // row 1, column 2
+```
+
+`matrix_get` returns the matrix element type. `matrix_set` requires a value of
+that same type:
+
+```nia
+let ints: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+matrix_set(ints, 0, 0, 99);   // ok: i32 matrix, i32 value
+// matrix_set(ints, 0, 0, 1.5); // rejected: f64 value for i32 matrix
+```
+
+Current runtime note: indices are assumed valid. There is no bounds check yet,
+so `matrix_get(m, 100, 100)` is invalid program behavior.
+
+#### Matrix arithmetic
+
+Use `+`, `-`, and `*` for component-wise matrix arithmetic:
+
+```nia
+let a: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let b: Matrix = matrix([
+    [10, 20],
+    [30, 40],
+]);
+
+let c: Matrix = a + b;
+let d: Matrix = b - a;
+let e: Matrix = a * b;
+println(c); // [[11, 22], [33, 44]]
+println(d); // [[9, 18], [27, 36]]
+println(e); // [[10, 40], [90, 160]]
+```
+
+The result is a new `Matrix` allocation with reference count `1`; it does not
+modify either operand. Both operands must have the same element type:
+
+```nia
+let ints: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let floats: Matrix = matrix([
+    [1.0, 2.0],
+    [3.0, 4.0],
+]);
+
+// let bad_sum: Matrix = ints + floats;  // rejected: Matrix<i32> + Matrix<f64>
+// let bad_diff: Matrix = ints - floats; // rejected: Matrix<i32> - Matrix<f64>
+// let bad_prod: Matrix = ints * floats; // rejected: Matrix<i32> * Matrix<f64>
+```
+
+Both operands must also have the same runtime shape (`rows` and `cols`). The
+generated code checks the shape before doing arithmetic; a mismatch aborts the
+program. Drop each result when it is no longer needed:
+
+```nia
+matrix_drop(e);
+matrix_drop(d);
+matrix_drop(c);
+matrix_drop(b);
+matrix_drop(a);
+```
+
+Use `@` for real matrix multiplication. The cell type must match exactly, and
+the runtime shape must satisfy the usual rule:
+
+```text
+(n x m) @ (m x k) = (n x k)
+```
+
+For example, a `2 x 3` matrix multiplied by a `3 x 4` matrix produces a
+`2 x 4` matrix:
+
+```nia
+let left: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+
+let right: Matrix = matrix([
+    [7, 8, 9, 10],
+    [11, 12, 13, 14],
+    [15, 16, 17, 18],
+]);
+
+let product: Matrix = left @ right;
+println(product); // [[74, 80, 86, 92], [173, 188, 203, 218]]
+println(matrix_rows(product)); // 2
+println(matrix_cols(product)); // 4
+```
+
+Generated code checks `matrix_cols(left) == matrix_rows(right)` before
+multiplying; a mismatch aborts the program. Like other matrix arithmetic, `@`
+creates a new allocation with reference count `1`.
+
+Use `outer(a, b)` to build a matrix from two vectors. The vector declarations may
+have different lengths, but their element types must be the same numeric type:
+
+```nia
+vector Vec3i i32 [X, Y, Z]
+vector Vec2i i32 [U, V]
+
+let a = Vec3i [X: 1, Y: 2, Z: 3];
+let b = Vec2i [U: 4, V: 5];
+
+let product: Matrix = outer(a, b);
+println(product); // [[4, 5], [8, 10], [12, 15]]
+println(matrix_rows(product)); // 3
+println(matrix_cols(product)); // 2
+```
+
+The rows come from the first vector and the columns come from the second vector.
+Like matrix arithmetic, the result is a new `Matrix` allocation with reference
+count `1`.
+
+Use `*` with a scalar to multiply every cell by one number:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let right: Matrix = m * 3;
+let left: Matrix = 2 * m;
+println(right); // [[3, 6], [9, 12]]
+println(left);  // [[2, 4], [6, 8]]
+```
+
+The scalar type must match the matrix cell type exactly. Integer literals are
+`i32`; float literals are `f64`:
+
+```nia
+let f: Matrix = matrix([
+    [1.0, 2.0],
+    [3.0, 4.0],
+]);
+
+let ok: Matrix = f * 2.0;
+// let bad: Matrix = f * 2; // rejected: Matrix<f64> * i32
+```
+
+#### Reference counting
+
+A `Matrix` handle owns a heap allocation with an explicit reference counter.
+The compiler does not insert automatic clone/drop calls yet, so code must manage
+sharing explicitly:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+
+println(matrix_refcount(m)); // 1
+
+let shared: Matrix = matrix_clone(m);
+println(matrix_refcount(m)); // 2
+
+println(shared);             // prints the same heap data
+
+matrix_drop(shared);
+println(matrix_refcount(m)); // 1
+
+matrix_drop(m);              // frees when the counter reaches zero
+```
+
+Use `matrix_clone(m)` whenever another handle should share the same matrix data.
+Use `matrix_drop(m)` exactly once for each live handle when it is no longer
+needed. Do not use a handle after dropping it.
+
+#### Complete example
+
+See `examples/sample_matrix_rc.nia` for a runnable sample covering construction,
+printing, shape queries, cell get/set, cloning, reference count inspection, and
+dropping. See `examples/sample_matrix_arith.nia` for a separate arithmetic
+sample focused on `+`, `-`, and `*`.
 
 ### Fixed-size vectors
 
@@ -300,4 +599,3 @@ Tests for each component live in separate files alongside modules:
 - `src/semantics/typecheck/tests.rs`
 - `src/backend/codegen/tests.rs`
 - `src/driver/tests.rs`
-

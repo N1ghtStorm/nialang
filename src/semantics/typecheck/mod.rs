@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{
     Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
 };
-use crate::nia_std::{ALLOC, DEALLOC, LEN, PRINTLN, REALLOC};
+use crate::nia_std::{
+    ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
+    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PRINTLN, REALLOC,
+};
 
 /// Canonical function signature table entry used across semantic passes.
 ///
@@ -30,7 +33,9 @@ fn normalize_ty(
 ) -> Result<Ty, String> {
     match t {
         Ty::Struct(name) => {
-            if enums.contains_key(name) {
+            if name == MATRIX_TYPE {
+                Ok(Ty::Matrix(Box::new(Ty::Unit)))
+            } else if enums.contains_key(name) {
                 Ok(Ty::Enum(name.clone()))
             } else if structs.contains_key(name) {
                 Ok(Ty::Struct(name.clone()))
@@ -103,12 +108,18 @@ pub fn collect_sigs(
 > {
     let mut struct_map: HashMap<String, StructDef> = HashMap::new();
     for s in structs {
+        if s.name == MATRIX_TYPE {
+            return Err(format!("type name `{MATRIX_TYPE}` is reserved"));
+        }
         if struct_map.insert(s.name.clone(), s.clone()).is_some() {
             return Err(format!("duplicate struct {}", s.name));
         }
     }
     let mut vector_map: HashMap<String, VectorDef> = HashMap::new();
     for v in vectors {
+        if v.name == MATRIX_TYPE {
+            return Err(format!("type name `{MATRIX_TYPE}` is reserved"));
+        }
         if struct_map.contains_key(&v.name) {
             return Err(format!("duplicate type name {}", v.name));
         }
@@ -118,6 +129,9 @@ pub fn collect_sigs(
     }
     let mut enum_map: HashMap<String, EnumDef> = HashMap::new();
     for e in enums {
+        if e.name == MATRIX_TYPE {
+            return Err(format!("type name `{MATRIX_TYPE}` is reserved"));
+        }
         if struct_map.contains_key(&e.name) || vector_map.contains_key(&e.name) {
             return Err(format!("duplicate type name {}", e.name));
         }
@@ -164,6 +178,16 @@ pub fn collect_sigs(
             || f.name == ALLOC
             || f.name == DEALLOC
             || f.name == REALLOC
+            || f.name == MATRIX_NEW
+            || f.name == MATRIX_GET
+            || f.name == MATRIX_SET
+            || f.name == MATRIX_ROWS
+            || f.name == MATRIX_COLS
+            || f.name == MATRIX_LEN
+            || f.name == MATRIX_CLONE
+            || f.name == MATRIX_REFCOUNT
+            || f.name == MATRIX_DROP
+            || f.name == OUTER
         {
             return Err(format!(
                 "function name `{}` is reserved for the standard library",
@@ -300,6 +324,9 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
+        (Ty::Matrix(x), Ty::Matrix(y)) => {
+            matches!(x.as_ref(), Ty::Unit) || matches!(y.as_ref(), Ty::Unit) || types_equal(x, y)
+        }
         _ => false,
     }
 }
@@ -324,6 +351,10 @@ fn is_integer_ty(t: &Ty) -> bool {
             | Ty::Usize
             | Ty::U128
     )
+}
+
+fn is_numeric_ty(t: &Ty) -> bool {
+    is_integer_ty(t) || is_float_ty(t)
 }
 
 /// Returns whether type is a primitive printable scalar (`int` or `bool`).
@@ -358,6 +389,7 @@ fn is_printable_ty_inner(
         x if is_primitive_ty(x) => true,
         Ty::Array(elem, _) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
         Ty::Ptr(_) => true,
+        Ty::Matrix(_) => true,
         Ty::Vector(_, elem) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
         Ty::Struct(name) => {
             if !seen.insert(name.clone()) {
@@ -399,6 +431,106 @@ fn is_printable_ty_inner(
     }
 }
 
+fn expect_arg_ty(
+    name: &str,
+    args: &[Expr],
+    idx: usize,
+    expected: &Ty,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    let got = infer_expr(
+        &args[idx],
+        env,
+        structs,
+        enums,
+        vectors,
+        fns,
+        Some(expected),
+    )?;
+    if !types_equal(&got, expected) {
+        return Err(format!(
+            "`{name}` argument {} type mismatch: expected {expected:?}, got {got:?}",
+            idx + 1
+        ));
+    }
+    Ok(got)
+}
+
+fn infer_matrix_source(
+    expr: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    if let Expr::ArrayLit(rows) = expr {
+        if rows.is_empty() {
+            return Err("`matrix` expects a non-empty array of rows".into());
+        }
+        let mut expected_cols: Option<usize> = None;
+        let mut expected_ty: Option<Ty> = None;
+        for row in rows {
+            let Expr::ArrayLit(cells) = row else {
+                return Err("`matrix` expects an array of arrays".into());
+            };
+            if cells.is_empty() {
+                return Err("`matrix` rows must not be empty".into());
+            }
+            if let Some(cols) = expected_cols {
+                if cells.len() != cols {
+                    return Err(format!(
+                        "`matrix` rows must have the same length: expected {cols}, got {}",
+                        cells.len()
+                    ));
+                }
+            } else {
+                expected_cols = Some(cells.len());
+            }
+            for cell in cells {
+                let ty = infer_expr(cell, env, structs, enums, vectors, fns, None)?;
+                if !is_numeric_ty(&ty) {
+                    return Err(format!("`matrix` cells must be numeric, got {ty:?}"));
+                }
+                if let Some(expected) = &expected_ty {
+                    if !types_equal(expected, &ty) {
+                        return Err(format!(
+                            "`matrix` cells must have one type: expected {expected:?}, got {ty:?}"
+                        ));
+                    }
+                } else {
+                    expected_ty = Some(ty);
+                }
+            }
+        }
+        return expected_ty.ok_or_else(|| "`matrix` rows must not be empty".into());
+    }
+
+    let ty = infer_expr(expr, env, structs, enums, vectors, fns, None)?;
+    let Ty::Array(row_ty, rows) = ty else {
+        return Err(format!("`matrix` expects an array of arrays, got {ty:?}"));
+    };
+    if rows == 0 {
+        return Err("`matrix` expects a non-empty array of rows".into());
+    }
+    let Ty::Array(cell_ty, cols) = row_ty.as_ref() else {
+        return Err(format!(
+            "`matrix` expects an array of arrays, got {row_ty:?}"
+        ));
+    };
+    if *cols == 0 {
+        return Err("`matrix` rows must not be empty".into());
+    }
+    if !is_numeric_ty(cell_ty) {
+        return Err(format!("`matrix` cells must be numeric, got {cell_ty:?}"));
+    }
+    Ok(cell_ty.as_ref().clone())
+}
+
 /// Infers and validates expression type under current context.
 ///
 /// ## Inputs
@@ -436,6 +568,19 @@ fn infer_arithmetic_bin(
     }
     if !types_equal(&tl, &tr) {
         return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
+    }
+    if let (Ty::Matrix(left_elem), Ty::Matrix(right_elem)) = (&tl, &tr) {
+        if op != "+" && op != "-" && op != "*" {
+            return Err(format!(
+                "cannot use `{op}` on Matrix values (only `+`, `-`, and `*` are supported)"
+            ));
+        }
+        if matches!(left_elem.as_ref(), Ty::Unit) || matches!(right_elem.as_ref(), Ty::Unit) {
+            return Err(format!(
+                "cannot use `{op}` on Matrix values with unknown element type"
+            ));
+        }
+        return Ok(tl);
     }
     // Component-wise linear algebra on fixed-size `vector` types (`vector Name Ty [ ... ]`).
     if is_nia_vector_ty(&tl, vectors) {
@@ -482,6 +627,33 @@ fn infer_mul_bin(
         return Err("cannot use `*` on a pointer value".into());
     }
 
+    if let Ty::Matrix(elem_ty) = &tl {
+        if matches!(elem_ty.as_ref(), Ty::Unit) {
+            return Err("cannot use `*` on Matrix values with unknown element type".into());
+        }
+        let tr = infer_expr(r, env, structs, enums, vectors, fns, None)?;
+        if matches!(tr, Ty::Unit) {
+            return Err("void value on the right of `*`".into());
+        }
+        if matches!(tr, Ty::Ptr(_)) {
+            return Err("cannot use `*` on a pointer value".into());
+        }
+        if matches!(tr, Ty::Matrix(_)) {
+            if types_equal(&tl, &tr) {
+                return Ok(tl);
+            }
+            return Err(format!(
+                "`*` on matrices requires the same element type; got {tl:?} and {tr:?}"
+            ));
+        }
+        if is_numeric_ty(&tr) && types_equal(&tr, elem_ty) {
+            return Ok(tl);
+        }
+        return Err(format!(
+            "matrix `*` expects a Matrix with the same element type or scalar {elem_ty:?}, got {tr:?}"
+        ));
+    }
+
     if is_nia_vector_ty(&tl, vectors) {
         let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
         if !is_integer_ty(et) && !is_float_ty(et) {
@@ -520,6 +692,18 @@ fn infer_mul_bin(
         return Err("cannot use `*` on a pointer value".into());
     }
 
+    if let Ty::Matrix(elem_ty) = &tr {
+        if matches!(elem_ty.as_ref(), Ty::Unit) {
+            return Err("cannot use `*` on Matrix values with unknown element type".into());
+        }
+        if is_numeric_ty(&tl) && types_equal(&tl, elem_ty) {
+            return Ok(tr);
+        }
+        return Err(format!(
+            "matrix `*` expects scalar {elem_ty:?} on the left, got {tl:?}"
+        ));
+    }
+
     if is_nia_vector_ty(&tr, vectors) {
         let et = nia_vector_elem_ty(&tr, vectors).expect("vector type must exist in map");
         if !is_integer_ty(et) && !is_float_ty(et) {
@@ -553,7 +737,7 @@ fn infer_mul_bin(
     infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "*")
 }
 
-/// `u @ v` — dot product; same `vector` type on both sides; result type is the axis type.
+/// `u @ v` — dot product for vectors, matrix multiplication for matrices.
 fn infer_vec_dot_bin(
     l: &Expr,
     r: &Expr,
@@ -570,9 +754,35 @@ fn infer_vec_dot_bin(
     if matches!(tl, Ty::Ptr(_)) {
         return Err("cannot use `@` on a pointer value".into());
     }
+    if let Ty::Matrix(left_elem) = &tl {
+        if matches!(left_elem.as_ref(), Ty::Unit) {
+            return Err("cannot use `@` on Matrix values with unknown element type".into());
+        }
+        let tr = infer_expr(r, env, structs, enums, vectors, fns, None)?;
+        if matches!(tr, Ty::Unit) {
+            return Err("void value on the right of `@`".into());
+        }
+        if matches!(tr, Ty::Ptr(_)) {
+            return Err("cannot use `@` on a pointer value".into());
+        }
+        let Ty::Matrix(right_elem) = &tr else {
+            return Err(format!(
+                "`@` matrix multiplication requires a Matrix on the right, got {tr:?}"
+            ));
+        };
+        if matches!(right_elem.as_ref(), Ty::Unit) {
+            return Err("cannot use `@` on Matrix values with unknown element type".into());
+        }
+        if !types_equal(left_elem, right_elem) {
+            return Err(format!(
+                "`@` on matrices requires the same element type; got {left_elem:?} and {right_elem:?}"
+            ));
+        }
+        return Ok(tl);
+    }
     if !is_nia_vector_ty(&tl, vectors) {
         return Err(format!(
-            "`@` (vector dot product) requires a vector on the left, got {tl:?}"
+            "`@` requires a vector or Matrix on the left, got {tl:?}"
         ));
     }
     let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
@@ -635,10 +845,7 @@ fn infer_comparison_bin(
                 "cannot use `{op}` on non-integer/non-float type {tl:?}"
             ));
         }
-    } else if !(is_integer_ty(&tl)
-        || is_float_ty(&tl)
-        || matches!(tl, Ty::Bool | Ty::Ptr(_)))
-    {
+    } else if !(is_integer_ty(&tl) || is_float_ty(&tl) || matches!(tl, Ty::Bool | Ty::Ptr(_))) {
         return Err(format!(
             "cannot use `{op}` on type {tl:?}; supported: integers, floats, bool, pointers"
         ));
@@ -673,9 +880,9 @@ fn infer_expr(
             None => Ok(Ty::F64),
             Some(other) if is_float_ty(other) => Ok(other.clone()),
             Some(Ty::Bool) => Err("float literal cannot satisfy bool".into()),
-            Some(Ty::Struct(name)) => Err(format!(
-                "float literal cannot satisfy struct type `{name}`"
-            )),
+            Some(Ty::Struct(name)) => {
+                Err(format!("float literal cannot satisfy struct type `{name}`"))
+            }
             Some(Ty::Unit) => Err("float literal cannot satisfy `()`".into()),
             Some(Ty::Ptr(_)) => Err("float literal cannot satisfy a pointer type".into()),
             Some(Ty::Array(_, _)) => Err("float literal cannot satisfy array type".into()),
@@ -801,6 +1008,164 @@ fn infer_expr(
                     ));
                 }
                 return Ok(Ty::Ptr(pointee));
+            }
+            if name == MATRIX_NEW {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{MATRIX_NEW}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let elem_ty = infer_matrix_source(&args[0], env, structs, enums, vectors, fns)?;
+                return Ok(Ty::Matrix(Box::new(elem_ty)));
+            }
+            if name == MATRIX_GET {
+                if args.len() != 3 {
+                    return Err(format!(
+                        "`{MATRIX_GET}` expects exactly 3 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let matrix_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                let Ty::Matrix(elem_ty) = matrix_ty else {
+                    return Err(format!(
+                        "`{MATRIX_GET}` argument 1 type mismatch: expected Matrix, got {matrix_ty:?}"
+                    ));
+                };
+                expect_arg_ty(name, args, 1, &Ty::I32, env, structs, enums, vectors, fns)?;
+                expect_arg_ty(name, args, 2, &Ty::I32, env, structs, enums, vectors, fns)?;
+                if matches!(elem_ty.as_ref(), Ty::Unit) {
+                    return Err(format!(
+                        "`{MATRIX_GET}` needs a Matrix with a known element type"
+                    ));
+                }
+                return Ok((*elem_ty).clone());
+            }
+            if name == MATRIX_SET {
+                if args.len() != 4 {
+                    return Err(format!(
+                        "`{MATRIX_SET}` expects exactly 4 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let matrix_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                let Ty::Matrix(elem_ty) = matrix_ty else {
+                    return Err(format!(
+                        "`{MATRIX_SET}` argument 1 type mismatch: expected Matrix, got {matrix_ty:?}"
+                    ));
+                };
+                expect_arg_ty(name, args, 1, &Ty::I32, env, structs, enums, vectors, fns)?;
+                expect_arg_ty(name, args, 2, &Ty::I32, env, structs, enums, vectors, fns)?;
+                if matches!(elem_ty.as_ref(), Ty::Unit) {
+                    return Err(format!(
+                        "`{MATRIX_SET}` needs a Matrix with a known element type"
+                    ));
+                }
+                let value_ty =
+                    infer_expr(&args[3], env, structs, enums, vectors, fns, Some(&elem_ty))?;
+                if !is_numeric_ty(&value_ty) {
+                    return Err(format!(
+                        "`{MATRIX_SET}` value must be numeric, got {value_ty:?}"
+                    ));
+                }
+                if !types_equal(&value_ty, &elem_ty) {
+                    return Err(format!(
+                        "`{MATRIX_SET}` value type mismatch: expected {elem_ty:?}, got {value_ty:?}"
+                    ));
+                }
+                return Ok(Ty::Unit);
+            }
+            if name == MATRIX_ROWS
+                || name == MATRIX_COLS
+                || name == MATRIX_LEN
+                || name == MATRIX_REFCOUNT
+            {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{name}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let matrix_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !matches!(matrix_ty, Ty::Matrix(_)) {
+                    return Err(format!(
+                        "`{name}` argument 1 type mismatch: expected Matrix, got {matrix_ty:?}"
+                    ));
+                }
+                return Ok(Ty::I32);
+            }
+            if name == MATRIX_CLONE {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{MATRIX_CLONE}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let matrix_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !matches!(matrix_ty, Ty::Matrix(_)) {
+                    return Err(format!(
+                        "`{MATRIX_CLONE}` argument 1 type mismatch: expected Matrix, got {matrix_ty:?}"
+                    ));
+                }
+                return Ok(matrix_ty);
+            }
+            if name == MATRIX_DROP {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{MATRIX_DROP}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let matrix_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !matches!(matrix_ty, Ty::Matrix(_)) {
+                    return Err(format!(
+                        "`{MATRIX_DROP}` argument 1 type mismatch: expected Matrix, got {matrix_ty:?}"
+                    ));
+                }
+                return Ok(Ty::Unit);
+            }
+            if name == OUTER {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "`{OUTER}` expects exactly 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let left_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !is_nia_vector_ty(&left_ty, vectors) {
+                    return Err(format!(
+                        "`{OUTER}` argument 1 type mismatch: expected vector, got {left_ty:?}"
+                    ));
+                }
+                let left_elem = nia_vector_elem_ty(&left_ty, vectors)
+                    .expect("checked vector type")
+                    .clone();
+                if !is_numeric_ty(&left_elem) {
+                    return Err(format!(
+                        "`{OUTER}` vector elements must be numeric, got {left_elem:?}"
+                    ));
+                }
+
+                let right_ty = infer_expr(&args[1], env, structs, enums, vectors, fns, None)?;
+                if !is_nia_vector_ty(&right_ty, vectors) {
+                    return Err(format!(
+                        "`{OUTER}` argument 2 type mismatch: expected vector, got {right_ty:?}"
+                    ));
+                }
+                let right_elem = nia_vector_elem_ty(&right_ty, vectors)
+                    .expect("checked vector type")
+                    .clone();
+                if !is_numeric_ty(&right_elem) {
+                    return Err(format!(
+                        "`{OUTER}` vector elements must be numeric, got {right_elem:?}"
+                    ));
+                }
+                if !types_equal(&left_elem, &right_elem) {
+                    return Err(format!(
+                        "`{OUTER}` vector element types must match exactly; got {left_elem:?} and {right_elem:?}"
+                    ));
+                }
+                return Ok(Ty::Matrix(Box::new(left_elem)));
             }
             if let Some(def) = structs.get(name) {
                 if !def.is_tuple {

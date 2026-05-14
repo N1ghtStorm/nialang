@@ -173,6 +173,18 @@ fn main() i32 {
     println((*pair_ptr).0);
     dealloc(pair_ptr);
 
+    let mat: Matrix = matrix([
+        [5.0, 6.0],
+        [7.5, 8.5],
+    ]);
+    println(mat);
+    matrix_set(mat, 0, 1, 12.25);
+    println(matrix_get(mat, 0, 1));
+    let mat2: Matrix = matrix_clone(mat);
+    println(matrix_refcount(mat));
+    matrix_drop(mat2);
+    matrix_drop(mat);
+
     let u: Vec2 = Vec2 [X: 3, Y: 4];
     let v: Vec2 = Vec2 [X: 1, Y: 2];
     let scale: i32 = 3;

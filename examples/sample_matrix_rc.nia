@@ -1,0 +1,35 @@
+// Built-in ref-counted matrix handle.
+//
+// Matrix is a compiler-known heap object:
+// - reference counter,
+// - heap pointer to contiguous cells of one numeric type,
+// - row count,
+// - column count.
+
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2, 3],
+        [4, 5, 6],
+    ]);
+    println(m);
+    println(matrix_rows(m));
+    println(matrix_cols(m));
+    println(matrix_len(m));
+
+    println(matrix_get(m, 0, 1));
+    matrix_set(m, 1, 2, 42);
+    println(m);
+    println(matrix_get(m, 1, 2));
+
+    println(matrix_refcount(m));
+    let shared: Matrix = matrix_clone(m);
+    println(matrix_refcount(m));
+    println(shared);
+    println(matrix_get(shared, 1, 2));
+
+    matrix_drop(shared);
+    println(matrix_refcount(m));
+    matrix_drop(m);
+
+    0
+}

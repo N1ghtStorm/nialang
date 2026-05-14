@@ -1,5 +1,5 @@
 use super::*;
-use crate::parser::{Parser, tokenize};
+use crate::parser::{tokenize, Parser};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
 
 fn emit(src: &str) -> String {
@@ -67,6 +67,30 @@ fn main() i32 {
     let ll = emit(src);
     assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
     assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.V2"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_outer_emits_matrix_allocation_and_products() {
+    let src = r#"
+vector V3 i32 [ X, Y, Z ]
+vector V2 i32 [ U, V ]
+
+fn main() i32 {
+    let a = V3 [X: 1, Y: 2, Z: 3];
+    let b = V2 [U: 4, V: 5];
+    let c: Matrix = outer(a, b);
+    println(c);
+    matrix_drop(c);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("call ptr @malloc(i64 24)"), "IR:\n{ll}");
+    assert!(ll.contains("store i64 3"), "IR:\n{ll}");
+    assert!(ll.contains("store i64 2"), "IR:\n{ll}");
+    assert!(ll.matches("mul nsw i32").count() >= 6, "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.V3"), "IR:\n{ll}");
     assert!(ll.contains("extractvalue %struct.V2"), "IR:\n{ll}");
 }
 
@@ -297,6 +321,43 @@ fn codegen_alloc_realloc_dealloc_calls_present() {
     assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
     assert!(ll.contains("call ptr @realloc"), "IR:\n{ll}");
     assert!(ll.contains("call void @free"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_matrix_rc_helpers_present() {
+    let ll = emit(include_str!("../../../examples/sample_matrix_rc.nia"));
+    assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
+    assert!(ll.contains("println.matrix.row.cond"), "IR:\n{ll}");
+    assert!(ll.contains("println.matrix.col.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
+    assert!(
+        ll.contains("getelementptr inbounds { i64, ptr, i64, i64 }"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("getelementptr inbounds i32"), "IR:\n{ll}");
+    assert!(ll.contains("load i32"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_matrix_arith_helpers_present() {
+    let ll = emit(include_str!("../../../examples/sample_matrix_arith.nia"));
+    assert!(ll.contains("matrix.add.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.add.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.sub.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.sub.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.mul.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.mul.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.scalar.mul.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.matmul.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.matmul.row.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.matmul.inner.cond"), "IR:\n{ll}");
+    assert!(ll.contains("call void @abort()"), "IR:\n{ll}");
+    assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("sub nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("fadd double"), "IR:\n{ll}");
+    assert!(ll.contains("fsub double"), "IR:\n{ll}");
+    assert!(ll.contains("fmul double"), "IR:\n{ll}");
 }
 
 #[test]
