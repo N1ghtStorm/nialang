@@ -9,7 +9,17 @@
 // - left columns must equal right rows,
 // - (n x m) @ (m x k) returns (n x k).
 
+vector Vec3i i32 [X, Y, Z]
+vector Vec2i i32 [U, V]
+
 fn main() i32 {
+    let outer_left = Vec3i [X: 1, Y: 2, Z: 3];
+    let outer_right = Vec2i [U: 4, V: 5];
+    let outer_product: Matrix = outer(outer_left, outer_right);
+    println(outer_product);
+    println(matrix_rows(outer_product));
+    println(matrix_cols(outer_product));
+
     let a: Matrix = matrix([
         [1, 2, 3],
         [4, 5, 6],
@@ -84,6 +94,10 @@ fn main() i32 {
     println(some3);
     println(some4);
 
+    matrix_drop(some4);
+    matrix_drop(some3);
+    matrix_drop(some2);
+    matrix_drop(some1);
     matrix_drop(fmatmul);
     matrix_drop(fscaled);
     matrix_drop(fprod);
@@ -100,6 +114,7 @@ fn main() i32 {
     matrix_drop(sum);
     matrix_drop(b);
     matrix_drop(a);
+    matrix_drop(outer_product);
 
     0
 }

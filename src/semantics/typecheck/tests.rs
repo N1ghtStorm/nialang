@@ -312,6 +312,59 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_outer_ok_same_numeric_element_type() {
+    let src = r#"
+vector Vec3i i32 [X, Y, Z]
+vector Vec2i i32 [U, V]
+
+fn main() i32 {
+    let a = Vec3i [X: 1, Y: 2, Z: 3];
+    let b = Vec2i [U: 4, V: 5];
+    let c: Matrix = outer(a, b);
+    println(c);
+    matrix_drop(c);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_outer_rejects_different_element_types() {
+    let src = r#"
+vector Vec2i i32 [X, Y]
+vector Vec2f f64 [X, Y]
+
+fn main() i32 {
+    let a = Vec2i [X: 1, Y: 2];
+    let b = Vec2f [X: 1.0, Y: 2.0];
+    let c: Matrix = outer(a, b);
+    matrix_drop(c);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_outer_rejects_non_vector_argument() {
+    let src = r#"
+vector Vec2i i32 [X, Y]
+
+fn main() i32 {
+    let a = Vec2i [X: 1, Y: 2];
+    let c: Matrix = outer(a, 3);
+    matrix_drop(c);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn typecheck_matrix_scalar_mul_ok_same_cell_type_both_orders() {
     let src = r#"
 fn main() i32 {

@@ -62,6 +62,7 @@ cargo test
 - `matrix_get(m, row, col)` / `matrix_set(m, row, col, value)`
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
+- `outer(a, b)` — outer product of two vectors; returns a `Matrix`
 - `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
 - `a @ b` — matrix multiplication; `matrix_cols(a)` must equal `matrix_rows(b)`
 - `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
@@ -270,6 +271,26 @@ println(matrix_cols(product)); // 4
 Generated code checks `matrix_cols(left) == matrix_rows(right)` before
 multiplying; a mismatch aborts the program. Like other matrix arithmetic, `@`
 creates a new allocation with reference count `1`.
+
+Use `outer(a, b)` to build a matrix from two vectors. The vector declarations may
+have different lengths, but their element types must be the same numeric type:
+
+```nia
+vector Vec3i i32 [X, Y, Z]
+vector Vec2i i32 [U, V]
+
+let a = Vec3i [X: 1, Y: 2, Z: 3];
+let b = Vec2i [U: 4, V: 5];
+
+let product: Matrix = outer(a, b);
+println(product); // [[4, 5], [8, 10], [12, 15]]
+println(matrix_rows(product)); // 3
+println(matrix_cols(product)); // 2
+```
+
+The rows come from the first vector and the columns come from the second vector.
+Like matrix arithmetic, the result is a new `Matrix` allocation with reference
+count `1`.
 
 Use `*` with a scalar to multiply every cell by one number:
 

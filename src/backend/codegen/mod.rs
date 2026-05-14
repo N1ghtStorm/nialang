@@ -6,7 +6,7 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, PRINTLN, REALLOC,
+    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -2370,6 +2370,95 @@ impl<'a> Gen<'a> {
         (elem_ty, format!("%{id}"))
     }
 
+    fn emit_outer(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (left_ty, left_val) = self.emit_expr(&args[0], locals, None);
+        let left_name = self
+            .as_nia_vector_name(&left_ty)
+            .expect("typechecked outer left vector")
+            .to_string();
+        let (right_ty, right_val) = self.emit_expr(&args[1], locals, None);
+        let right_name = self
+            .as_nia_vector_name(&right_ty)
+            .expect("typechecked outer right vector")
+            .to_string();
+        let left_def = self
+            .vectors
+            .iter()
+            .find(|v| v.name == left_name)
+            .expect("checked vector decl")
+            .clone();
+        let right_def = self
+            .vectors
+            .iter()
+            .find(|v| v.name == right_name)
+            .expect("checked vector decl")
+            .clone();
+        debug_assert!(types_match(&left_def.ty, &right_def.ty));
+
+        let elem_ty = left_def.ty.clone();
+        let rows = left_def.fields.len();
+        let cols = right_def.fields.len();
+        let len = rows * cols;
+        let bytes = len * matrix_elem_size(&elem_ty);
+        let data = self.fresh();
+        let matrix = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", matrix).unwrap();
+
+        let matrix_ref = format!("%{matrix}");
+        let rc_ptr = self.matrix_field_ptr(&matrix_ref, 0);
+        let data_ptr = self.matrix_field_ptr(&matrix_ref, 1);
+        let rows_ptr = self.matrix_field_ptr(&matrix_ref, 2);
+        let cols_ptr = self.matrix_field_ptr(&matrix_ref, 3);
+        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
+        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", rows, rows_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", cols, cols_ptr).unwrap();
+
+        let ll = llvm_ty(&elem_ty, self.structs);
+        let left_ll = format!("%struct.{}", sanitize(&left_name));
+        let right_ll = format!("%struct.{}", sanitize(&right_name));
+        for i in 0..rows {
+            let left_cell = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                left_cell, left_ll, left_val, i
+            )
+            .unwrap();
+            for j in 0..cols {
+                let right_cell = self.fresh();
+                let out_cell_ptr = self.fresh();
+                let idx = i * cols + j;
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {} {}, {}",
+                    right_cell, right_ll, right_val, j
+                )
+                .unwrap();
+                let product = self.emit_scalar_vec_mul_pair(&elem_ty, &left_cell, &right_cell);
+                writeln!(
+                    self.out,
+                    "  %{} = getelementptr inbounds {}, ptr %{}, i64 {}",
+                    out_cell_ptr, ll, data, idx
+                )
+                .unwrap();
+                writeln!(
+                    self.out,
+                    "  store {} %{}, ptr %{}",
+                    ll, product, out_cell_ptr
+                )
+                .unwrap();
+            }
+        }
+
+        (Ty::Matrix(Box::new(elem_ty)), format!("%{matrix}"))
+    }
+
     /// Emits one full LLVM function definition.
     ///
     /// ## Strategy
@@ -3177,6 +3266,9 @@ impl<'a> Gen<'a> {
                 }
                 if name == MATRIX_DROP {
                     return self.emit_matrix_drop(args, locals);
+                }
+                if name == OUTER {
+                    return self.emit_outer(args, locals);
                 }
                 if name == ALLOC {
                     let (at, av) = self.emit_expr(&args[0], locals, None);

@@ -1,4 +1,4 @@
-//! Built-in "std" surface: `println`, `len`, heap helpers (reserved names).
+//! Built-in "std" surface: `println`, `len`, heap helpers, matrix helpers (reserved names).
 
 pub const PRINTLN: &str = "println";
 /// Array length: `len(arr)` → `i32` (compile-time size of `[T; N]`).
@@ -16,6 +16,7 @@ pub const MATRIX_LEN: &str = "matrix_len";
 pub const MATRIX_CLONE: &str = "matrix_clone";
 pub const MATRIX_REFCOUNT: &str = "matrix_refcount";
 pub const MATRIX_DROP: &str = "matrix_drop";
+pub const OUTER: &str = "outer";
 
 /// LLVM IR prelude used by builtin `println` codegen.
 ///

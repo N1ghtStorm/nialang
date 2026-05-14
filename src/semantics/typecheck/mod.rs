@@ -5,7 +5,7 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, PRINTLN, REALLOC,
+    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PRINTLN, REALLOC,
 };
 
 /// Canonical function signature table entry used across semantic passes.
@@ -187,6 +187,7 @@ pub fn collect_sigs(
             || f.name == MATRIX_CLONE
             || f.name == MATRIX_REFCOUNT
             || f.name == MATRIX_DROP
+            || f.name == OUTER
         {
             return Err(format!(
                 "function name `{}` is reserved for the standard library",
@@ -1122,6 +1123,49 @@ fn infer_expr(
                     ));
                 }
                 return Ok(Ty::Unit);
+            }
+            if name == OUTER {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "`{OUTER}` expects exactly 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let left_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !is_nia_vector_ty(&left_ty, vectors) {
+                    return Err(format!(
+                        "`{OUTER}` argument 1 type mismatch: expected vector, got {left_ty:?}"
+                    ));
+                }
+                let left_elem = nia_vector_elem_ty(&left_ty, vectors)
+                    .expect("checked vector type")
+                    .clone();
+                if !is_numeric_ty(&left_elem) {
+                    return Err(format!(
+                        "`{OUTER}` vector elements must be numeric, got {left_elem:?}"
+                    ));
+                }
+
+                let right_ty = infer_expr(&args[1], env, structs, enums, vectors, fns, None)?;
+                if !is_nia_vector_ty(&right_ty, vectors) {
+                    return Err(format!(
+                        "`{OUTER}` argument 2 type mismatch: expected vector, got {right_ty:?}"
+                    ));
+                }
+                let right_elem = nia_vector_elem_ty(&right_ty, vectors)
+                    .expect("checked vector type")
+                    .clone();
+                if !is_numeric_ty(&right_elem) {
+                    return Err(format!(
+                        "`{OUTER}` vector elements must be numeric, got {right_elem:?}"
+                    ));
+                }
+                if !types_equal(&left_elem, &right_elem) {
+                    return Err(format!(
+                        "`{OUTER}` vector element types must match exactly; got {left_elem:?} and {right_elem:?}"
+                    ));
+                }
+                return Ok(Ty::Matrix(Box::new(left_elem)));
             }
             if let Some(def) = structs.get(name) {
                 if !def.is_tuple {

@@ -71,6 +71,30 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_outer_emits_matrix_allocation_and_products() {
+    let src = r#"
+vector V3 i32 [ X, Y, Z ]
+vector V2 i32 [ U, V ]
+
+fn main() i32 {
+    let a = V3 [X: 1, Y: 2, Z: 3];
+    let b = V2 [U: 4, V: 5];
+    let c: Matrix = outer(a, b);
+    println(c);
+    matrix_drop(c);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("call ptr @malloc(i64 24)"), "IR:\n{ll}");
+    assert!(ll.contains("store i64 3"), "IR:\n{ll}");
+    assert!(ll.contains("store i64 2"), "IR:\n{ll}");
+    assert!(ll.matches("mul nsw i32").count() >= 6, "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.V3"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.V2"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_contains_tuple_struct_ops() {
     let ll = emit(include_str!("../../../examples/tests/ok_tuple_struct.nia"));
     assert!(ll.contains("insertvalue %struct.Foo"));
