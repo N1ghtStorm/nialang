@@ -1,0 +1,26 @@
+// sample_string.nia — type `string`, literals, escapes, println, == and !=
+
+fn main() i32 {
+    let hello: string = "Hello";
+    println(hello);
+
+    println("Unicode in literals: привет");
+
+    // Escapes: \n \t \r \\ \" \0
+    println("tab\there");
+    println("line one\nline two");
+
+    let a: string = "same";
+    let b: string = "same";
+    if a == b {
+        println("a == b");
+    }
+
+    let x: string = "left";
+    let y: string = "right";
+    if x != y {
+        println("x != y");
+    }
+
+    0
+}

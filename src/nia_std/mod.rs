@@ -37,6 +37,8 @@ pub fn llvm_prelude() -> &'static str {
 @nialang.std.fmt.matrix.nn = private unnamed_addr constant [40 x i8] c"Matrix(rows=%lld, cols=%lld, refs=%lld)\00", align 1
 @nialang.std.fmt.f64 = private unnamed_addr constant [4 x i8] c"%f\0A\00", align 1
 @nialang.std.fmt.f64.nn = private unnamed_addr constant [3 x i8] c"%f\00", align 1
+@nialang.std.fmt.str = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@nialang.std.fmt.str.nn = private unnamed_addr constant [3 x i8] c"%s\00", align 1
 @nialang.std.fmt.i32.nn = private unnamed_addr constant [3 x i8] c"%d\00", align 1
 @nialang.std.fmt.u32.nn = private unnamed_addr constant [3 x i8] c"%u\00", align 1
 @nialang.std.fmt.i64.nn = private unnamed_addr constant [5 x i8] c"%lld\00", align 1
@@ -55,6 +57,7 @@ pub fn llvm_prelude() -> &'static str {
 @nialang.std.txt.tuple_close_ln = private unnamed_addr constant [3 x i8] c")\0A\00", align 1
 
 declare i32 @printf(ptr nocapture, ...)
+declare i32 @strcmp(ptr, ptr)
 declare ptr @malloc(i64)
 declare void @free(ptr)
 declare ptr @realloc(ptr, i64)

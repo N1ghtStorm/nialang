@@ -42,6 +42,8 @@ pub enum Ty {
     F16,
     F32,
     F64,
+    /// UTF-8 text; lowered as null-terminated `ptr` to bytes in LLVM.
+    String,
     Array(Box<Ty>, usize),
     Struct(String),
     Enum(String),
@@ -50,6 +52,8 @@ pub enum Ty {
     /// Result of a void call or `println`; not storable in `let`.
     Unit,
     Vector(String, Box<Ty>),
+    /// Anonymous fixed-size vector literal `<...>` with homogeneous element type.
+    AnonVector(Box<Ty>, usize),
     /// Built-in reference-counted heap matrix with one numeric cell type.
     Matrix(Box<Ty>),
 }
@@ -163,6 +167,8 @@ pub enum Expr {
     /// Float literal; stored as `f64` and coerced in codegen to the target float type.
     Float(f64),
     Bool(bool),
+    /// UTF-8 string literal (source escapes decoded).
+    String(String),
     Ident(String),
     /// Unary `-` (integer and float).
     Neg(Box<Expr>),
@@ -190,6 +196,7 @@ pub enum Expr {
         name: String,
         fields: Vec<(String, Expr)>,
     },
+    AnonVectorLit(Vec<Expr>),
     ArrayLit(Vec<Expr>),
     EnumVariant {
         enum_name: String,

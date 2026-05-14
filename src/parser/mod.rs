@@ -499,6 +499,7 @@ impl Parser {
             Token::TyF16 => Ok(Ty::F16),
             Token::TyF32 => Ok(Ty::F32),
             Token::TyF64 => Ok(Ty::F64),
+            Token::TyString => Ok(Ty::String),
             Token::Ident(n) => Ok(Ty::Struct(n)),
             other => Err(format!("expected type, got {other:?}")),
         }
@@ -708,10 +709,15 @@ impl Parser {
                 self.bump();
                 self.parse_array_lit_tail()
             }
+            Token::Lt => {
+                self.bump();
+                self.parse_anon_vector_lit_tail()
+            }
             _ => match self.bump() {
                 Token::Int(n) => Ok(Expr::Int(n)),
                 Token::Float(x) => Ok(Expr::Float(x)),
                 Token::Bool(b) => Ok(Expr::Bool(b)),
+                Token::StrLit(s) => Ok(Expr::String(s)),
                 Token::Ident(name) => {
                     if matches!(self.peek(), Token::DoubleColon) {
                         self.bump();
@@ -852,6 +858,28 @@ impl Parser {
             name: vector_name,
             fields,
         })
+    }
+
+    fn parse_anon_vector_lit_tail(&mut self) -> Result<Expr, String> {
+        let mut elems = Vec::new();
+        if matches!(self.peek(), Token::Gt) {
+            return Err("anonymous vector literal must not be empty".into());
+        }
+        loop {
+            elems.push(self.parse_additive()?);
+            match self.peek() {
+                Token::Comma => {
+                    self.bump();
+                    if matches!(self.peek(), Token::Gt) {
+                        break;
+                    }
+                }
+                Token::Gt => break,
+                _ => return Err(format!("expected , or >, got {:?}", self.peek())),
+            }
+        }
+        self.expect(&Token::Gt)?;
+        Ok(Expr::AnonVectorLit(elems))
     }
 
     /// Parses array literal body after consuming opening bracket.
