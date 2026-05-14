@@ -351,6 +351,9 @@ fn codegen_matrix_arith_helpers_present() {
     assert!(ll.contains("matrix.matmul.shape.ok"), "IR:\n{ll}");
     assert!(ll.contains("matrix.matmul.row.cond"), "IR:\n{ll}");
     assert!(ll.contains("matrix.matmul.inner.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.det.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.det.heap.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.det.term.cond"), "IR:\n{ll}");
     assert!(ll.contains("call void @abort()"), "IR:\n{ll}");
     assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
     assert!(ll.contains("sub nsw i32"), "IR:\n{ll}");

@@ -9,6 +9,8 @@
     { "include": "#decl-keywords" },
     { "include": "#primitive-types" },
     { "include": "#constants" },
+    { "include": "#def-keyword" },
+    { "include": "#outer-builtin" },
     { "include": "#builtins" },
     { "include": "#type-ident" },
     { "include": "#function-call" },
@@ -50,6 +52,16 @@
       "match": "\\b(true|false)\\b",
       "name": "constant.language.boolean.nia"
     },
+    "def-keyword": {
+      "comment": "def(matrix) — determinant of a square Matrix",
+      "match": "\\bdef\\b",
+      "name": "keyword.other.def.nia"
+    },
+    "outer-builtin": {
+      "comment": "outer(left, right) — outer product of two vectors -> Matrix",
+      "match": "\\bouter\\b",
+      "name": "support.function.builtin.outer.nia"
+    },
     "builtins": {
       "match": "\\b(println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop)\\b",
       "name": "support.function.builtin.nia"
@@ -59,7 +71,7 @@
       "name": "entity.name.type.nia"
     },
     "function-call": {
-      "match": "\\b(?!fn|let|if|while|loop|break|for|in|match|return|struct|enum|vector|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop)([a-z_][\\w]*)(?=\\s*\\()",
+      "match": "\\b(?!fn|let|if|while|loop|break|for|in|match|return|struct|enum|vector|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|def|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop)([a-z_][\\w]*)(?=\\s*\\()",
       "captures": {
         "1": { "name": "entity.name.function.call.nia" }
       }
@@ -79,6 +91,11 @@
     "operators": {
       "patterns": [
         {
+          "comment": "Vector dot product (u @ v) and matrix multiply (Matrix @ Matrix)",
+          "match": "@",
+          "name": "keyword.operator.vector-matrix-at.nia"
+        },
+        {
           "match": "\\.\\.",
           "name": "keyword.operator.range.nia"
         },
@@ -95,7 +112,7 @@
           "name": "keyword.operator.namespace.nia"
         },
         {
-          "match": "[=+*/@-]",
+          "match": "[=+*/-]",
           "name": "keyword.operator.nia"
         },
         {
@@ -121,7 +138,7 @@
       ]
     },
     "identifiers": {
-      "match": "\\b(?!fn|let|if|while|loop|break|for|in|match|return|struct|enum|vector|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop)([a-z_][\\w]*)\\b",
+      "match": "\\b(?!fn|let|if|while|loop|break|for|in|match|return|struct|enum|vector|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop)([a-z_][\\w]*)\\b",
       "captures": {
         "1": { "name": "variable.other.nia" }
       }
