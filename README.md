@@ -63,6 +63,7 @@ cargo test
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
 - `outer(a, b)` — outer product of two vectors; returns a `Matrix`
+- `def(m)` — determinant of a square `Matrix`; returns the matrix cell type
 - `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
 - `a @ b` — matrix multiplication; `matrix_cols(a)` must equal `matrix_rows(b)`
 - `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
@@ -291,6 +292,22 @@ println(matrix_cols(product)); // 2
 The rows come from the first vector and the columns come from the second vector.
 Like matrix arithmetic, the result is a new `Matrix` allocation with reference
 count `1`.
+
+Use `def(m)` to compute the determinant of a square matrix. The return type is
+the same as the matrix cell type:
+
+```nia
+let m: Matrix = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+let d: i32 = def(m);
+println(d); // -2
+```
+
+Generated code checks `matrix_rows(m) == matrix_cols(m)` before computing the
+determinant; a non-square matrix aborts the program.
 
 Use `*` with a scalar to multiply every cell by one number:
 

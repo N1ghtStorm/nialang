@@ -5,7 +5,7 @@ use crate::ast::{
     EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
 };
 use crate::nia_std::{
-    ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
+    ALLOC, DEALLOC, DEF, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC,
 };
 use crate::semantics::typecheck::FnSig;
@@ -420,6 +420,24 @@ fn matrix_zero_value(t: &Ty) -> &'static str {
         | Ty::I128
         | Ty::U128 => "0",
         Ty::F16 | Ty::F32 | Ty::F64 => "0.0",
+        _ => unreachable!("typechecked numeric matrix element"),
+    }
+}
+
+fn matrix_one_value(t: &Ty) -> &'static str {
+    match t {
+        Ty::I8
+        | Ty::U8
+        | Ty::I16
+        | Ty::U16
+        | Ty::I32
+        | Ty::I64
+        | Ty::U64
+        | Ty::Isize
+        | Ty::Usize
+        | Ty::I128
+        | Ty::U128 => "1",
+        Ty::F16 | Ty::F32 | Ty::F64 => "1.0",
         _ => unreachable!("typechecked numeric matrix element"),
     }
 }
@@ -2048,6 +2066,399 @@ impl<'a> Gen<'a> {
         )
     }
 
+    fn emit_matrix_det_accumulate_term(
+        &mut self,
+        elem_ty: &Ty,
+        data: &str,
+        n: &str,
+        perm: &str,
+        sign_addr: &str,
+        det_addr: &str,
+    ) {
+        let ll = llvm_ty(elem_ty, self.structs);
+        let term_addr = self.fresh();
+        let row_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca {}", term_addr, ll).unwrap();
+        writeln!(self.out, "  %{} = alloca i64", row_addr).unwrap();
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            ll,
+            matrix_one_value(elem_ty),
+            term_addr
+        )
+        .unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", row_addr).unwrap();
+
+        let cond_lbl = self.fresh_label("matrix.det.term.cond");
+        let body_lbl = self.fresh_label("matrix.det.term.body");
+        let done_lbl = self.fresh_label("matrix.det.term.done");
+        let add_lbl = self.fresh_label("matrix.det.acc.add");
+        let sub_lbl = self.fresh_label("matrix.det.acc.sub");
+        let acc_done_lbl = self.fresh_label("matrix.det.acc.done");
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", cond_lbl).unwrap();
+        let row = self.fresh();
+        let has_row = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", row, row_addr).unwrap();
+        writeln!(self.out, "  %{} = icmp slt i64 %{}, {}", has_row, row, n).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_row, body_lbl, done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let col_ptr = self.fresh();
+        let col = self.fresh();
+        let row_offset = self.fresh();
+        let idx = self.fresh();
+        let cell_ptr = self.fresh();
+        let cell = self.fresh();
+        let term = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds i64, ptr {}, i64 %{}",
+            col_ptr, perm, row
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", col, col_ptr).unwrap();
+        writeln!(self.out, "  %{} = mul i64 %{}, {}", row_offset, row, n).unwrap();
+        writeln!(self.out, "  %{} = add i64 %{}, %{}", idx, row_offset, col).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i64 %{}",
+            cell_ptr, ll, data, idx
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", cell, ll, cell_ptr).unwrap();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", term, ll, term_addr).unwrap();
+        let product =
+            self.emit_matrix_elem_binop(elem_ty, &format!("%{term}"), &format!("%{cell}"), "*");
+        writeln!(self.out, "  store {} {}, ptr %{}", ll, product, term_addr).unwrap();
+        let next_row = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next_row, row).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next_row, row_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        let sign = self.fresh();
+        writeln!(self.out, "  %{} = load i1, ptr %{}", sign, sign_addr).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            sign, add_lbl, sub_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", add_lbl).unwrap();
+        let det_add = self.fresh();
+        let term_add = self.fresh();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", det_add, ll, det_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr %{}",
+            term_add, ll, term_addr
+        )
+        .unwrap();
+        let add_value = self.emit_matrix_elem_binop(
+            elem_ty,
+            &format!("%{det_add}"),
+            &format!("%{term_add}"),
+            "+",
+        );
+        writeln!(self.out, "  store {} {}, ptr %{}", ll, add_value, det_addr).unwrap();
+        writeln!(self.out, "  br label %{}", acc_done_lbl).unwrap();
+
+        writeln!(self.out, "{}:", sub_lbl).unwrap();
+        let det_sub = self.fresh();
+        let term_sub = self.fresh();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", det_sub, ll, det_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr %{}",
+            term_sub, ll, term_addr
+        )
+        .unwrap();
+        let sub_value = self.emit_matrix_elem_binop(
+            elem_ty,
+            &format!("%{det_sub}"),
+            &format!("%{term_sub}"),
+            "-",
+        );
+        writeln!(self.out, "  store {} {}, ptr %{}", ll, sub_value, det_addr).unwrap();
+        writeln!(self.out, "  br label %{}", acc_done_lbl).unwrap();
+
+        writeln!(self.out, "{}:", acc_done_lbl).unwrap();
+    }
+
+    fn emit_matrix_det(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (matrix_ty, matrix) = self.emit_expr(&args[0], locals, None);
+        let Ty::Matrix(elem_ty) = matrix_ty else {
+            unreachable!("typechecked def")
+        };
+        let elem_ty = elem_ty.as_ref().clone();
+        let rows = self.matrix_load_i64_field(&matrix, 2);
+        let cols = self.matrix_load_i64_field(&matrix, 3);
+        let square = self.fresh();
+        let ok_lbl = self.fresh_label("matrix.det.shape.ok");
+        let abort_lbl = self.fresh_label("matrix.det.shape.abort");
+        writeln!(self.out, "  %{} = icmp eq i64 {}, {}", square, rows, cols).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            square, ok_lbl, abort_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", abort_lbl).unwrap();
+        writeln!(self.out, "  call void @abort()").unwrap();
+        writeln!(self.out, "  unreachable").unwrap();
+
+        writeln!(self.out, "{}:", ok_lbl).unwrap();
+        let data = self.matrix_load_data_ptr(&matrix);
+        let ll = llvm_ty(&elem_ty, self.structs);
+        let bytes = self.fresh();
+        let perm = self.fresh();
+        let counters = self.fresh();
+        let det_addr = self.fresh();
+        let sign_addr = self.fresh();
+        writeln!(self.out, "  %{} = mul i64 {}, 8", bytes, rows).unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 %{})", perm, bytes).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = call ptr @malloc(i64 %{})",
+            counters, bytes
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = alloca {}", det_addr, ll).unwrap();
+        writeln!(self.out, "  %{} = alloca i1", sign_addr).unwrap();
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            ll,
+            matrix_zero_value(&elem_ty),
+            det_addr
+        )
+        .unwrap();
+        writeln!(self.out, "  store i1 1, ptr %{}", sign_addr).unwrap();
+
+        let init_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca i64", init_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", init_addr).unwrap();
+        let init_cond_lbl = self.fresh_label("matrix.det.init.cond");
+        let init_body_lbl = self.fresh_label("matrix.det.init.body");
+        let init_done_lbl = self.fresh_label("matrix.det.init.done");
+        writeln!(self.out, "  br label %{}", init_cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", init_cond_lbl).unwrap();
+        let init_idx = self.fresh();
+        let init_has = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", init_idx, init_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, {}",
+            init_has, init_idx, rows
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            init_has, init_body_lbl, init_done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", init_body_lbl).unwrap();
+        let perm_init_ptr = self.fresh();
+        let counter_init_ptr = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds i64, ptr %{}, i64 %{}",
+            perm_init_ptr, perm, init_idx
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds i64, ptr %{}, i64 %{}",
+            counter_init_ptr, counters, init_idx
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  store i64 %{}, ptr %{}",
+            init_idx, perm_init_ptr
+        )
+        .unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", counter_init_ptr).unwrap();
+        let init_next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", init_next, init_idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", init_next, init_addr).unwrap();
+        writeln!(self.out, "  br label %{}", init_cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", init_done_lbl).unwrap();
+        self.emit_matrix_det_accumulate_term(
+            &elem_ty,
+            &data,
+            &rows,
+            &format!("%{perm}"),
+            &sign_addr,
+            &det_addr,
+        );
+
+        let heap_i_addr = self.fresh();
+        let swap_idx_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca i64", heap_i_addr).unwrap();
+        writeln!(self.out, "  %{} = alloca i64", swap_idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", heap_i_addr).unwrap();
+        let heap_cond_lbl = self.fresh_label("matrix.det.heap.cond");
+        let heap_body_lbl = self.fresh_label("matrix.det.heap.body");
+        let swap_body_lbl = self.fresh_label("matrix.det.heap.swap");
+        let reset_body_lbl = self.fresh_label("matrix.det.heap.reset");
+        let even_swap_lbl = self.fresh_label("matrix.det.heap.swap.even");
+        let odd_swap_lbl = self.fresh_label("matrix.det.heap.swap.odd");
+        let do_swap_lbl = self.fresh_label("matrix.det.heap.swap.do");
+        let done_lbl = self.fresh_label("matrix.det.done");
+        writeln!(self.out, "  br label %{}", heap_cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", heap_cond_lbl).unwrap();
+        let heap_i = self.fresh();
+        let heap_has = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", heap_i, heap_i_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, {}",
+            heap_has, heap_i, rows
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            heap_has, heap_body_lbl, done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", heap_body_lbl).unwrap();
+        let counter_ptr = self.fresh();
+        let counter = self.fresh();
+        let can_swap = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds i64, ptr %{}, i64 %{}",
+            counter_ptr, counters, heap_i
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", counter, counter_ptr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, %{}",
+            can_swap, counter, heap_i
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            can_swap, swap_body_lbl, reset_body_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", swap_body_lbl).unwrap();
+        let rem = self.fresh();
+        let is_even = self.fresh();
+        writeln!(self.out, "  %{} = urem i64 %{}, 2", rem, heap_i).unwrap();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_even, rem).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_even, even_swap_lbl, odd_swap_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", even_swap_lbl).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", swap_idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", do_swap_lbl).unwrap();
+
+        writeln!(self.out, "{}:", odd_swap_lbl).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", counter, swap_idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", do_swap_lbl).unwrap();
+
+        writeln!(self.out, "{}:", do_swap_lbl).unwrap();
+        let swap_idx = self.fresh();
+        let swap_a_ptr = self.fresh();
+        let swap_b_ptr = self.fresh();
+        let swap_a = self.fresh();
+        let swap_b = self.fresh();
+        let sign = self.fresh();
+        let next_sign = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load i64, ptr %{}",
+            swap_idx, swap_idx_addr
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds i64, ptr %{}, i64 %{}",
+            swap_a_ptr, perm, swap_idx
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds i64, ptr %{}, i64 %{}",
+            swap_b_ptr, perm, heap_i
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", swap_a, swap_a_ptr).unwrap();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", swap_b, swap_b_ptr).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", swap_b, swap_a_ptr).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", swap_a, swap_b_ptr).unwrap();
+        writeln!(self.out, "  %{} = load i1, ptr %{}", sign, sign_addr).unwrap();
+        writeln!(self.out, "  %{} = xor i1 %{}, true", next_sign, sign).unwrap();
+        writeln!(self.out, "  store i1 %{}, ptr %{}", next_sign, sign_addr).unwrap();
+        self.emit_matrix_det_accumulate_term(
+            &elem_ty,
+            &data,
+            &rows,
+            &format!("%{perm}"),
+            &sign_addr,
+            &det_addr,
+        );
+        let next_counter = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next_counter, counter).unwrap();
+        writeln!(
+            self.out,
+            "  store i64 %{}, ptr %{}",
+            next_counter, counter_ptr
+        )
+        .unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", heap_i_addr).unwrap();
+        writeln!(self.out, "  br label %{}", heap_cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", reset_body_lbl).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", counter_ptr).unwrap();
+        let next_heap_i = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next_heap_i, heap_i).unwrap();
+        writeln!(
+            self.out,
+            "  store i64 %{}, ptr %{}",
+            next_heap_i, heap_i_addr
+        )
+        .unwrap();
+        writeln!(self.out, "  br label %{}", heap_cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        writeln!(self.out, "  call void @free(ptr %{})", perm).unwrap();
+        writeln!(self.out, "  call void @free(ptr %{})", counters).unwrap();
+        let result = self.fresh();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", result, ll, det_addr).unwrap();
+        (elem_ty, format!("%{result}"))
+    }
+
     /// Resolves numeric field index for named/tuple field access codegen.
     fn struct_idx(&self, sname: &str, field: &str) -> Option<u32> {
         let s = self.structs.iter().find(|s| s.name == sname)?;
@@ -3269,6 +3680,9 @@ impl<'a> Gen<'a> {
                 }
                 if name == OUTER {
                     return self.emit_outer(args, locals);
+                }
+                if name == DEF {
+                    return self.emit_matrix_det(args, locals);
                 }
                 if name == ALLOC {
                     let (at, av) = self.emit_expr(&args[0], locals, None);

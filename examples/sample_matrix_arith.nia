@@ -20,6 +20,19 @@ fn main() i32 {
     println(matrix_rows(outer_product));
     println(matrix_cols(outer_product));
 
+    let det_m: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    println(def(det_m));
+
+    let det3_m: Matrix = matrix([
+        [1, 2, 3],
+        [0, 1, 4],
+        [5, 6, 0],
+    ]);
+    println(def(det3_m));
+
     let a: Matrix = matrix([
         [1, 2, 3],
         [4, 5, 6],
@@ -71,6 +84,7 @@ fn main() i32 {
     let fprod: Matrix = fa * fb;
     let fscaled: Matrix = fa * 2.0;
     let fmatmul: Matrix = fa @ fb;
+    println(def(fa));
     println(fsum);
     println(fdiff);
     println(fprod);
@@ -101,7 +115,8 @@ fn main() i32 {
     println(outer_product_xy);
     println(outer_product_yx);
 
-
+    matrix_drop(outer_product_yx);
+    matrix_drop(outer_product_xy);
     matrix_drop(some4);
     matrix_drop(some3);
     matrix_drop(some2);
@@ -122,6 +137,8 @@ fn main() i32 {
     matrix_drop(sum);
     matrix_drop(b);
     matrix_drop(a);
+    matrix_drop(det3_m);
+    matrix_drop(det_m);
     matrix_drop(outer_product);
 
     0

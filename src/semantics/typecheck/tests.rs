@@ -365,6 +365,54 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_def_ok_returns_matrix_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let d: i32 = def(m);
+    println(d);
+    matrix_drop(m);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_def_float_ok_returns_matrix_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let d: f64 = def(m);
+    println(d);
+    matrix_drop(m);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_def_rejects_non_matrix_argument() {
+    let src = r#"
+fn main() i32 {
+    let d: i32 = def(3);
+    d
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn typecheck_matrix_scalar_mul_ok_same_cell_type_both_orders() {
     let src = r#"
 fn main() i32 {
