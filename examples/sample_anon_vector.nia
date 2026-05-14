@@ -4,6 +4,7 @@
 // and length. Arithmetic requires the same element type and length.
 
 fn main() i32 {
+    // Integer anonymous vectors.
     let a = <1, 2, 3>;
     let b = <4, 5, 6>;
     let sum = a + b;
@@ -14,19 +15,31 @@ fn main() i32 {
     let dot = a @ b;
     let out: Matrix = outer(a, <7, 8>);
 
+    println("--- Integer vector literal: a = <1, 2, 3>");
     println(a);
+    println("--- Component-wise addition: a + b, where b = <4, 5, 6>");
     println(sum);
+    println("--- Component-wise subtraction: b - a");
     println(diff);
+    println("--- Component-wise multiplication: a * b");
     println(hadamard);
+    println("--- Right scalar multiplication: a * 3");
     println(right_scaled);
+    println("--- Left scalar multiplication: 2 * b");
     println(left_scaled);
+    println("--- Dot product: a @ b, result is a scalar");
     println(dot);
+    println("--- Outer product: outer(a, <7, 8>), result is a Matrix");
     println(out);
 
+    // Floating-point anonymous vectors.
     let fa = <1.0, 2.0, 3.0>;
     let fb = <4.0, 5.0, 6.0>;
+    println("--- Float component-wise addition: fa + fb, where fa = <1.0, 2.0, 3.0> and fb = <4.0, 5.0, 6.0>");
     println(fa + fb);
+    println("--- Float scalar multiplication: fa * 2.0");
     println(fa * 2.0);
+    println("--- Float dot product: fa @ fb");
     println(fa @ fb);
 
     matrix_drop(out);
