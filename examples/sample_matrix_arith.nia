@@ -94,6 +94,14 @@ fn main() i32 {
     println(some3);
     println(some4);
 
+    let outer_x = Vec3i [X: 1, Y: 2, Z: 3];
+    let outer_y = Vec2i [U: 4, V: 5];
+    let outer_product_xy: Matrix = outer(outer_x, outer_y);
+    let outer_product_yx: Matrix = outer(outer_y, outer_x);
+    println(outer_product_xy);
+    println(outer_product_yx);
+
+
     matrix_drop(some4);
     matrix_drop(some3);
     matrix_drop(some2);

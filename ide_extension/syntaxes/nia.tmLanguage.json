@@ -79,6 +79,11 @@
     "operators": {
       "patterns": [
         {
+          "comment": "Vector dot product (u @ v) and matrix multiply (Matrix @ Matrix)",
+          "match": "@",
+          "name": "keyword.operator.vector-matrix-at.nia"
+        },
+        {
           "match": "\\.\\.",
           "name": "keyword.operator.range.nia"
         },
@@ -95,7 +100,7 @@
           "name": "keyword.operator.namespace.nia"
         },
         {
-          "match": "[=+*/@-]",
+          "match": "[=+*/-]",
           "name": "keyword.operator.nia"
         },
         {
