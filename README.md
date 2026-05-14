@@ -1,15 +1,11 @@
 # NiaLang
 
-Minimal compiled language that lowers to LLVM IR and runs via `clang`.
+**NiaLang** is a small compiled language **created for numerical computations in linear algebra**: fixed-size **vectors** with dot products and component-wise ops, heap **matrices** with multiplication, outer products, determinants, and elementwise arithmetic—so common tasks (inner products, bilinear forms, small dense operators) map directly to source code. Around that core it still offers a compact general-purpose layer (arrays, structs, enums, pointers, control flow) for tests and glue code. Programs lower to LLVM IR and run via `clang`.
 
-The project currently focuses on a compact but expressive core:
-- fixed-size arrays (`[T; N]`) with indexing and mutation,
-- fixed-size **vector** types (declared axes, one numeric type per axis) with component-wise and dot-product ops,
-- structs (named and tuple), enums and `match`,
-- loops (`for`, `while`, `loop` + `break`),
-- pointers and simple heap builtins (`alloc`, `realloc`, `dealloc`),
-- built-in reference-counted matrices,
-- builtin `println` and `len`.
+The project currently focuses on:
+- **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul), `def` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
+- **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); enums and `match`; loops (`for`, `while`, `loop` + `break`).
+- **Memory and I/O:** pointers and heap builtins (`alloc`, `realloc`, `dealloc`); builtin `println` and `len`; **strings** (`string`, literals) for labels and logging.
 
 ## Quick Start
 
@@ -37,6 +33,7 @@ cargo test
 
 - Integers: `i8`, `u8`, `i16`, `u16`, `i32`, `i64`, `u64`, `i128`, `isize`, `usize`, `u128`
 - `bool`
+- `string` (UTF-8 text; see `examples/sample_string.nia`)
 - Arrays: `[T; N]`
 - Pointers: `&T`
 - Structs / Enums
@@ -55,7 +52,7 @@ cargo test
 
 ### Builtins
 
-- `println(x)` — prints values (including arrays, structs, enums, pointers, **vectors**, `Matrix`)
+- `println(x)` — prints values (including arrays, structs, enums, pointers, **vectors**, `Matrix`, **`string`**)
 - `len(arr)` — returns compile-time array length as `i32`
 - `alloc(v)` / `realloc(ptr, v)` / `dealloc(ptr)`
 - `matrix([[...], [...]])` — creates a `Matrix` from a rectangular array of numeric arrays
@@ -73,6 +70,8 @@ See [Matrices](#matrices) for construction, printing, indexing, and lifetime
 rules.
 
 ### Matrices
+
+From a **linear algebra** standpoint, a `Matrix` is a mutable rectangular array of scalars you can treat as the coordinates of a linear map between standard bases (after you fix row/column layout): you multiply maps with `@`, scale them with `*`, and extract scalar summaries with `def` on square matrices.
 
 `Matrix` is a built-in reference-counted heap handle for a rectangular 2D block
 of numeric cells. Source code writes the surface type simply as `Matrix`; inside
@@ -374,7 +373,7 @@ sample focused on `+`, `-`, and `*`.
 
 ### Fixed-size vectors
 
-Vectors are a small **linear-algebra-friendly** layer on top of the same value-type model as structs: a `vector` declaration introduces a named aggregate with **named axes** and a single **element** (axis) type. They are meant for 2D/3D-style math (positions, deltas, RGB-like triples) where you want field names (`X`, `Y`, …) and a fixed set of operations, not arbitrary struct logic.
+Vectors are a small **linear-algebra-friendly** layer on top of the same value-type model as structs: a `vector` declaration introduces a named aggregate with **named axes** and a single **element** (axis) type. They are meant for 2D/3D-style math (positions, deltas, RGB-like triples) where you want field names (`X`, `Y`, …) and a fixed set of operations, not arbitrary struct logic. In textbook terms, each value of type `Vec2` / `Vec3` / … behaves like a column vector in **R**^2, **R**^3, … with the usual dot product written as `@`.
 
 #### What a vector is (and is not)
 
@@ -456,8 +455,90 @@ Statements like `u += v`, `u -= v`, and `u *= rhs` expand to `u = u + v`, `u = u
 #### Further examples
 
 - Extended demo (two types, `Vec2` and `Vec3`, more `println` cases): `examples/sample_vector_arith.nia`.
-- Minimal walk-through (single `Vec2` type): see **§4** under [Large Working Examples](#large-working-examples) below.
+- Minimal walk-through (single `Vec2` type): see **example 4** under [Large Working Examples](#large-working-examples) below.
 - Stricter typing rules and rejected forms: [docs/vector-limitations.md](docs/vector-limitations.md).
+
+## Linear algebra: concepts and more examples
+
+The types and operators above are chosen so that **familiar math notation** has a direct counterpart in NiaLang:
+
+| Idea | In NiaLang | Notes |
+|------|------------|--------|
+| Vector in **R**^n (fixed dimension) | `vector` + literal `Ty [ X: …, Y: … ]` | Nominal type per declaration; axes are named fields. |
+| Inner product *u·v* (standard dot) | `u @ v` | Result is the **scalar** element type of that vector. |
+| Hadamard product *u* ∘ *v* | `u * v` | Same vector type on both sides. |
+| Scalar multiplication α*v* | `v * alpha` or `alpha * v` | `alpha` must match the vector’s element type. |
+| Matrix–vector as matrix | store data in `Matrix` or use `outer` / explicit `matrix([...])` | No dedicated mat–vec operator; use shaped matrices and `matrix_get` / `matrix_set`, or multiply blocks with `@`. |
+| Matrix product *AB* | `A @ B` | Requires `matrix_cols(A) == matrix_rows(B)`. |
+| Rank-1 outer product (column times row) | `outer(u, v)` | Rows from the first vector, columns from the second (same element type). |
+| Determinant det *A* (square) | `def(A)` | Non-square matrices abort at runtime. |
+
+### Example: orthogonal projection coefficient (integer grid)
+
+With vectors `u` and `v`, the scalar *c* = (*u*·*v*) / (*v*·*v*) is a simple use of two dot products. Here `Vec2` uses `i32` (integer division follows the language’s `/` rules):
+
+```nia
+vector Vec2 i32 [ X, Y ]
+
+fn main() i32 {
+    let u = Vec2 [X: 1, Y: 0];
+    let v = Vec2 [X: 3, Y: 4];
+    let num: i32 = u @ v;
+    let den: i32 = v @ v;
+    let c: i32 = num / den;   // 12 / 25 → 0 for i32 division
+    let along = v * c;       // scale v by c (here zero)
+    println(along);
+    0
+}
+```
+
+For the same geometry with rationals, use a float element type (e.g. `vector Vec2 f64 [ X, Y ]`) and `f64` literals so `/` matches real division.
+
+### Example: 2×2 multiplication and determinant
+
+```nia
+fn main() i32 {
+    let a: Matrix = matrix([[1, 2], [3, 4]]);
+    let b: Matrix = matrix([[10, 20], [30, 40]]);
+    let ab: Matrix = a @ b;
+    println(ab);
+
+    let det: i32 = def(a);
+    println(det);   // -2
+
+    matrix_drop(ab);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+```
+
+### Example: outer product as a rank-1 matrix
+
+```nia
+vector Vec3i i32 [ X, Y, Z ]
+vector Vec2i i32 [ U, V ]
+
+fn main() i32 {
+    let u = Vec3i [X: 1, Y: 2, Z: 3];
+    let v = Vec2i [U: 4, V: 5];
+    let m: Matrix = outer(u, v);
+    println(m);   // 3×2 matrix
+    matrix_drop(m);
+    0
+}
+```
+
+### Runnable samples (linear algebra)
+
+| File | What it highlights |
+|------|---------------------|
+| `examples/sample_vector.nia` | One `vector` type, literal, `println`. |
+| `examples/sample_vector_arith.nia` | Two vector types, component ops, dot product, more `println`. |
+| `examples/sample_matrix_rc.nia` | `Matrix` lifecycle: build, print, clone, refcount, `matrix_drop`. |
+| `examples/sample_matrix_arith.nia` | Matrix `+`, `-`, `*`, `@`, scalar `*`, `def`. |
+
+Eigenvalues, decompositions, and sparse linear algebra are **not** built in; for that you would call out to other libraries or extend the toolchain. The sweet spot is **small dense** vectors and matrices with explicit, predictable lowering to LLVM.
 
 ## Large Working Examples
 
