@@ -1,0 +1,88 @@
+// sample_linalg_commented.nia — vectors and matrices with comments (linear algebra).
+//
+// Vector: fixed number of axes, one numeric field per axis (here i32).
+// Matrix: built-in heap Matrix type with explicit refcount; each result of
+//   (+, -, *, @) is a new value → call matrix_drop for each owner at the end.
+
+vector Vec2 i32 [
+    X,
+    Y,
+]
+
+fn main() i32 {
+    // --- Vectors on an integer grid (like Z^2) ---
+    let u = Vec2 [X: 3, Y: 4];
+    let v = Vec2 [X: 1, Y: 2];
+
+    // Component-wise sum: (u+v)_i = u_i + v_i (as in R^2).
+    let sum_uv = u + v;
+    println(sum_uv);
+
+    // Component-wise difference.
+    let diff_uv = u - v;
+    println(diff_uv);
+
+    // Component-wise (Hadamard) product.
+    let had_uv = u * v;
+    println(had_uv);
+
+    // Dot product: u @ v = u.X*v.X + u.Y*v.Y (scalar has axis type, here i32).
+    let dot: i32 = u @ v;
+    println(dot);
+
+    // Scale vector by a scalar of the same type as each axis component.
+    let scaled = u * 2;
+    println(scaled);
+
+    // Combine: sum vectors first, then dot with a third (parentheses required).
+    let w = Vec2 [X: 1, Y: 1];
+    let triple_dot: i32 = (u + v) @ w;
+    println(triple_dot);
+
+    // --- 2×2 matrices: construction, element-wise ops, multiply, determinant ---
+    let A: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let B: Matrix = matrix([
+        [2, 0],
+        [1, 3],
+    ]);
+
+    // Element-wise matrix addition (same cell type and same shape).
+    let Msum: Matrix = A + B;
+    println(Msum);
+
+    // Element-wise product (do not confuse with matrix multiplication).
+    let Mhad: Matrix = A * B;
+    println(Mhad);
+
+    // Real matrix multiply: row times column, (2×2) @ (2×2) → (2×2).
+    let Mprod: Matrix = A @ B;
+    println(Mprod);
+
+    // Determinant of a square matrix (non-square / wrong size aborts at runtime).
+    let detA: i32 = def(A);
+    println(detA);
+
+    // Outer product of two vectors: matrix of size (dim u) × (dim v).
+    // Here Vec2 × Vec2 → 2×2 matrix with the same numeric cell type as the axes.
+    let R: Matrix = outer(u, v);
+    println(R);
+    println(matrix_rows(R));
+    println(matrix_cols(R));
+
+    // Read one cell after multiply (zero-based indices: row, column).
+    let cell: i32 = matrix_get(Mprod, 0, 0);
+    println(cell);
+
+    // --- Drop every Matrix owner (once per live handle) ---
+    matrix_drop(R);
+    matrix_drop(Mprod);
+    matrix_drop(Mhad);
+    matrix_drop(Msum);
+    matrix_drop(B);
+    matrix_drop(A);
+
+    0
+}
