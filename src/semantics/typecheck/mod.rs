@@ -736,7 +736,7 @@ fn infer_mul_bin(
     infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "*")
 }
 
-/// `u @ v` — dot product; same `vector` type on both sides; result type is the axis type.
+/// `u @ v` — dot product for vectors, matrix multiplication for matrices.
 fn infer_vec_dot_bin(
     l: &Expr,
     r: &Expr,
@@ -753,9 +753,35 @@ fn infer_vec_dot_bin(
     if matches!(tl, Ty::Ptr(_)) {
         return Err("cannot use `@` on a pointer value".into());
     }
+    if let Ty::Matrix(left_elem) = &tl {
+        if matches!(left_elem.as_ref(), Ty::Unit) {
+            return Err("cannot use `@` on Matrix values with unknown element type".into());
+        }
+        let tr = infer_expr(r, env, structs, enums, vectors, fns, None)?;
+        if matches!(tr, Ty::Unit) {
+            return Err("void value on the right of `@`".into());
+        }
+        if matches!(tr, Ty::Ptr(_)) {
+            return Err("cannot use `@` on a pointer value".into());
+        }
+        let Ty::Matrix(right_elem) = &tr else {
+            return Err(format!(
+                "`@` matrix multiplication requires a Matrix on the right, got {tr:?}"
+            ));
+        };
+        if matches!(right_elem.as_ref(), Ty::Unit) {
+            return Err("cannot use `@` on Matrix values with unknown element type".into());
+        }
+        if !types_equal(left_elem, right_elem) {
+            return Err(format!(
+                "`@` on matrices requires the same element type; got {left_elem:?} and {right_elem:?}"
+            ));
+        }
+        return Ok(tl);
+    }
     if !is_nia_vector_ty(&tl, vectors) {
         return Err(format!(
-            "`@` (vector dot product) requires a vector on the left, got {tl:?}"
+            "`@` requires a vector or Matrix on the left, got {tl:?}"
         ));
     }
     let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");

@@ -47,6 +47,7 @@ cargo test
 
 - Arithmetic: `+`, `-`, `*`, `/`
 - Vector-only: `@` (dot product of two values of the *same* `vector` type); component-wise `+`, `-`, `*` on two such vectors; `*` between a vector and a scalar of the **axis** type (either order). See [Fixed-size vectors](#fixed-size-vectors).
+- Matrix-only: `@` (matrix multiplication); component-wise `+`, `-`, `*`; `*` with a scalar of the exact cell type.
 - Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
 - Indexing: `arr[i]`
 - Field access: `obj.x`, `tuple.0`
@@ -62,6 +63,7 @@ cargo test
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
 - `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
+- `a @ b` — matrix multiplication; `matrix_cols(a)` must equal `matrix_rows(b)`
 - `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
 
 `Matrix` is a compiler-known heap object with explicit reference counting.
@@ -236,6 +238,38 @@ matrix_drop(c);
 matrix_drop(b);
 matrix_drop(a);
 ```
+
+Use `@` for real matrix multiplication. The cell type must match exactly, and
+the runtime shape must satisfy the usual rule:
+
+```text
+(n x m) @ (m x k) = (n x k)
+```
+
+For example, a `2 x 3` matrix multiplied by a `3 x 4` matrix produces a
+`2 x 4` matrix:
+
+```nia
+let left: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+
+let right: Matrix = matrix([
+    [7, 8, 9, 10],
+    [11, 12, 13, 14],
+    [15, 16, 17, 18],
+]);
+
+let product: Matrix = left @ right;
+println(product); // [[74, 80, 86, 92], [173, 188, 203, 218]]
+println(matrix_rows(product)); // 2
+println(matrix_cols(product)); // 4
+```
+
+Generated code checks `matrix_cols(left) == matrix_rows(right)` before
+multiplying; a mismatch aborts the program. Like other matrix arithmetic, `@`
+creates a new allocation with reference count `1`.
 
 Use `*` with a scalar to multiply every cell by one number:
 

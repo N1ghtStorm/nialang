@@ -264,6 +264,54 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_matrix_matmul_ok_same_cell_type() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2, 3],
+        [4, 5, 6],
+    ]);
+    let b: Matrix = matrix([
+        [7, 8],
+        [9, 10],
+        [11, 12],
+    ]);
+    let c: Matrix = a @ b;
+    println(c);
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_matmul_rejects_different_cell_types() {
+    let src = r#"
+fn main() i32 {
+    let a: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let b: Matrix = matrix([
+        [1.0, 2.0],
+        [3.0, 4.0],
+    ]);
+    let c: Matrix = a @ b;
+    matrix_drop(c);
+    matrix_drop(b);
+    matrix_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn typecheck_matrix_scalar_mul_ok_same_cell_type_both_orders() {
     let src = r#"
 fn main() i32 {
