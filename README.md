@@ -636,6 +636,7 @@ fn main() i32 {
 | `examples/sample_matrix_rc.nia` | `Matrix` lifecycle: build, print, clone, refcount, `matrix_drop`. |
 | `examples/sample_matrix_arith.nia` | Matrix `+`, `-`, `*`, `@`, scalar `*`, `.det()`. |
 | `examples/sample_matrix_vector.nia` | `Matrix @ vector` and `vector @ Matrix` for named and anonymous vectors. |
+| `examples/sample_matrix_vector_large.nia` | Larger `32 x 32` Matrix/vector products, 1024 matrix cells. |
 
 Eigenvalues, decompositions, and sparse linear algebra are **not** built in; for that you would call out to other libraries or extend the toolchain. The sweet spot is **small dense** vectors and matrices with explicit, predictable lowering to LLVM.
 
