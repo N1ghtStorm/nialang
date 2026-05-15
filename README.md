@@ -3,7 +3,7 @@
 **NiaLang** is a small compiled language **created for numerical computations in linear algebra**: fixed-size **vectors** with dot products and component-wise ops, heap **matrices** with multiplication, outer products, determinants, and elementwise arithmetic—so common tasks (inner products, bilinear forms, small dense operators) map directly to source code. Around that core it still offers a compact general-purpose layer (arrays, structs, enums, pointers, control flow) for tests and glue code. Programs lower to LLVM IR and run via `clang`.
 
 The project currently focuses on:
-- **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul), `.det()` / `def` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
+- **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul), `.det()` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
 - **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); `impl` blocks with `self` / `&self` methods; enums and `match`; loops (`for`, `while`, `loop` + `break`).
 - **Memory and I/O:** pointers and heap builtins (`alloc`, `realloc`, `dealloc`); builtin `println` and `len`; **strings** (`string`, literals) for labels and logging.
 
@@ -61,7 +61,6 @@ cargo test
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
 - `outer(a, b)` — outer product of two vectors; returns a `Matrix`
-- `def(m)` — legacy determinant form for a square `Matrix`; prefer `m.det()`
 - `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
 - `a @ b` — matrix multiplication; `matrix_cols(a)` must equal `matrix_rows(b)`
 - `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
@@ -94,7 +93,7 @@ fn main() i32 {
 
 ### Matrices
 
-From a **linear algebra** standpoint, a `Matrix` is a mutable rectangular array of scalars you can treat as the coordinates of a linear map between standard bases (after you fix row/column layout): you multiply maps with `@`, scale them with `*`, and extract scalar summaries with `def` on square matrices.
+From a **linear algebra** standpoint, a `Matrix` is a mutable rectangular array of scalars you can treat as the coordinates of a linear map between standard bases (after you fix row/column layout): you multiply maps with `@`, scale them with `*`, and extract scalar summaries with `.det()` on square matrices.
 
 `Matrix` is a built-in reference-counted heap handle for a rectangular 2D block
 of numeric cells. Source code writes the surface type simply as `Matrix`; inside
@@ -608,7 +607,7 @@ fn main() i32 {
 | `examples/sample_vector_arith.nia` | Two vector types, component ops, dot product, more `println`. |
 | `examples/sample_anon_vector.nia` | Anonymous `<...>` vectors, compatible arithmetic, `@`, scalar scaling, `outer`. |
 | `examples/sample_matrix_rc.nia` | `Matrix` lifecycle: build, print, clone, refcount, `matrix_drop`. |
-| `examples/sample_matrix_arith.nia` | Matrix `+`, `-`, `*`, `@`, scalar `*`, `def`. |
+| `examples/sample_matrix_arith.nia` | Matrix `+`, `-`, `*`, `@`, scalar `*`, `.det()`. |
 
 Eigenvalues, decompositions, and sparse linear algebra are **not** built in; for that you would call out to other libraries or extend the toolchain. The sweet spot is **small dense** vectors and matrices with explicit, predictable lowering to LLVM.
 

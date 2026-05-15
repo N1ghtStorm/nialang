@@ -413,51 +413,18 @@ fn main() i32 {
 }
 
 #[test]
-fn typecheck_def_ok_returns_matrix_cell_type() {
+fn typecheck_def_call_is_not_builtin() {
     let src = r#"
 fn main() i32 {
     let m: Matrix = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let d: i32 = def(m);
-    println(d);
-    matrix_drop(m);
-    0
+    def(m)
 }
 "#;
-    let r = check_all(src);
-    assert!(r.is_ok(), "{r:?}");
-}
-
-#[test]
-fn typecheck_def_float_ok_returns_matrix_cell_type() {
-    let src = r#"
-fn main() i32 {
-    let m: Matrix = matrix([
-        [1.0, 2.0],
-        [3.0, 4.0],
-    ]);
-    let d: f64 = def(m);
-    println(d);
-    matrix_drop(m);
-    0
-}
-"#;
-    let r = check_all(src);
-    assert!(r.is_ok(), "{r:?}");
-}
-
-#[test]
-fn typecheck_def_rejects_non_matrix_argument() {
-    let src = r#"
-fn main() i32 {
-    let d: i32 = def(3);
-    d
-}
-"#;
-    let r = check_all(src);
-    assert!(r.is_err(), "{r:?}");
+    let err = check_all(src).expect_err("def is not a builtin");
+    assert!(err.contains("unknown function `def`"), "{err}");
 }
 
 #[test]

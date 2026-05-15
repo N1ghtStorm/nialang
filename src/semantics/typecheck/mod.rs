@@ -5,7 +5,7 @@ use crate::ast::{
     Ty, VectorDef,
 };
 use crate::nia_std::{
-    ALLOC, DEALLOC, DEF, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
+    ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PRINTLN, REALLOC,
 };
 
@@ -189,7 +189,6 @@ pub fn collect_sigs(
             || f.name == MATRIX_REFCOUNT
             || f.name == MATRIX_DROP
             || f.name == OUTER
-            || f.name == DEF
         {
             return Err(format!(
                 "function name `{}` is reserved for the standard library",
@@ -1199,29 +1198,6 @@ fn infer_expr(
                     ));
                 }
                 return Ok(Ty::Matrix(Box::new(left_elem)));
-            }
-            if name == DEF {
-                if args.len() != 1 {
-                    return Err(format!(
-                        "`{DEF}` expects exactly 1 argument, got {}",
-                        args.len()
-                    ));
-                }
-                let matrix_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
-                let Ty::Matrix(elem_ty) = matrix_ty else {
-                    return Err(format!(
-                        "`{DEF}` argument 1 type mismatch: expected Matrix, got {matrix_ty:?}"
-                    ));
-                };
-                if matches!(elem_ty.as_ref(), Ty::Unit) {
-                    return Err(format!("`{DEF}` needs a Matrix with a known element type"));
-                }
-                if !is_numeric_ty(&elem_ty) {
-                    return Err(format!(
-                        "`{DEF}` matrix cells must be numeric, got {elem_ty:?}"
-                    ));
-                }
-                return Ok((*elem_ty).clone());
             }
             if let Some(def) = structs.get(name) {
                 if !def.is_tuple {

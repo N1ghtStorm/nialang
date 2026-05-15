@@ -6,7 +6,7 @@ use crate::ast::{
     method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, DEALLOC, DEF, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
+    ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC,
 };
 use crate::semantics::typecheck::FnSig;
@@ -3125,18 +3125,6 @@ impl<'a> Gen<'a> {
         (elem_ty, format!("%{result}"))
     }
 
-    fn emit_matrix_det(
-        &mut self,
-        args: &[Expr],
-        locals: &HashMap<String, (Ty, String)>,
-    ) -> (Ty, String) {
-        let (matrix_ty, matrix) = self.emit_expr(&args[0], locals, None);
-        let Ty::Matrix(elem_ty) = matrix_ty else {
-            unreachable!("typechecked def")
-        };
-        self.emit_matrix_det_value(elem_ty.as_ref().clone(), &matrix)
-    }
-
     /// Resolves numeric field index for named/tuple field access codegen.
     fn struct_idx(&self, sname: &str, field: &str) -> Option<u32> {
         let s = self.structs.iter().find(|s| s.name == sname)?;
@@ -4615,9 +4603,6 @@ impl<'a> Gen<'a> {
                 }
                 if name == OUTER {
                     return self.emit_outer(args, locals);
-                }
-                if name == DEF {
-                    return self.emit_matrix_det(args, locals);
                 }
                 if name == ALLOC {
                     let (at, av) = self.emit_expr(&args[0], locals, None);

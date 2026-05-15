@@ -17,7 +17,6 @@ pub const MATRIX_CLONE: &str = "matrix_clone";
 pub const MATRIX_REFCOUNT: &str = "matrix_refcount";
 pub const MATRIX_DROP: &str = "matrix_drop";
 pub const OUTER: &str = "outer";
-pub const DEF: &str = "def";
 
 /// LLVM IR prelude used by builtin `println` codegen.
 ///

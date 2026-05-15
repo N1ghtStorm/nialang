@@ -43,8 +43,7 @@
             "scope": [
               "keyword.control.nia",
               "keyword.declaration.nia",
-              "keyword.other.fn.nia",
-              "keyword.other.def.nia"
+              "keyword.other.fn.nia"
             ],
             "settings": { "foreground": "#C678DD" }
           },
