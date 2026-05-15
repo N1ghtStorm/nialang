@@ -63,7 +63,8 @@
           {
             "scope": [
               "entity.name.type.nia",
-              "support.type.primitive.nia"
+              "support.type.primitive.nia",
+              "variable.language.self.nia"
             ],
             "settings": { "foreground": "#56B6C2" }
           },
