@@ -402,7 +402,7 @@ fn main() f64 {
         [0.0, 1.0],
         [2.0, 3.0],
     ]);
-    def(m)
+    m.det()
 }
 "#;
     let ll = emit(src);
@@ -412,6 +412,22 @@ fn main() f64 {
     assert!(ll.contains("fdiv double"), "IR:\n{ll}");
     assert!(!ll.contains("matrix.det.heap.cond"), "IR:\n{ll}");
     assert!(!ll.contains("matrix.det.term.cond"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_int_matrix_det_method_uses_permutation_path() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    m.det()
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("matrix.det.heap.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.det.term.cond"), "IR:\n{ll}");
 }
 
 #[test]

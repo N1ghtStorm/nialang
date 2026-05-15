@@ -42,6 +42,7 @@ fn compile_fixtures_pipeline() {
         "examples/sample_all.nia",
         "examples/sample_matrix_rc.nia",
         "examples/sample_matrix_arith.nia",
+        "examples/sample_matrix_det.nia",
     ];
     for f in files {
         compile_fixture_ok(f);

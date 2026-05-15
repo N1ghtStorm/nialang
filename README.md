@@ -3,7 +3,7 @@
 **NiaLang** is a small compiled language **created for numerical computations in linear algebra**: fixed-size **vectors** with dot products and component-wise ops, heap **matrices** with multiplication, outer products, determinants, and elementwise arithmetic—so common tasks (inner products, bilinear forms, small dense operators) map directly to source code. Around that core it still offers a compact general-purpose layer (arrays, structs, enums, pointers, control flow) for tests and glue code. Programs lower to LLVM IR and run via `clang`.
 
 The project currently focuses on:
-- **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul), `def` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
+- **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul), `.det()` / `def` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
 - **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); `impl` blocks with `self` / `&self` methods; enums and `match`; loops (`for`, `while`, `loop` + `break`).
 - **Memory and I/O:** pointers and heap builtins (`alloc`, `realloc`, `dealloc`); builtin `println` and `len`; **strings** (`string`, literals) for labels and logging.
 
@@ -49,7 +49,7 @@ cargo test
 - Indexing: `arr[i]`
 - Field access: `obj.x`, `tuple.0`
 - Function calls: `foo(a, b)`
-- Method calls: `obj.method(a, b)` for methods declared in `impl Type { ... }`
+- Method calls: `obj.method(a, b)` for methods declared in `impl Type { ... }` and built-in methods such as `m.det()`
 
 ### Builtins
 
@@ -61,7 +61,7 @@ cargo test
 - `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
 - `outer(a, b)` — outer product of two vectors; returns a `Matrix`
-- `def(m)` — determinant of a square `Matrix`; returns the matrix cell type
+- `def(m)` — legacy determinant form for a square `Matrix`; prefer `m.det()`
 - `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
 - `a @ b` — matrix multiplication; `matrix_cols(a)` must equal `matrix_rows(b)`
 - `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
@@ -315,7 +315,7 @@ The rows come from the first vector and the columns come from the second vector.
 Like matrix arithmetic, the result is a new `Matrix` allocation with reference
 count `1`.
 
-Use `def(m)` to compute the determinant of a square matrix. The return type is
+Use `m.det()` to compute the determinant of a square matrix. The return type is
 the same as the matrix cell type:
 
 ```nia
@@ -324,7 +324,7 @@ let m: Matrix = matrix([
     [3, 4],
 ]);
 
-let d: i32 = def(m);
+let d: i32 = m.det();
 println(d); // -2
 ```
 
@@ -542,7 +542,7 @@ The types and operators above are chosen so that **familiar math notation** has 
 | Matrix–vector as matrix | store data in `Matrix` or use `outer` / explicit `matrix([...])` | No dedicated mat–vec operator; use shaped matrices and `matrix_get` / `matrix_set`, or multiply blocks with `@`. |
 | Matrix product *AB* | `A @ B` | Requires `matrix_cols(A) == matrix_rows(B)`. |
 | Rank-1 outer product (column times row) | `outer(u, v)` | Rows from the first vector, columns from the second (same element type). |
-| Determinant det *A* (square) | `def(A)` | Non-square matrices abort at runtime. |
+| Determinant det *A* (square) | `A.det()` | Non-square matrices abort at runtime. |
 
 ### Example: orthogonal projection coefficient (integer grid)
 
@@ -574,7 +574,7 @@ fn main() i32 {
     let ab: Matrix = a @ b;
     println(ab);
 
-    let det: i32 = def(a);
+    let det: i32 = a.det();
     println(det);   // -2
 
     matrix_drop(ab);

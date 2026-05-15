@@ -62,7 +62,7 @@ fn main() i32 {
     println(Mprod);
 
     // Determinant of a square matrix (non-square / wrong size aborts at runtime).
-    let detA: i32 = def(A);
+    let detA: i32 = A.det();
     println(detA);
 
     // Outer product of two vectors: matrix of size (dim u) × (dim v).

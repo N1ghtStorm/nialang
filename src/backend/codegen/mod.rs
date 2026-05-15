@@ -2866,18 +2866,9 @@ impl<'a> Gen<'a> {
         (elem_ty.clone(), format!("%{result}"))
     }
 
-    fn emit_matrix_det(
-        &mut self,
-        args: &[Expr],
-        locals: &HashMap<String, (Ty, String)>,
-    ) -> (Ty, String) {
-        let (matrix_ty, matrix) = self.emit_expr(&args[0], locals, None);
-        let Ty::Matrix(elem_ty) = matrix_ty else {
-            unreachable!("typechecked def")
-        };
-        let elem_ty = elem_ty.as_ref().clone();
-        let rows = self.matrix_load_i64_field(&matrix, 2);
-        let cols = self.matrix_load_i64_field(&matrix, 3);
+    fn emit_matrix_det_value(&mut self, elem_ty: Ty, matrix: &str) -> (Ty, String) {
+        let rows = self.matrix_load_i64_field(matrix, 2);
+        let cols = self.matrix_load_i64_field(matrix, 3);
         let square = self.fresh();
         let ok_lbl = self.fresh_label("matrix.det.shape.ok");
         let abort_lbl = self.fresh_label("matrix.det.shape.abort");
@@ -2895,9 +2886,9 @@ impl<'a> Gen<'a> {
 
         writeln!(self.out, "{}:", ok_lbl).unwrap();
         if is_float_ty(&elem_ty) {
-            return self.emit_matrix_det_lu(&elem_ty, &matrix, &rows);
+            return self.emit_matrix_det_lu(&elem_ty, matrix, &rows);
         }
-        let data = self.matrix_load_data_ptr(&matrix);
+        let data = self.matrix_load_data_ptr(matrix);
         let ll = llvm_ty(&elem_ty, self.structs);
         let bytes = self.fresh();
         let perm = self.fresh();
@@ -3132,6 +3123,18 @@ impl<'a> Gen<'a> {
         let result = self.fresh();
         writeln!(self.out, "  %{} = load {}, ptr %{}", result, ll, det_addr).unwrap();
         (elem_ty, format!("%{result}"))
+    }
+
+    fn emit_matrix_det(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (matrix_ty, matrix) = self.emit_expr(&args[0], locals, None);
+        let Ty::Matrix(elem_ty) = matrix_ty else {
+            unreachable!("typechecked def")
+        };
+        self.emit_matrix_det_value(elem_ty.as_ref().clone(), &matrix)
     }
 
     /// Resolves numeric field index for named/tuple field access codegen.
@@ -4728,6 +4731,22 @@ impl<'a> Gen<'a> {
                 args,
             } => {
                 let (recv_ty, recv_val) = self.emit_expr(receiver, locals, None);
+                if name == "det" {
+                    if let Ty::Matrix(elem_ty) = method_receiver_owner_ty(&recv_ty) {
+                        debug_assert!(args.is_empty());
+                        let matrix = match &recv_ty {
+                            Ty::Matrix(_) => recv_val,
+                            Ty::Ptr(_) => {
+                                let tmp = self.fresh();
+                                writeln!(self.out, "  %{} = load ptr, ptr {}", tmp, recv_val)
+                                    .unwrap();
+                                format!("%{tmp}")
+                            }
+                            _ => unreachable!("typechecked Matrix.det receiver"),
+                        };
+                        return self.emit_matrix_det_value(elem_ty.as_ref().clone(), &matrix);
+                    }
+                }
                 let symbol = method_symbol(method_receiver_owner_ty(&recv_ty), name);
                 let (params, ret) = {
                     let sig = self.fn_sigs.get(&symbol).expect("typechecked method");

@@ -56,6 +56,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_matrix_rc.nia"),
         include_str!("../../../examples/sample_matrix_arith.nia"),
+        include_str!("../../../examples/sample_matrix_det.nia"),
     ];
     for src in ok_files {
         let r = check_all(src);
@@ -75,6 +76,37 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("unknown method");
     assert!(err.contains("unknown method `missing`"), "{err}");
+}
+
+#[test]
+fn typecheck_matrix_det_method_ok() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let d: i32 = m.det();
+    d
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_det_method_rejects_args() {
+    let src = r#"
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    m.det(1)
+}
+"#;
+    let err = check_all(src).expect_err("det method args");
+    assert!(err.contains("method `det`: expected 0 args"), "{err}");
 }
 
 #[test]

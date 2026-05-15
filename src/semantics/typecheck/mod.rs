@@ -1276,6 +1276,25 @@ fn infer_expr(
         } => {
             let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
             let owner_ty = method_receiver_owner_ty(&recv_ty);
+            if name == "det" {
+                if let Ty::Matrix(elem_ty) = owner_ty {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `det`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    if matches!(elem_ty.as_ref(), Ty::Unit) {
+                        return Err("method `det` needs a Matrix with a known element type".into());
+                    }
+                    if !is_numeric_ty(elem_ty) {
+                        return Err(format!(
+                            "method `det` matrix cells must be numeric, got {elem_ty:?}"
+                        ));
+                    }
+                    return Ok(elem_ty.as_ref().clone());
+                }
+            }
             let symbol = method_symbol(owner_ty, name);
             let sig = fns
                 .get(&symbol)
