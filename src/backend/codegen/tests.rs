@@ -395,6 +395,26 @@ fn codegen_matrix_arith_helpers_present() {
 }
 
 #[test]
+fn codegen_float_matrix_det_uses_lu() {
+    let src = r#"
+fn main() f64 {
+    let m: Matrix = matrix([
+        [0.0, 1.0],
+        [2.0, 3.0],
+    ]);
+    def(m)
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("matrix.det.lu.k.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.det.lu.find.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.det.lu.swap.do"), "IR:\n{ll}");
+    assert!(ll.contains("fdiv double"), "IR:\n{ll}");
+    assert!(!ll.contains("matrix.det.heap.cond"), "IR:\n{ll}");
+    assert!(!ll.contains("matrix.det.term.cond"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_pointer_write_emits_store_through_ptr() {
     let ll = emit(include_str!("../../../examples/tests/ok_ptr_write.nia"));
     assert!(ll.contains("store i32 99, ptr %"), "IR:\n{ll}");
