@@ -155,6 +155,11 @@ fn parse_fixture_matrix_det() {
 }
 
 #[test]
+fn parse_fixture_matrix_vector() {
+    parse_ok(include_str!("../../examples/sample_matrix_vector.nia"));
+}
+
+#[test]
 fn parse_fixture_anon_vector() {
     parse_ok(include_str!("../../examples/sample_anon_vector.nia"));
 }

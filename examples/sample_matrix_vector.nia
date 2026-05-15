@@ -1,0 +1,32 @@
+// Matrix/vector products with `@`.
+//
+// Linear algebra rules:
+// - Matrix(m x n) @ vector(n) -> vector(m)
+// - vector(m) @ Matrix(m x n) -> vector(n)
+
+vector Vec2i i32 [X, Y]
+vector Vec3i i32 [A, B, C]
+
+fn main() i32 {
+    let m23 = matrix([
+        [1, 2, 3],
+        [4, 5, 6],
+    ]);
+
+    let v3 = Vec3i [A: 7, B: 8, C: 9];
+    let mv_named: Vec2i = m23 @ v3;
+    println(mv_named);
+
+    let v2 = Vec2i [X: 10, Y: 20];
+    let vm_named: Vec3i = v2 @ m23;
+    println(vm_named);
+
+    let mv_anon = m23 @ <7, 8, 9>;
+    println(mv_anon);
+
+    let vm_anon = <10, 20> @ m23;
+    println(vm_anon);
+
+    matrix_drop(m23);
+    0
+}

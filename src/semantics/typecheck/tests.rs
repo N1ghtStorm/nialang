@@ -57,6 +57,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/sample_matrix_rc.nia"),
         include_str!("../../../examples/sample_matrix_arith.nia"),
         include_str!("../../../examples/sample_matrix_det.nia"),
+        include_str!("../../../examples/sample_matrix_vector.nia"),
     ];
     for src in ok_files {
         let r = check_all(src);
@@ -357,6 +358,54 @@ fn main() i32 {
 "#;
     let r = check_all(src);
     assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_vector_products_ok_named_and_anon() {
+    let src = r#"
+vector Vec2i i32 [X, Y]
+vector Vec3i i32 [A, B, C]
+
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2, 3],
+        [4, 5, 6],
+    ]);
+    let v3 = Vec3i [A: 7, B: 8, C: 9];
+    let v2 = Vec2i [X: 10, Y: 20];
+    let mv_named: Vec2i = m @ v3;
+    let vm_named: Vec3i = v2 @ m;
+    println(mv_named);
+    println(vm_named);
+    println(m @ <7, 8, 9>);
+    println(<10, 20> @ m);
+    matrix_drop(m);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_matrix_vector_rejects_static_shape_mismatch() {
+    let src = r#"
+vector Vec3i i32 [A, B, C]
+
+fn main() i32 {
+    let m: Matrix = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+    let v = Vec3i [A: 7, B: 8, C: 9];
+    let out = m @ v;
+    println(out);
+    matrix_drop(m);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("matrix-vector shape mismatch");
+    assert!(err.contains("Matrix-vector shape mismatch"), "{err}");
 }
 
 #[test]

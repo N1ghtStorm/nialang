@@ -55,7 +55,10 @@ pub enum Ty {
     /// Anonymous fixed-size vector literal `<...>` with homogeneous element type.
     AnonVector(Box<Ty>, usize),
     /// Built-in reference-counted heap matrix with one numeric cell type.
-    Matrix(Box<Ty>),
+    ///
+    /// The optional `(rows, cols)` shape is known for matrix literals and derived
+    /// matrix expressions. A plain source annotation `Matrix` keeps it as `None`.
+    Matrix(Box<Ty>, Option<(usize, usize)>),
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +109,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::Ptr(inner) => format!("ptr_{}", ty_symbol_fragment(inner)),
         Ty::Unit => "unit".into(),
         Ty::AnonVector(elem, n) => format!("anonvec_{}_{}", ty_symbol_fragment(elem), n),
-        Ty::Matrix(_) => "Matrix".into(),
+        Ty::Matrix(_, _) => "Matrix".into(),
     }
 }
 

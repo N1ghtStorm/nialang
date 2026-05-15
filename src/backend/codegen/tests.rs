@@ -395,6 +395,20 @@ fn codegen_matrix_arith_helpers_present() {
 }
 
 #[test]
+fn codegen_matrix_vector_products_emit_shape_checks() {
+    let ll = emit(include_str!("../../../examples/sample_matrix_vector.nia"));
+    assert!(ll.contains("matrix.vector.matmul.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("vector.matrix.matmul.shape.ok"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.Vec3i"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.Vec2i"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue %struct.Vec2i"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue %struct.Vec3i"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [2 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [3 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("call void @abort()"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_float_matrix_det_uses_lu() {
     let src = r#"
 fn main() f64 {

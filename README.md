@@ -3,7 +3,7 @@
 **NiaLang** is a small compiled language **created for numerical computations in linear algebra**: fixed-size **vectors** with dot products and component-wise ops, heap **matrices** with multiplication, outer products, determinants, and elementwise arithmetic—so common tasks (inner products, bilinear forms, small dense operators) map directly to source code. Around that core it still offers a compact general-purpose layer (arrays, structs, enums, pointers, control flow) for tests and glue code. Programs lower to LLVM IR and run via `clang`.
 
 The project currently focuses on:
-- **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul), `.det()` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
+- **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul and matrix/vector products), `.det()` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
 - **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); `impl` blocks with `self` / `&self` methods; enums and `match`; loops (`for`, `while`, `loop` + `break`).
 - **Memory and I/O:** pointers and heap builtins (`alloc`, `realloc`, `dealloc`); builtin `println` and `len`; **strings** (`string`, literals) for labels and logging.
 
@@ -44,7 +44,7 @@ cargo test
 
 - Arithmetic: `+`, `-`, `*`, `/`
 - Vector-only: `@` (dot product); component-wise `+`, `-`, `*`; `*` between a vector and a scalar of the **axis** type (either order). Named vectors require the same declared type; anonymous vectors require the same element type and length. See [Fixed-size vectors](#fixed-size-vectors).
-- Matrix-only: `@` (matrix multiplication); component-wise `+`, `-`, `*`; `*` with a scalar of the exact cell type.
+- Matrix/vector: `@` for `Matrix @ Matrix`, `Matrix @ vector`, and `vector @ Matrix`; component-wise Matrix `+`, `-`, `*`; Matrix `*` with a scalar of the exact cell type.
 - Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
 - Indexing: `arr[i]`
 - Field access: `obj.x`, `tuple.0`
@@ -62,7 +62,7 @@ cargo test
 - `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
 - `outer(a, b)` — outer product of two vectors; returns a `Matrix`
 - `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
-- `a @ b` — matrix multiplication; `matrix_cols(a)` must equal `matrix_rows(b)`
+- `a @ b` — matrix multiplication, matrix-vector, or vector-matrix product with linear algebra shape rules
 - `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
 
 `Matrix` is a compiler-known heap object with explicit reference counting.
@@ -293,6 +293,32 @@ println(matrix_cols(product)); // 4
 Generated code checks `matrix_cols(left) == matrix_rows(right)` before
 multiplying; a mismatch aborts the program. Like other matrix arithmetic, `@`
 creates a new allocation with reference count `1`.
+
+The same `@` operator also handles matrix/vector products:
+
+```text
+(m x n) @ vector(n) = vector(m)
+vector(m) @ (m x n) = vector(n)
+```
+
+Named and anonymous vectors both work. If the output is a named vector with a
+different dimension than the input, give the `let` binding a type annotation:
+
+```nia
+vector Vec2i i32 [X, Y]
+vector Vec3i i32 [A, B, C]
+
+let a: Matrix = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]);
+
+let v = Vec3i [A: 7, B: 8, C: 9];
+let av: Vec2i = a @ v;
+
+let anon_left = a @ <7, 8, 9>; // anonymous <i32; 2>
+let anon_right = <10, 20> @ a; // anonymous <i32; 3>
+```
 
 Use `outer(a, b)` to build a matrix from two vectors. The vector declarations may
 have different lengths, but their element types must be the same numeric type:
@@ -538,7 +564,8 @@ The types and operators above are chosen so that **familiar math notation** has 
 | Inner product *u·v* (standard dot) | `u @ v` | Result is the **scalar** element type of that vector. |
 | Hadamard product *u* ∘ *v* | `u * v` | Same vector type on both sides. |
 | Scalar multiplication α*v* | `v * alpha` or `alpha * v` | `alpha` must match the vector’s element type. |
-| Matrix–vector as matrix | store data in `Matrix` or use `outer` / explicit `matrix([...])` | No dedicated mat–vec operator; use shaped matrices and `matrix_get` / `matrix_set`, or multiply blocks with `@`. |
+| Matrix-vector product *Av* | `A @ v` | Requires `matrix_cols(A) == len(v)`; result length is `matrix_rows(A)`. |
+| Vector-matrix product *vA* | `v @ A` | Requires `len(v) == matrix_rows(A)`; result length is `matrix_cols(A)`. |
 | Matrix product *AB* | `A @ B` | Requires `matrix_cols(A) == matrix_rows(B)`. |
 | Rank-1 outer product (column times row) | `outer(u, v)` | Rows from the first vector, columns from the second (same element type). |
 | Determinant det *A* (square) | `A.det()` | Non-square matrices abort at runtime. |
@@ -608,6 +635,7 @@ fn main() i32 {
 | `examples/sample_anon_vector.nia` | Anonymous `<...>` vectors, compatible arithmetic, `@`, scalar scaling, `outer`. |
 | `examples/sample_matrix_rc.nia` | `Matrix` lifecycle: build, print, clone, refcount, `matrix_drop`. |
 | `examples/sample_matrix_arith.nia` | Matrix `+`, `-`, `*`, `@`, scalar `*`, `.det()`. |
+| `examples/sample_matrix_vector.nia` | `Matrix @ vector` and `vector @ Matrix` for named and anonymous vectors. |
 
 Eigenvalues, decompositions, and sparse linear algebra are **not** built in; for that you would call out to other libraries or extend the toolchain. The sweet spot is **small dense** vectors and matrices with explicit, predictable lowering to LLVM.
 
