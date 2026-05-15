@@ -1,0 +1,38 @@
+struct Point {
+    x: i32,
+    y: i32
+}
+
+impl Point {
+    fn sum(self: Point) i32 {
+        self.x + self.y
+    }
+
+    fn scale(self: Point, k: i32) Point {
+        Point {
+            x: self.x * k,
+            y: self.y * k
+        }
+    }
+
+    fn dot(self: Point, other: Point) i32 {
+        self.x * other.x + self.y * other.y
+    }
+
+    fn score(self: Point, other: Point) i32 {
+        self.dot(other) + self.sum()
+    }
+}
+
+fn main() i32 {
+    let p = Point { x: 2, y: 3 };
+    let q = p.scale(4);
+
+    println(p);
+    println(q);
+    println(q.sum());
+    println(q.dot(p));
+    println(q.score(p));
+
+    0
+}

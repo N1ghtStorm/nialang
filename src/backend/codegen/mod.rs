@@ -2,7 +2,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use crate::ast::{
-    Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
+    method_symbol, Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
+    Ty, VectorDef,
 };
 use crate::nia_std::{
     ALLOC, DEALLOC, DEF, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
@@ -40,6 +41,12 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
             collect_string_literals_expr(b, out);
         }
         Expr::Call { args, .. } => {
+            for a in args {
+                collect_string_literals_expr(a, out);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_string_literals_expr(receiver, out);
             for a in args {
                 collect_string_literals_expr(a, out);
             }
@@ -4218,6 +4225,52 @@ impl<'a> Gen<'a> {
                             self.out,
                             "  call void @{}({})",
                             sanitize(name),
+                            arg_strs.join(", ")
+                        )
+                        .unwrap();
+                        (Ty::Unit, String::new())
+                    }
+                }
+            }
+            Expr::MethodCall {
+                receiver,
+                name,
+                args,
+            } => {
+                let (recv_ty, recv_val) = self.emit_expr(receiver, locals, None);
+                let symbol = method_symbol(&recv_ty, name);
+                let sig = self.fn_sigs.get(&symbol).expect("typechecked method");
+                debug_assert!(!sig.params.is_empty());
+                debug_assert!(types_match(&recv_ty, &sig.params[0]));
+                let mut arg_strs = vec![format!(
+                    "{} {}",
+                    llvm_ty(&sig.params[0], self.structs),
+                    recv_val
+                )];
+                for (a, pt) in args.iter().zip(sig.params.iter().skip(1)) {
+                    let (at, av) = self.emit_expr(a, locals, Some(pt));
+                    debug_assert!(types_match(&at, pt));
+                    arg_strs.push(format!("{} {}", llvm_ty(pt, self.structs), av));
+                }
+                match &sig.ret {
+                    Some(ret_ty) => {
+                        let tmp = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = call {} @{}({})",
+                            tmp,
+                            llvm_ty(ret_ty, self.structs),
+                            sanitize(&symbol),
+                            arg_strs.join(", ")
+                        )
+                        .unwrap();
+                        (ret_ty.clone(), format!("%{tmp}"))
+                    }
+                    None => {
+                        writeln!(
+                            self.out,
+                            "  call void @{}({})",
+                            sanitize(&symbol),
                             arg_strs.join(", ")
                         )
                         .unwrap();

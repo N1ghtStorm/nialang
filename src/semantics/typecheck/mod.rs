@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
+    method_symbol, Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
+    Ty, VectorDef,
 };
 use crate::nia_std::{
     ALLOC, DEALLOC, DEF, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
@@ -1247,6 +1248,47 @@ fn infer_expr(
                 if !types_equal(&at, pt) {
                     return Err(format!(
                         "call `{name}`: arg type mismatch: expected {pt:?}, got {at:?}"
+                    ));
+                }
+            }
+            Ok(match &sig.ret {
+                Some(t) => t.clone(),
+                None => Ty::Unit,
+            })
+        }
+        Expr::MethodCall {
+            receiver,
+            name,
+            args,
+        } => {
+            let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
+            let symbol = method_symbol(&recv_ty, name);
+            let sig = fns
+                .get(&symbol)
+                .ok_or_else(|| format!("unknown method `{name}` for type {recv_ty:?}"))?;
+            if sig.params.is_empty() {
+                return Err(format!(
+                    "method `{name}` for type {recv_ty:?} has no `self` parameter"
+                ));
+            }
+            if !types_equal(&recv_ty, &sig.params[0]) {
+                return Err(format!(
+                    "method `{name}` self type mismatch: expected {:?}, got {recv_ty:?}",
+                    sig.params[0]
+                ));
+            }
+            if args.len() + 1 != sig.params.len() {
+                return Err(format!(
+                    "method `{name}`: expected {} args, got {}",
+                    sig.params.len() - 1,
+                    args.len()
+                ));
+            }
+            for (a, pt) in args.iter().zip(sig.params.iter().skip(1)) {
+                let at = infer_expr(a, env, structs, enums, vectors, fns, Some(pt))?;
+                if !types_equal(&at, pt) {
+                    return Err(format!(
+                        "method `{name}`: arg type mismatch: expected {pt:?}, got {at:?}"
                     ));
                 }
             }

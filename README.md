@@ -4,7 +4,7 @@
 
 The project currently focuses on:
 - **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul), `def` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
-- **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); enums and `match`; loops (`for`, `while`, `loop` + `break`).
+- **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); `impl` blocks with by-value `self` methods; enums and `match`; loops (`for`, `while`, `loop` + `break`).
 - **Memory and I/O:** pointers and heap builtins (`alloc`, `realloc`, `dealloc`); builtin `println` and `len`; **strings** (`string`, literals) for labels and logging.
 
 ## Quick Start
@@ -49,6 +49,7 @@ cargo test
 - Indexing: `arr[i]`
 - Field access: `obj.x`, `tuple.0`
 - Function calls: `foo(a, b)`
+- Method calls: `obj.method(a, b)` for methods declared in `impl Type { ... }`
 
 ### Builtins
 
@@ -68,6 +69,27 @@ cargo test
 `Matrix` is a compiler-known heap object with explicit reference counting.
 See [Matrices](#matrices) for construction, printing, indexing, and lifetime
 rules.
+
+### Methods
+
+`impl` blocks attach methods to a type. The first parameter must be named
+`self` and have the implemented type; method calls lower to ordinary function
+calls with `self` passed as the first argument.
+
+```nia
+struct Point { x: i32, y: i32 }
+
+impl Point {
+    fn sum(self: Point) i32 {
+        self.x + self.y
+    }
+}
+
+fn main() i32 {
+    let p = Point { x: 2, y: 3 };
+    p.sum()
+}
+```
 
 ### Matrices
 

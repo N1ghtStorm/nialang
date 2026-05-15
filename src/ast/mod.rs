@@ -79,6 +79,37 @@ pub struct FnDef {
     pub body: Block,
 }
 
+pub fn method_symbol(owner: &Ty, method: &str) -> String {
+    format!("{}__{}", ty_symbol_fragment(owner), method)
+}
+
+fn ty_symbol_fragment(t: &Ty) -> String {
+    match t {
+        Ty::I8 => "i8".into(),
+        Ty::U8 => "u8".into(),
+        Ty::I16 => "i16".into(),
+        Ty::U16 => "u16".into(),
+        Ty::I32 => "i32".into(),
+        Ty::I64 => "i64".into(),
+        Ty::U64 => "u64".into(),
+        Ty::I128 => "i128".into(),
+        Ty::Isize => "isize".into(),
+        Ty::Usize => "usize".into(),
+        Ty::U128 => "u128".into(),
+        Ty::Bool => "bool".into(),
+        Ty::F16 => "f16".into(),
+        Ty::F32 => "f32".into(),
+        Ty::F64 => "f64".into(),
+        Ty::String => "string".into(),
+        Ty::Array(elem, n) => format!("array_{}_{}", ty_symbol_fragment(elem), n),
+        Ty::Struct(n) | Ty::Enum(n) | Ty::Vector(n, _) => n.clone(),
+        Ty::Ptr(inner) => format!("ptr_{}", ty_symbol_fragment(inner)),
+        Ty::Unit => "unit".into(),
+        Ty::AnonVector(elem, n) => format!("anonvec_{}_{}", ty_symbol_fragment(elem), n),
+        Ty::Matrix(_) => "Matrix".into(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
@@ -185,6 +216,11 @@ pub enum Expr {
     Gt(Box<Expr>, Box<Expr>),
     Ge(Box<Expr>, Box<Expr>),
     Call {
+        name: String,
+        args: Vec<Expr>,
+    },
+    MethodCall {
+        receiver: Box<Expr>,
         name: String,
         args: Vec<Expr>,
     },

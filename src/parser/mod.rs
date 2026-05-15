@@ -1,6 +1,6 @@
 use crate::ast::{
-    Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
-    Ty, VectorDef,
+    method_symbol, Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern,
+    Stmt, StructDef, Ty, VectorDef,
 };
 use crate::lexer::Token;
 
@@ -48,6 +48,7 @@ impl Parser {
     /// ## Grammar contract
     /// Top-level accepts only:
     /// - `struct ...`
+    /// - `impl ...`
     /// - `fn ...`
     ///
     /// Any other token at top level is a hard parse error. This strictness keeps
@@ -70,6 +71,9 @@ impl Parser {
                 Token::Enum => {
                     enums.push(self.parse_enum()?);
                 }
+                Token::Impl => {
+                    fns.extend(self.parse_impl()?);
+                }
                 Token::Fn => {
                     fns.push(self.parse_fn()?);
                 }
@@ -77,6 +81,41 @@ impl Parser {
             }
         }
         Ok((structs, enums, fns, vectors))
+    }
+
+    fn parse_impl(&mut self) -> Result<Vec<FnDef>, String> {
+        self.expect(&Token::Impl)?;
+        let owner = self.parse_ty()?;
+        self.expect(&Token::LBrace)?;
+        let mut methods = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if !matches!(self.peek(), Token::Fn) {
+                return Err(format!("expected method `fn`, got {:?}", self.peek()));
+            }
+            let mut method = self.parse_fn()?;
+            let Some((first_name, first_ty)) = method.params.first() else {
+                return Err(format!(
+                    "method `{}` must take `self: ...` as its first parameter",
+                    method.name
+                ));
+            };
+            if first_name != "self" {
+                return Err(format!(
+                    "method `{}` first parameter must be named `self`",
+                    method.name
+                ));
+            }
+            if first_ty != &owner {
+                return Err(format!(
+                    "method `{}` self type mismatch: expected {owner:?}, got {first_ty:?}",
+                    method.name
+                ));
+            }
+            method.name = method_symbol(&owner, &method.name);
+            methods.push(method);
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(methods)
     }
 
     fn parse_enum(&mut self) -> Result<EnumDef, String> {
@@ -632,21 +671,7 @@ impl Parser {
                     let Expr::Ident(name) = e else {
                         return Err("call requires identifier".into());
                     };
-                    self.bump();
-                    let mut args = Vec::new();
-                    if !matches!(self.peek(), Token::RParen) {
-                        loop {
-                            args.push(self.parse_expr()?);
-                            match self.peek() {
-                                Token::Comma => {
-                                    self.bump();
-                                }
-                                Token::RParen => break,
-                                _ => return Err(format!("expected , or ), got {:?}", self.peek())),
-                            }
-                        }
-                    }
-                    self.expect(&Token::RParen)?;
+                    let args = self.parse_call_args()?;
                     e = Expr::Call { name, args };
                 }
                 Token::Dot => {
@@ -658,7 +683,16 @@ impl Parser {
                             return Err(format!("expected field name or index, got {other:?}"));
                         }
                     };
-                    e = Expr::Field(Box::new(e), field);
+                    if matches!(self.peek(), Token::LParen) {
+                        let args = self.parse_call_args()?;
+                        e = Expr::MethodCall {
+                            receiver: Box::new(e),
+                            name: field,
+                            args,
+                        };
+                    } else {
+                        e = Expr::Field(Box::new(e), field);
+                    }
                 }
                 Token::LBracket => {
                     self.bump();
@@ -670,6 +704,25 @@ impl Parser {
             }
         }
         Ok(e)
+    }
+
+    fn parse_call_args(&mut self) -> Result<Vec<Expr>, String> {
+        self.expect(&Token::LParen)?;
+        let mut args = Vec::new();
+        if !matches!(self.peek(), Token::RParen) {
+            loop {
+                args.push(self.parse_expr()?);
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                    }
+                    Token::RParen => break,
+                    _ => return Err(format!("expected , or ), got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::RParen)?;
+        Ok(args)
     }
 
     fn looks_like_struct_lit_after_ident(&self) -> bool {

@@ -28,6 +28,27 @@ fn parse_fixture_named_struct() {
 }
 
 #[test]
+fn parse_fixture_impl_methods() {
+    parse_ok(include_str!("../../examples/tests/ok_impl_methods.nia"));
+}
+
+#[test]
+fn parse_rejects_impl_method_without_self() {
+    let src = r#"
+struct Point { x: i32, y: i32 }
+
+impl Point {
+    fn sum(p: Point) i32 {
+        p.x + p.y
+    }
+}
+"#;
+    let toks = tokenize(src);
+    let r = Parser::new(toks).parse_file();
+    assert!(r.is_err());
+}
+
+#[test]
 fn parse_fixture_pointers() {
     parse_ok(include_str!("../../examples/tests/ok_pointers.nia"));
 }

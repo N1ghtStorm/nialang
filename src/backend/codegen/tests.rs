@@ -20,6 +20,15 @@ fn codegen_contains_if_branching() {
 }
 
 #[test]
+fn codegen_impl_method_lowers_to_function_call() {
+    let ll = emit(include_str!("../../../examples/tests/ok_impl_methods.nia"));
+    assert!(ll.contains("define i32 @Point__sum(%struct.Point %self)"), "IR:\n{ll}");
+    assert!(ll.contains("define i32 @Point__add(%struct.Point %self, i32 %n)"), "IR:\n{ll}");
+    assert!(ll.contains("call i32 @Point__sum(%struct.Point"), "IR:\n{ll}");
+    assert!(ll.contains("call i32 @Point__add(%struct.Point"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_vector_scalar_mul_emits_mul_nsw() {
     let src = r#"
 vector V2 i32 [ X, Y ]

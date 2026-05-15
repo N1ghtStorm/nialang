@@ -27,6 +27,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_if_return.nia"),
         include_str!("../../../examples/tests/ok_tuple_struct.nia"),
         include_str!("../../../examples/tests/ok_struct_named.nia"),
+        include_str!("../../../examples/tests/ok_impl_methods.nia"),
         include_str!("../../../examples/tests/ok_print_primitives.nia"),
         include_str!("../../../examples/tests/ok_pointers.nia"),
         include_str!("../../../examples/tests/ok_nested_if.nia"),
@@ -60,6 +61,20 @@ fn typecheck_ok_fixtures() {
         let r = check_all(src);
         assert!(r.is_ok(), "{r:?}");
     }
+}
+
+#[test]
+fn typecheck_rejects_unknown_method() {
+    let src = r#"
+struct Point { x: i32, y: i32 }
+
+fn main() i32 {
+    let p = Point { x: 2, y: 3 };
+    p.missing()
+}
+"#;
+    let err = check_all(src).expect_err("unknown method");
+    assert!(err.contains("unknown method `missing`"), "{err}");
 }
 
 #[test]
