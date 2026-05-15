@@ -383,8 +383,8 @@ fn codegen_matrix_arith_helpers_present() {
     assert!(ll.contains("matrix.matmul.row.cond"), "IR:\n{ll}");
     assert!(ll.contains("matrix.matmul.inner.cond"), "IR:\n{ll}");
     assert!(ll.contains("matrix.det.shape.ok"), "IR:\n{ll}");
-    assert!(ll.contains("matrix.det.heap.cond"), "IR:\n{ll}");
-    assert!(ll.contains("matrix.det.term.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.det.lu.k.cond"), "IR:\n{ll}");
+    assert!(ll.contains("sdiv i32"), "IR:\n{ll}");
     assert!(ll.contains("call void @abort()"), "IR:\n{ll}");
     assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
     assert!(ll.contains("sub nsw i32"), "IR:\n{ll}");
@@ -429,7 +429,7 @@ fn main() f64 {
 }
 
 #[test]
-fn codegen_int_matrix_det_method_uses_permutation_path() {
+fn codegen_int_matrix_det_method_uses_lu() {
     let src = r#"
 fn main() i32 {
     let m: Matrix = matrix([
@@ -440,8 +440,10 @@ fn main() i32 {
 }
 "#;
     let ll = emit(src);
-    assert!(ll.contains("matrix.det.heap.cond"), "IR:\n{ll}");
-    assert!(ll.contains("matrix.det.term.cond"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.det.lu.k.cond"), "IR:\n{ll}");
+    assert!(ll.contains("sdiv i32"), "IR:\n{ll}");
+    assert!(!ll.contains("matrix.det.heap.cond"), "IR:\n{ll}");
+    assert!(!ll.contains("matrix.det.term.cond"), "IR:\n{ll}");
 }
 
 #[test]
