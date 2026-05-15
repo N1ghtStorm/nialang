@@ -4,7 +4,7 @@
 
 The project currently focuses on:
 - **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul), `def` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
-- **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); `impl` blocks with by-value `self` methods; enums and `match`; loops (`for`, `while`, `loop` + `break`).
+- **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); `impl` blocks with `self` / `&self` methods; enums and `match`; loops (`for`, `while`, `loop` + `break`).
 - **Memory and I/O:** pointers and heap builtins (`alloc`, `realloc`, `dealloc`); builtin `println` and `len`; **strings** (`string`, literals) for labels and logging.
 
 ## Quick Start
@@ -72,15 +72,16 @@ rules.
 
 ### Methods
 
-`impl` blocks attach methods to a type. The first parameter must be named
-`self` and have the implemented type; method calls lower to ordinary function
-calls with `self` passed as the first argument.
+`impl` blocks attach methods to a type. The first parameter is written as
+`self` for by-value methods or `&self` for read-only borrowed methods; `mut self`
+is not supported. Method calls lower to ordinary function calls with `self`
+passed as the first argument.
 
 ```nia
 struct Point { x: i32, y: i32 }
 
 impl Point {
-    fn sum(self: Point) i32 {
+    fn sum(&self) i32 {
         self.x + self.y
     }
 }

@@ -523,6 +523,13 @@ fn collect_array_index_chain(mut e: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
     }
 }
 
+fn method_receiver_owner_ty(t: &Ty) -> &Ty {
+    match t {
+        Ty::Ptr(inner) => inner.as_ref(),
+        _ => t,
+    }
+}
+
 fn matrix_elem_size(t: &Ty) -> usize {
     match t {
         Ty::I8 | Ty::U8 => 1,
@@ -4238,33 +4245,72 @@ impl<'a> Gen<'a> {
                 args,
             } => {
                 let (recv_ty, recv_val) = self.emit_expr(receiver, locals, None);
-                let symbol = method_symbol(&recv_ty, name);
-                let sig = self.fn_sigs.get(&symbol).expect("typechecked method");
-                debug_assert!(!sig.params.is_empty());
-                debug_assert!(types_match(&recv_ty, &sig.params[0]));
+                let symbol = method_symbol(method_receiver_owner_ty(&recv_ty), name);
+                let (params, ret) = {
+                    let sig = self.fn_sigs.get(&symbol).expect("typechecked method");
+                    (sig.params.clone(), sig.ret.clone())
+                };
+                debug_assert!(!params.is_empty());
+                let self_param = &params[0];
+                let (self_arg_ty, self_arg_val) = if types_match(&recv_ty, self_param) {
+                    (self_param.clone(), recv_val)
+                } else if let Ty::Ptr(pointee) = self_param {
+                    debug_assert!(types_match(&recv_ty, pointee));
+                    let slot = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = alloca {}",
+                        slot,
+                        llvm_ty(pointee, self.structs)
+                    )
+                    .unwrap();
+                    writeln!(
+                        self.out,
+                        "  store {} {}, ptr %{}",
+                        llvm_ty(pointee, self.structs),
+                        recv_val,
+                        slot
+                    )
+                    .unwrap();
+                    (self_param.clone(), format!("%{slot}"))
+                } else if let Ty::Ptr(pointee) = &recv_ty {
+                    debug_assert!(types_match(pointee, self_param));
+                    let tmp = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = load {}, ptr {}",
+                        tmp,
+                        llvm_ty(self_param, self.structs),
+                        recv_val
+                    )
+                    .unwrap();
+                    (self_param.clone(), format!("%{tmp}"))
+                } else {
+                    unreachable!("typechecked method receiver")
+                };
                 let mut arg_strs = vec![format!(
                     "{} {}",
-                    llvm_ty(&sig.params[0], self.structs),
-                    recv_val
+                    llvm_ty(&self_arg_ty, self.structs),
+                    self_arg_val
                 )];
-                for (a, pt) in args.iter().zip(sig.params.iter().skip(1)) {
+                for (a, pt) in args.iter().zip(params.iter().skip(1)) {
                     let (at, av) = self.emit_expr(a, locals, Some(pt));
                     debug_assert!(types_match(&at, pt));
                     arg_strs.push(format!("{} {}", llvm_ty(pt, self.structs), av));
                 }
-                match &sig.ret {
+                match ret {
                     Some(ret_ty) => {
                         let tmp = self.fresh();
                         writeln!(
                             self.out,
                             "  %{} = call {} @{}({})",
                             tmp,
-                            llvm_ty(ret_ty, self.structs),
+                            llvm_ty(&ret_ty, self.structs),
                             sanitize(&symbol),
                             arg_strs.join(", ")
                         )
                         .unwrap();
-                        (ret_ty.clone(), format!("%{tmp}"))
+                        (ret_ty, format!("%{tmp}"))
                     }
                     None => {
                         writeln!(
@@ -4756,8 +4802,24 @@ impl<'a> Gen<'a> {
             }
             Expr::Field(obj, fname) => {
                 let (bt, bv) = self.emit_expr(obj, locals, None);
-                let Ty::Struct(sname) = bt else {
-                    unreachable!()
+                let (sname, aggregate_val) = match bt {
+                    Ty::Struct(sname) | Ty::Vector(sname, _) => (sname, bv),
+                    Ty::Ptr(inner) => match inner.as_ref() {
+                        Ty::Struct(sname) | Ty::Vector(sname, _) => {
+                            let tmp = self.fresh();
+                            writeln!(
+                                self.out,
+                                "  %{} = load {}, ptr {}",
+                                tmp,
+                                llvm_ty(inner.as_ref(), self.structs),
+                                bv
+                            )
+                            .unwrap();
+                            (sname.clone(), format!("%{tmp}"))
+                        }
+                        _ => unreachable!("typechecked field base type"),
+                    },
+                    _ => unreachable!("typechecked field base type"),
                 };
                 let idx = self
                     .struct_idx(&sname, fname)
@@ -4768,7 +4830,7 @@ impl<'a> Gen<'a> {
                 writeln!(
                     self.out,
                     "  %{} = extractvalue {} {}, {}",
-                    tmp, llvm_st, bv, idx
+                    tmp, llvm_st, aggregate_val, idx
                 )
                 .unwrap();
                 let fty = if let Some(sdef) = self.structs.iter().find(|s| s.name == sname) {

@@ -1,11 +1,11 @@
 struct Point { x: i32, y: i32 }
 
 impl Point {
-    fn sum(self: Point) i32 {
+    fn sum(&self) i32 {
         self.x + self.y
     }
 
-    fn add(self: Point, n: i32) i32 {
+    fn add(self, n: i32) i32 {
         self.sum() + n
     }
 }

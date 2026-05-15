@@ -92,10 +92,10 @@ impl Parser {
             if !matches!(self.peek(), Token::Fn) {
                 return Err(format!("expected method `fn`, got {:?}", self.peek()));
             }
-            let mut method = self.parse_fn()?;
+            let mut method = self.parse_method(&owner)?;
             let Some((first_name, first_ty)) = method.params.first() else {
                 return Err(format!(
-                    "method `{}` must take `self: ...` as its first parameter",
+                    "method `{}` must take `self` or `&self` as its first parameter",
                     method.name
                 ));
             };
@@ -105,9 +105,11 @@ impl Parser {
                     method.name
                 ));
             }
-            if first_ty != &owner {
+            let valid_self_ty = first_ty == &owner
+                || matches!(first_ty, Ty::Ptr(inner) if inner.as_ref() == &owner);
+            if !valid_self_ty {
                 return Err(format!(
-                    "method `{}` self type mismatch: expected {owner:?}, got {first_ty:?}",
+                    "method `{}` self type mismatch: expected `self` or `&self` for {owner:?}, got {first_ty:?}",
                     method.name
                 ));
             }
@@ -116,6 +118,81 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         Ok(methods)
+    }
+
+    fn parse_method(&mut self, owner: &Ty) -> Result<FnDef, String> {
+        self.expect(&Token::Fn)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+        let mut params = Vec::new();
+        if !matches!(self.peek(), Token::RParen) {
+            let mut first = true;
+            loop {
+                params.push(self.parse_method_param(owner, first, &name)?);
+                first = false;
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                    }
+                    Token::RParen => break,
+                    _ => return Err(format!("expected , or ), got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::RParen)?;
+        let ret = match self.peek() {
+            Token::LBrace => None,
+            _ => Some(self.parse_ty()?),
+        };
+        let body = self.parse_block()?;
+        Ok(FnDef {
+            name,
+            params,
+            ret,
+            body,
+        })
+    }
+
+    fn parse_method_param(
+        &mut self,
+        owner: &Ty,
+        first: bool,
+        method_name: &str,
+    ) -> Result<(String, Ty), String> {
+        if first {
+            if matches!(self.peek(), Token::Amp) {
+                self.bump();
+                let name = self.expect_ident()?;
+                if name == "mut" {
+                    return Err("`mut self` is not supported".into());
+                }
+                if name != "self" {
+                    return Err(format!(
+                        "method `{method_name}` first parameter must be `self` or `&self`"
+                    ));
+                }
+                return Ok(("self".into(), Ty::Ptr(Box::new(owner.clone()))));
+            }
+
+            if let Token::Ident(name) = self.peek().clone() {
+                if name == "mut" {
+                    return Err("`mut self` is not supported".into());
+                }
+                if name == "self" {
+                    self.bump();
+                    if matches!(self.peek(), Token::Colon) {
+                        self.bump();
+                        return Ok(("self".into(), self.parse_ty()?));
+                    }
+                    return Ok(("self".into(), owner.clone()));
+                }
+            }
+        }
+
+        let pname = self.expect_ident()?;
+        self.expect(&Token::Colon)?;
+        let pty = self.parse_ty()?;
+        Ok((pname, pty))
     }
 
     fn parse_enum(&mut self) -> Result<EnumDef, String> {

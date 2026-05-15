@@ -839,6 +839,19 @@ fn nia_vector_elem_ty<'a>(t: &'a Ty, vectors: &'a HashMap<String, VectorDef>) ->
     }
 }
 
+fn method_receiver_owner_ty(t: &Ty) -> &Ty {
+    match t {
+        Ty::Ptr(inner) => inner.as_ref(),
+        _ => t,
+    }
+}
+
+fn method_self_accepts_receiver(receiver: &Ty, self_param: &Ty) -> bool {
+    types_equal(receiver, self_param)
+        || matches!(self_param, Ty::Ptr(inner) if types_equal(receiver, inner))
+        || matches!(receiver, Ty::Ptr(inner) if types_equal(inner, self_param))
+}
+
 fn infer_comparison_bin(
     l: &Expr,
     r: &Expr,
@@ -1262,16 +1275,17 @@ fn infer_expr(
             args,
         } => {
             let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
-            let symbol = method_symbol(&recv_ty, name);
+            let owner_ty = method_receiver_owner_ty(&recv_ty);
+            let symbol = method_symbol(owner_ty, name);
             let sig = fns
                 .get(&symbol)
-                .ok_or_else(|| format!("unknown method `{name}` for type {recv_ty:?}"))?;
+                .ok_or_else(|| format!("unknown method `{name}` for type {owner_ty:?}"))?;
             if sig.params.is_empty() {
                 return Err(format!(
-                    "method `{name}` for type {recv_ty:?} has no `self` parameter"
+                    "method `{name}` for type {owner_ty:?} has no `self` parameter"
                 ));
             }
-            if !types_equal(&recv_ty, &sig.params[0]) {
+            if !method_self_accepts_receiver(&recv_ty, &sig.params[0]) {
                 return Err(format!(
                     "method `{name}` self type mismatch: expected {:?}, got {recv_ty:?}",
                     sig.params[0]
@@ -1636,10 +1650,15 @@ fn infer_expr(
         },
         Expr::Field(obj, fname) => {
             let bt = infer_expr(obj, env, structs, enums, vectors, fns, None)?;
-            let Ty::Struct(sname) = bt else {
-                return Err("field access on non-struct".into());
+            let sname = match &bt {
+                Ty::Struct(sname) | Ty::Vector(sname, _) => sname,
+                Ty::Ptr(inner) => match inner.as_ref() {
+                    Ty::Struct(sname) | Ty::Vector(sname, _) => sname,
+                    _ => return Err("field access on non-struct".into()),
+                },
+                _ => return Err("field access on non-struct".into()),
             };
-            if let Some(def) = structs.get(&sname) {
+            if let Some(def) = structs.get(sname) {
                 return def
                     .fields
                     .iter()
@@ -1647,7 +1666,7 @@ fn infer_expr(
                     .map(|(_, t)| t.clone())
                     .ok_or_else(|| format!("struct `{sname}` has no field `{fname}`"));
             }
-            if let Some(def) = vectors.get(&sname) {
+            if let Some(def) = vectors.get(sname) {
                 if def.fields.iter().any(|n| n == fname) {
                     return Ok(def.ty.clone());
                 }

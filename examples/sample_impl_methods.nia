@@ -4,22 +4,22 @@ struct Point {
 }
 
 impl Point {
-    fn sum(self: Point) i32 {
+    fn sum(&self) i32 {
         self.x + self.y
     }
 
-    fn scale(self: Point, k: i32) Point {
+    fn scale(self, k: i32) Point {
         Point {
             x: self.x * k,
             y: self.y * k
         }
     }
 
-    fn dot(self: Point, other: Point) i32 {
+    fn dot(&self, other: Point) i32 {
         self.x * other.x + self.y * other.y
     }
 
-    fn score(self: Point, other: Point) i32 {
+    fn score(&self, other: Point) i32 {
         self.dot(other) + self.sum()
     }
 }

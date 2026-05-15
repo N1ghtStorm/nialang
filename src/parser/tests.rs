@@ -49,6 +49,22 @@ impl Point {
 }
 
 #[test]
+fn parse_rejects_mut_self() {
+    let src = r#"
+struct Point { x: i32, y: i32 }
+
+impl Point {
+    fn sum(mut self) i32 {
+        self.x + self.y
+    }
+}
+"#;
+    let toks = tokenize(src);
+    let r = Parser::new(toks).parse_file();
+    assert!(r.is_err());
+}
+
+#[test]
 fn parse_fixture_pointers() {
     parse_ok(include_str!("../../examples/tests/ok_pointers.nia"));
 }
