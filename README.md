@@ -38,10 +38,11 @@ cargo test
 Nia programs usually look like this:
 
 ```nia
-def main() -> i32 {
+fn main() i32 {
     let x = 40 + 2;
     println(x);
-    return 0;
+
+    0
 }
 ```
 
@@ -55,9 +56,9 @@ make output easier to read and help keep examples close to math notation.
 ```nia
 vector Vec2 i32 [X, Y]
 
-def main() -> i32 {
-    let u: Vec2 = { X: 1, Y: 2 };
-    let v: Vec2 = { X: 3, Y: 4 };
+fn main() i32 {
+    let u = Vec2 [X: 1, Y: 2];
+    let v = Vec2 [X: 3, Y: 4];
 
     println(u + v);     // (i32 {"X": 4, "Y": 6})
     println(v - u);     // (i32 {"X": 2, "Y": 2})
@@ -65,7 +66,7 @@ def main() -> i32 {
     println(u @ v);     // 11
     println(3 * u);     // (i32 {"X": 3, "Y": 6})
 
-    return 0;
+    0
 }
 ```
 
@@ -86,15 +87,15 @@ For quick numeric code, vectors can be written directly without declaring a
 named vector type:
 
 ```nia
-def main() -> i32 {
-    let a = [1, 2, 3, 4];
-    let b = [10, 20, 30, 40];
+fn main() i32 {
+    let a = <1, 2, 3, 4>;
+    let b = <10, 20, 30, 40>;
 
     println(a + b);     // [11, 22, 33, 44]
     println(a * b);     // [10, 40, 90, 160]
     println(a @ b);     // 300
 
-    return 0;
+    0
 }
 ```
 
@@ -125,7 +126,7 @@ as `Matrix`.
 Matrices support element-wise addition, subtraction, and multiplication:
 
 ```nia
-def main() -> i32 {
+fn main() i32 {
     let a = matrix([
         [1, 2],
         [3, 4],
@@ -143,7 +144,7 @@ def main() -> i32 {
 
     matrix_drop(a);
     matrix_drop(b);
-    return 0;
+    0
 }
 ```
 
@@ -152,7 +153,7 @@ def main() -> i32 {
 Use `@` for the linear algebra matrix product:
 
 ```nia
-def main() -> i32 {
+fn main() i32 {
     let a = matrix([
         [1, 2, 3],
         [4, 5, 6],
@@ -170,7 +171,7 @@ def main() -> i32 {
     matrix_drop(a);
     matrix_drop(b);
     matrix_drop(c);
-    return 0;
+    0
 }
 ```
 
@@ -188,14 +189,14 @@ The dimensions follow the usual rule:
 vector Vec3 i32 [X, Y, Z]
 vector Vec2 i32 [R, S]
 
-def main() -> i32 {
+fn main() i32 {
     let a = matrix([
         [1, 2, 3],
         [4, 5, 6],
     ]);
 
-    let x: Vec3 = { X: 10, Y: 20, Z: 30 };
-    let y: Vec2 = { R: 7, S: 8 };
+    let x = Vec3 [X: 10, Y: 20, Z: 30];
+    let y = Vec2 [R: 7, S: 8];
 
     let ax: Vec2 = a @ x;
     let ya: Vec3 = y @ a;
@@ -204,7 +205,7 @@ def main() -> i32 {
     println(ya);        // (i32 {"X": 39, "Y": 54, "Z": 69})
 
     matrix_drop(a);
-    return 0;
+    0
 }
 ```
 
@@ -221,9 +222,9 @@ Anonymous vectors use the same operator:
 let left = matrix([
     [1, 2, 3],
     [4, 5, 6],
-]) @ [10, 20, 30];
+]) @ <10, 20, 30>;
 
-let right = [7, 8] @ matrix([
+let right = <7, 8> @ matrix([
     [1, 2, 3],
     [4, 5, 6],
 ]);
@@ -237,8 +238,8 @@ println(right);         // [39, 54, 69]
 The `outer` builtin builds a matrix from two vectors:
 
 ```nia
-let u = [1, 2, 3];
-let v = [10, 20];
+let u = <1, 2, 3>;
+let v = <10, 20>;
 
 let m = outer(u, v);
 println(m);             // [[10, 20], [20, 40], [30, 60]]
@@ -251,7 +252,7 @@ matrix_drop(m);
 The determinant is exposed as a `Matrix` method:
 
 ```nia
-def main() -> i32 {
+fn main() i32 {
     let m = matrix([
         [1, 2, 0, 1, 3],
         [2, 5, 1, 0, 4],
@@ -263,7 +264,7 @@ def main() -> i32 {
     println(m.det());
 
     matrix_drop(m);
-    return 0;
+    0
 }
 ```
 
@@ -332,7 +333,7 @@ free(p);
 ### Control Flow
 
 ```nia
-def main() -> i32 {
+fn main() i32 {
     let n = 5;
 
     if n > 0 {
@@ -349,7 +350,7 @@ def main() -> i32 {
     }
 
     println(acc);
-    return 0;
+    0
 }
 ```
 
@@ -367,7 +368,7 @@ enum Shape {
     Rect(i32, i32),
 }
 
-def area(shape: Shape) -> i32 {
+fn area(shape: Shape) i32 {
     match shape {
         Shape::Dot => 0,
         Shape::Circle(r) => r * r,
@@ -386,23 +387,24 @@ struct Counter {
 }
 
 impl Counter {
-    def new(value: i32) -> Counter {
-        return Counter { value: value };
+    fn new(value: i32) Counter {
+        Counter { value: value }
     }
 
-    def inc(self) -> Counter {
-        return Counter { value: self.value + 1 };
+    fn inc(self) Counter {
+        Counter { value: self.value + 1 }
     }
 
-    def get(&self) -> i32 {
-        return self.value;
+    fn get(&self) i32 {
+        self.value
     }
 }
 
-def main() -> i32 {
+fn main() i32 {
     let c = Counter::new(10).inc();
     println(c.get());
-    return 0;
+
+    0
 }
 ```
 
