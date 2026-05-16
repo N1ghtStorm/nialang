@@ -1,799 +1,455 @@
 # NiaLang
 
-**NiaLang** is a small compiled language **created for numerical computations in linear algebra**: fixed-size **vectors** with dot products and component-wise ops, heap **matrices** with multiplication, outer products, determinants, and elementwise arithmetic—so common tasks (inner products, bilinear forms, small dense operators) map directly to source code. Around that core it still offers a compact general-purpose layer (arrays, structs, enums, pointers, control flow) for tests and glue code. Programs lower to LLVM IR and run via `clang`.
+**NiaLang** is a small compiled programming language for linear algebra experiments.
+It treats vectors and matrices as first-class values, keeps the syntax compact, and
+lowers programs through LLVM IR and `clang`.
 
-The project currently focuses on:
-- **Linear algebra primitives:** fixed-size **vector** types (named axes, one numeric type per axis) with `+`, `-`, `*`, `@` (dot product), and scalar scaling; built-in reference-counted **matrices** with `matrix(...)`, `outer`, `@` (matmul and matrix/vector products), `.det()` (determinant), elementwise `+`/`-`/`*`, and scalar scaling.
-- **Data and control flow:** fixed-size arrays (`[T; N]`) with indexing and mutation; structs (named and tuple); `impl` blocks with `self` / `&self` methods; enums and `match`; loops (`for`, `while`, `loop` + `break`).
-- **Memory and I/O:** pointers and heap builtins (`alloc`, `realloc`, `dealloc`); builtin `println` and `len`; **strings** (`string`, literals) for labels and logging.
+The language is still experimental, but the core idea is already visible:
+
+```nia
+let dot = u @ v;        // dot product
+let sum = u + v;        // element-wise vector addition
+let had = u * v;        // Hadamard product
+let scaled = 3 * u;     // scalar-vector multiplication
+
+let ab = A @ B;         // matrix product
+let av = A @ v;         // matrix-vector product
+let va = v @ A;         // vector-matrix product
+let d = A.det();        // determinant
+```
+
+The goal is a language that feels natural for dense numeric code while staying
+simple enough to hack on.
 
 ## Quick Start
 
-Build and run a program:
+Build and run an example:
 
 ```bash
-cargo run -r -- examples/sample.nia
+cargo run -- examples/sample_linalg_commented.nia
 ```
 
-Save generated LLVM IR:
-
-```bash
-cargo run -r -- examples/sample.nia -o examples/sample.ll
-```
-
-Run tests:
+Run the compiler test suite:
 
 ```bash
 cargo test
 ```
 
-## Language Snapshot
-
-### Types
-
-- Integers: `i8`, `u8`, `i16`, `u16`, `i32`, `i64`, `u64`, `i128`, `isize`, `usize`, `u128`
-- `bool`
-- `string` (UTF-8 text; see `examples/sample_string.nia`)
-- Arrays: `[T; N]`
-- Pointers: `&T`
-- Structs / Enums
-- **Vectors**: named fixed-size aggregates and anonymous `<...>` vectors; see [Fixed-size vectors](#fixed-size-vectors) below.
-- `Matrix` — built-in ref-counted heap matrix of one numeric cell type.
-
-### Expressions and Operators
-
-- Arithmetic: `+`, `-`, `*`, `/`
-- Vector-only: `@` (dot product); component-wise `+`, `-`, `*`; `*` between a vector and a scalar of the **axis** type (either order). Named vectors require the same declared type; anonymous vectors require the same element type and length. See [Fixed-size vectors](#fixed-size-vectors).
-- Matrix/vector: `@` for `Matrix @ Matrix`, `Matrix @ vector`, and `vector @ Matrix`; component-wise Matrix `+`, `-`, `*`; Matrix `*` with a scalar of the exact cell type.
-- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
-- Indexing: `arr[i]`
-- Field access: `obj.x`, `tuple.0`
-- Function calls: `foo(a, b)`
-- Method calls: `obj.method(a, b)` for methods declared in `impl Type { ... }` and built-in methods such as `m.det()`
-
-### Builtins
-
-- `println(x)` — prints values (including arrays, structs, enums, pointers, **vectors**, `Matrix`, **`string`**)
-- `len(arr)` — returns compile-time array length as `i32`
-- `alloc(v)` / `realloc(ptr, v)` / `dealloc(ptr)`
-- `matrix([[...], [...]])` — creates a `Matrix` from a rectangular array of numeric arrays
-- `matrix_get(m, row, col)` / `matrix_set(m, row, col, value)`
-- `matrix_rows(m)` / `matrix_cols(m)` / `matrix_len(m)`
-- `matrix_clone(m)` / `matrix_refcount(m)` / `matrix_drop(m)`
-- `outer(a, b)` — outer product of two vectors; returns a `Matrix`
-- `a + b` / `a - b` / `a * b` — component-wise matrix arithmetic with the same element type and shape
-- `a @ b` — matrix multiplication, matrix-vector, or vector-matrix product with linear algebra shape rules
-- `m * scalar` / `scalar * m` — matrix scaling; the scalar type must match the matrix cell type
-
-`Matrix` is a compiler-known heap object with explicit reference counting.
-See [Matrices](#matrices) for construction, printing, indexing, and lifetime
-rules.
-
-### Methods
-
-`impl` blocks attach methods to a type. The first parameter is written as
-`self` for by-value methods or `&self` for read-only borrowed methods; `mut self`
-is not supported. Method calls lower to ordinary function calls with `self`
-passed as the first argument.
+Nia programs usually look like this:
 
 ```nia
-struct Point { x: i32, y: i32 }
-
-impl Point {
-    fn sum(&self) i32 {
-        self.x + self.y
-    }
-}
-
-fn main() i32 {
-    let p = Point { x: 2, y: 3 };
-    p.sum()
+def main() -> i32 {
+    let x = 40 + 2;
+    println(x);
+    return 0;
 }
 ```
 
-### Matrices
+## Linear Algebra First
 
-From a **linear algebra** standpoint, a `Matrix` is a mutable rectangular array of scalars you can treat as the coordinates of a linear map between standard bases (after you fix row/column layout): you multiply maps with `@`, scale them with `*`, and extract scalar summaries with `.det()` on square matrices.
+### Named Vectors
 
-`Matrix` is a built-in reference-counted heap handle for a rectangular 2D block
-of numeric cells. Source code writes the surface type simply as `Matrix`; inside
-the compiler the handle still remembers the element type, such as `Matrix<i32>`
-or `Matrix<f64>`.
-
-#### Creating a matrix
-
-Use `matrix([...])` with an array of rows:
+Named vectors are fixed-size vectors whose coordinates have labels. The labels
+make output easier to read and help keep examples close to math notation.
 
 ```nia
-let m: Matrix = matrix([
+vector Vec2 i32 [X, Y]
+
+def main() -> i32 {
+    let u: Vec2 = { X: 1, Y: 2 };
+    let v: Vec2 = { X: 3, Y: 4 };
+
+    println(u + v);     // (i32 {"X": 4, "Y": 6})
+    println(v - u);     // (i32 {"X": 2, "Y": 2})
+    println(u * v);     // (i32 {"X": 3, "Y": 8})
+    println(u @ v);     // 11
+    println(3 * u);     // (i32 {"X": 3, "Y": 6})
+
+    return 0;
+}
+```
+
+Vector operators:
+
+| Operator | Meaning | Result |
+| --- | --- | --- |
+| `u + v` | element-wise addition | vector |
+| `u - v` | element-wise subtraction | vector |
+| `u * v` | element-wise multiplication | vector |
+| `u @ v` | dot product | scalar |
+| `k * u`, `u * k` | scalar multiplication | vector |
+| `-u` | element-wise negation | vector |
+
+### Anonymous Vectors
+
+For quick numeric code, vectors can be written directly without declaring a
+named vector type:
+
+```nia
+def main() -> i32 {
+    let a = [1, 2, 3, 4];
+    let b = [10, 20, 30, 40];
+
+    println(a + b);     // [11, 22, 33, 44]
+    println(a * b);     // [10, 40, 90, 160]
+    println(a @ b);     // 300
+
+    return 0;
+}
+```
+
+The same arithmetic works for integer and float vectors.
+
+## Matrices
+
+Matrices are built with `matrix([...])`:
+
+```nia
+let A = matrix([
     [1, 2, 3],
     [4, 5, 6],
 ]);
+
+let B = matrix([
+    [7, 8, 9],
+    [10, 11, 12],
+]);
+```
+
+`Matrix` is a built-in heap-backed value. Internally the compiler tracks the
+element type and dimensions when it can, while user code writes the surface type
+as `Matrix`.
+
+### Matrix Arithmetic
+
+Matrices support element-wise addition, subtraction, and multiplication:
+
+```nia
+def main() -> i32 {
+    let a = matrix([
+        [1, 2],
+        [3, 4],
+    ]);
+
+    let b = matrix([
+        [10, 20],
+        [30, 40],
+    ]);
+
+    println(a + b);     // [[11, 22], [33, 44]]
+    println(b - a);     // [[9, 18], [27, 36]]
+    println(a * b);     // [[10, 40], [90, 160]]
+    println(a * 3);     // [[3, 6], [9, 12]]
+
+    matrix_drop(a);
+    matrix_drop(b);
+    return 0;
+}
+```
+
+### Matrix Multiplication
+
+Use `@` for the linear algebra matrix product:
+
+```nia
+def main() -> i32 {
+    let a = matrix([
+        [1, 2, 3],
+        [4, 5, 6],
+    ]);
+
+    let b = matrix([
+        [7, 8],
+        [9, 10],
+        [11, 12],
+    ]);
+
+    let c = a @ b;
+    println(c);         // [[58, 64], [139, 154]]
+
+    matrix_drop(a);
+    matrix_drop(b);
+    matrix_drop(c);
+    return 0;
+}
+```
+
+The dimensions follow the usual rule:
+
+```text
+(m x n) @ (n x p) -> (m x p)
+```
+
+### Matrix-Vector and Vector-Matrix Products
+
+`@` also works between matrices and vectors:
+
+```nia
+vector Vec3 i32 [X, Y, Z]
+vector Vec2 i32 [R, S]
+
+def main() -> i32 {
+    let a = matrix([
+        [1, 2, 3],
+        [4, 5, 6],
+    ]);
+
+    let x: Vec3 = { X: 10, Y: 20, Z: 30 };
+    let y: Vec2 = { R: 7, S: 8 };
+
+    let ax: Vec2 = a @ x;
+    let ya: Vec3 = y @ a;
+
+    println(ax);        // (i32 {"R": 140, "S": 320})
+    println(ya);        // (i32 {"X": 39, "Y": 54, "Z": 69})
+
+    matrix_drop(a);
+    return 0;
+}
 ```
 
 Rules:
 
-- The outer array must contain at least one row.
-- Every row must contain at least one cell.
-- Every row must have the same length.
-- Every cell must be a numeric primitive: integer types (`i8`, `u8`, `i16`, ...)
-  or float types (`f16`, `f32`, `f64`).
-- All cells must have exactly one element type. Integer literals default to
-  `i32`; float literals default to `f64`.
-
-Valid:
-
-```nia
-let ints: Matrix = matrix([
-    [1, 2],
-    [3, 4],
-]);
-
-let floats: Matrix = matrix([
-    [1.0, 2.0],
-    [3.5, 4.5],
-]);
-```
-
-Rejected:
-
-```nia
-let mixed: Matrix = matrix([
-    [1, 2],
-    [3.5, 4.5],
-]);
-```
-
-The rejected example mixes `i32` and `f64`. If the matrix should be floating
-point, write the integer-looking cells with a decimal point (`1.0`, `2.0`, ...).
-
-#### Printing
-
-`println(m)` prints the matrix contents as nested arrays:
-
-```nia
-let m: Matrix = matrix([
-    [1, 2, 3],
-    [4, 5, 6],
-]);
-
-println(m); // [[1, 2, 3], [4, 5, 6]]
-```
-
-Float cells use the same float formatting as normal `println`:
-
-```nia
-let f: Matrix = matrix([
-    [1.0, 2.5],
-    [3.0, 4.75],
-]);
-
-println(f); // [[1.000000, 2.500000], [3.000000, 4.750000]]
-```
-
-#### Shape and length
-
-Use the shape helpers when you need dimensions at runtime:
-
-```nia
-println(matrix_rows(m)); // number of rows
-println(matrix_cols(m)); // number of columns
-println(matrix_len(m));  // rows * columns
-```
-
-Each helper returns `i32`.
-
-#### Reading and writing cells
-
-Cells are addressed by zero-based row and column indices:
-
-```nia
-let value = matrix_get(m, 0, 1); // row 0, column 1
-matrix_set(m, 1, 2, 42);        // row 1, column 2
-```
-
-`matrix_get` returns the matrix element type. `matrix_set` requires a value of
-that same type:
-
-```nia
-let ints: Matrix = matrix([
-    [1, 2],
-    [3, 4],
-]);
-
-matrix_set(ints, 0, 0, 99);   // ok: i32 matrix, i32 value
-// matrix_set(ints, 0, 0, 1.5); // rejected: f64 value for i32 matrix
-```
-
-Current runtime note: indices are assumed valid. There is no bounds check yet,
-so `matrix_get(m, 100, 100)` is invalid program behavior.
-
-#### Matrix arithmetic
-
-Use `+`, `-`, and `*` for component-wise matrix arithmetic:
-
-```nia
-let a: Matrix = matrix([
-    [1, 2],
-    [3, 4],
-]);
-
-let b: Matrix = matrix([
-    [10, 20],
-    [30, 40],
-]);
-
-let c: Matrix = a + b;
-let d: Matrix = b - a;
-let e: Matrix = a * b;
-println(c); // [[11, 22], [33, 44]]
-println(d); // [[9, 18], [27, 36]]
-println(e); // [[10, 40], [90, 160]]
-```
-
-The result is a new `Matrix` allocation with reference count `1`; it does not
-modify either operand. Both operands must have the same element type:
-
-```nia
-let ints: Matrix = matrix([
-    [1, 2],
-    [3, 4],
-]);
-
-let floats: Matrix = matrix([
-    [1.0, 2.0],
-    [3.0, 4.0],
-]);
-
-// let bad_sum: Matrix = ints + floats;  // rejected: Matrix<i32> + Matrix<f64>
-// let bad_diff: Matrix = ints - floats; // rejected: Matrix<i32> - Matrix<f64>
-// let bad_prod: Matrix = ints * floats; // rejected: Matrix<i32> * Matrix<f64>
-```
-
-Both operands must also have the same runtime shape (`rows` and `cols`). The
-generated code checks the shape before doing arithmetic; a mismatch aborts the
-program. Drop each result when it is no longer needed:
-
-```nia
-matrix_drop(e);
-matrix_drop(d);
-matrix_drop(c);
-matrix_drop(b);
-matrix_drop(a);
-```
-
-Use `@` for real matrix multiplication. The cell type must match exactly, and
-the runtime shape must satisfy the usual rule:
-
 ```text
-(n x m) @ (m x k) = (n x k)
+Matrix(m x n) @ Vector(n) -> Vector(m)
+Vector(m) @ Matrix(m x n) -> Vector(n)
 ```
 
-For example, a `2 x 3` matrix multiplied by a `3 x 4` matrix produces a
-`2 x 4` matrix:
+Anonymous vectors use the same operator:
 
 ```nia
-let left: Matrix = matrix([
+let left = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+]) @ [10, 20, 30];
+
+let right = [7, 8] @ matrix([
     [1, 2, 3],
     [4, 5, 6],
 ]);
 
-let right: Matrix = matrix([
-    [7, 8, 9, 10],
-    [11, 12, 13, 14],
-    [15, 16, 17, 18],
-]);
-
-let product: Matrix = left @ right;
-println(product); // [[74, 80, 86, 92], [173, 188, 203, 218]]
-println(matrix_rows(product)); // 2
-println(matrix_cols(product)); // 4
+println(left);          // [140, 320]
+println(right);         // [39, 54, 69]
 ```
 
-Generated code checks `matrix_cols(left) == matrix_rows(right)` before
-multiplying; a mismatch aborts the program. Like other matrix arithmetic, `@`
-creates a new allocation with reference count `1`.
+### Outer Product
 
-The same `@` operator also handles matrix/vector products:
-
-```text
-(m x n) @ vector(n) = vector(m)
-vector(m) @ (m x n) = vector(n)
-```
-
-Named and anonymous vectors both work. If the output is a named vector with a
-different dimension than the input, give the `let` binding a type annotation:
+The `outer` builtin builds a matrix from two vectors:
 
 ```nia
-vector Vec2i i32 [X, Y]
-vector Vec3i i32 [A, B, C]
+let u = [1, 2, 3];
+let v = [10, 20];
 
-let a: Matrix = matrix([
-    [1, 2, 3],
-    [4, 5, 6],
-]);
+let m = outer(u, v);
+println(m);             // [[10, 20], [20, 40], [30, 60]]
 
-let v = Vec3i [A: 7, B: 8, C: 9];
-let av: Vec2i = a @ v;
-
-let anon_left = a @ <7, 8, 9>; // anonymous <i32; 2>
-let anon_right = <10, 20> @ a; // anonymous <i32; 3>
-```
-
-Use `outer(a, b)` to build a matrix from two vectors. The vector declarations may
-have different lengths, but their element types must be the same numeric type:
-
-```nia
-vector Vec3i i32 [X, Y, Z]
-vector Vec2i i32 [U, V]
-
-let a = Vec3i [X: 1, Y: 2, Z: 3];
-let b = Vec2i [U: 4, V: 5];
-
-let product: Matrix = outer(a, b);
-println(product); // [[4, 5], [8, 10], [12, 15]]
-println(matrix_rows(product)); // 3
-println(matrix_cols(product)); // 2
-```
-
-The rows come from the first vector and the columns come from the second vector.
-Like matrix arithmetic, the result is a new `Matrix` allocation with reference
-count `1`.
-
-Use `m.det()` to compute the determinant of a square matrix. The return type is
-the same as the matrix cell type:
-
-```nia
-let m: Matrix = matrix([
-    [1, 2],
-    [3, 4],
-]);
-
-let d: i32 = m.det();
-println(d); // -2
-```
-
-Generated code checks `matrix_rows(m) == matrix_cols(m)` before computing the
-determinant; a non-square matrix aborts the program.
-
-Use `*` with a scalar to multiply every cell by one number:
-
-```nia
-let m: Matrix = matrix([
-    [1, 2],
-    [3, 4],
-]);
-
-let right: Matrix = m * 3;
-let left: Matrix = 2 * m;
-println(right); // [[3, 6], [9, 12]]
-println(left);  // [[2, 4], [6, 8]]
-```
-
-The scalar type must match the matrix cell type exactly. Integer literals are
-`i32`; float literals are `f64`:
-
-```nia
-let f: Matrix = matrix([
-    [1.0, 2.0],
-    [3.0, 4.0],
-]);
-
-let ok: Matrix = f * 2.0;
-// let bad: Matrix = f * 2; // rejected: Matrix<f64> * i32
-```
-
-#### Reference counting
-
-A `Matrix` handle owns a heap allocation with an explicit reference counter.
-The compiler does not insert automatic clone/drop calls yet, so code must manage
-sharing explicitly:
-
-```nia
-let m: Matrix = matrix([
-    [1, 2, 3],
-    [4, 5, 6],
-]);
-
-println(matrix_refcount(m)); // 1
-
-let shared: Matrix = matrix_clone(m);
-println(matrix_refcount(m)); // 2
-
-println(shared);             // prints the same heap data
-
-matrix_drop(shared);
-println(matrix_refcount(m)); // 1
-
-matrix_drop(m);              // frees when the counter reaches zero
-```
-
-Use `matrix_clone(m)` whenever another handle should share the same matrix data.
-Use `matrix_drop(m)` exactly once for each live handle when it is no longer
-needed. Do not use a handle after dropping it.
-
-#### Complete example
-
-See `examples/sample_matrix_rc.nia` for a runnable sample covering construction,
-printing, shape queries, cell get/set, cloning, reference count inspection, and
-dropping. See `examples/sample_matrix_arith.nia` for a separate arithmetic
-sample focused on `+`, `-`, and `*`.
-
-### Fixed-size vectors
-
-Vectors are a small **linear-algebra-friendly** layer on top of the same value-type model as structs. NiaLang has two fixed-size vector forms: named `vector` declarations with **named axes**, and anonymous `<...>` literals for one-off fixed-size numeric values. They are meant for 2D/3D-style math (positions, deltas, RGB-like triples) where you want a compact fixed set of operations, not arbitrary struct logic. In textbook terms, each vector value behaves like a column vector in **R**^n with the usual dot product written as `@`.
-
-#### What a vector is (and is not)
-
-- **Is:** A named value type known to the compiler by its **declared name** (e.g. `Vec2`). Binary operators on named vectors (`+`, `-`, `*`, `@`) take two operands of that **same** declared type — nominal typing, not structural equivalence. Distinct declarations (e.g. `A` and `B`) are different types even if their axes and element type match.
-- **Is:** An anonymous value type written as `<1, 2, 3>` when you do not need axis names. Anonymous vectors are structural: element type plus length, e.g. `<i32; 3>`.
-- **Is:** Lowered to LLVM as a plain aggregate with one field per component.
-- **Is not:** A generic `Vec<T>` or a dynamically sized array; size is fixed by the axis list.
-- **Is not:** SIMD or a matrix type; **`@`** is the dot product of two values of the **same** vector type.
-
-#### Name space and declarations
-
-- The name of a `vector` is unique among **structs**, **enums**, and **vectors** in the program.
-- Syntax: keyword `vector`, the type name, the **element type** (any primitive integer or float), then a comma-separated list of axis identifiers inside **`[ ... ]`** (preferred) or legacy **`{ ... }`**.
-
-```nia
-vector Vec2 i32 [
-    X,
-    Y,
-]
-
-vector Dir3 f64 { X, Y, Z }   // legacy brace form; same meaning as brackets
-```
-
-- A literal lists every axis from the declaration, each exactly once.
-
-#### Literals and field access
-
-Literals reuse the same **labeled record** shape as struct literals, using the vector’s type name:
-
-```nia
-let p = Vec2 [X: 10, Y: -3];
-```
-
-Field order in source may differ from the declaration; fields are matched **by name**. Each component expression must be assignable to the declared element type (`i32` here). You can annotate locals with the vector name like any other nominal type:
-
-```nia
-let q: Vec2 = Vec2 [X: 0, Y: 0];
-```
-
-Reading axes is ordinary field syntax: `p.X`, `p.Y`. That yields the element type (`i32` / `f64` / …).
-
-#### Anonymous vector literals
-
-Use `<...>` when you need a fixed-size vector without declaring axis names:
-
-```nia
-let a = <1, 2, 3>;
-let b = <4, 5, 6>;
-
-println(a + b); // [5, 7, 9]
-println(b - a); // [3, 3, 3]
-println(a * b); // [4, 10, 18]
-println(a * 3); // [3, 6, 9]
-println(2 * b); // [8, 10, 12]
-println(a @ b); // 32
-```
-
-The element type is inferred from the literal. Integer literals default to
-`i32`; float literals default to `f64`:
-
-```nia
-let ints = <1, 2, 3>;       // anonymous <i32; 3>
-let floats = <1.0, 2.0>;    // anonymous <f64; 2>
-```
-
-All elements inside one anonymous vector must have exactly the same type, and
-vector-vector arithmetic requires the same element type and length on both
-sides:
-
-```nia
-let ok = <1, 2, 3> + <4, 5, 6>;
-
-// let bad_len = <1, 2> + <3, 4, 5>;       // rejected: different lengths
-// let bad_ty = <1, 2> + <3.0, 4.0>;       // rejected: i32 vs f64
-```
-
-Anonymous vectors work with `outer` too:
-
-```nia
-let m: Matrix = outer(<1, 2, 3>, <4, 5>);
-println(m); // [[4, 5], [8, 10], [12, 15]]
 matrix_drop(m);
 ```
 
-`println` prints anonymous vectors like arrays (`[1, 2, 3]`) because they do not
-have axis names.
+### Determinant
 
-#### Typed operations (summary)
-
-Named vector-vector operators use **the same vector type** on both sides. Anonymous vector-vector operators use the same **element type** and **length** on both sides. The element type is a **numeric** primitive (integer or float); arithmetic follows that element type.
-
-| Operator | Operands | Result type | Meaning |
-|----------|-----------|---------------|---------|
-| `+` | two compatible vectors | same vector kind | Component-wise sum |
-| `-` | two compatible vectors | same vector kind | Component-wise difference |
-| `*` | two compatible vectors | same vector kind | Component-wise (Hadamard) product |
-| `*` | vector and scalar, or scalar and vector | same vector kind | **Scale** every component; the scalar has the **same** type as each component |
-| `@` | two compatible vectors | **element type** | Dot product: `u0*v0 + u1*v1 + ...` |
-
-Integer element types use LLVM `nsw` where applicable for add/sub/mul; floats use `fadd` / `fmul` / `fadd` for the dot-product reduction.
-
-#### Dot product `@` (details)
-
-- The **left** operand is a vector (the usual form is `u @ v`).
-- The **right** operand is inferred with the same vector type as the left, so literals and calls follow the same typing as other binary vector ops.
-- The **result** is a **scalar** of the element type, so it composes with normal arithmetic, e.g. `(u @ v) * 2` scales the dot value by `2`.
-
-#### Precedence and grouping
-
-`*`, `/`, and `@` share one **multiplicative** precedence level and bind **tighter** than `+` and `-`. They group **left-to-right** among themselves.
-
-Examples (with `u`, `v`, `w` of the same named `vector` type or compatible anonymous vector type, `s` of the element type):
-
-- `u + v * w` is `u + (v * w)` — Hadamard product first, then component-wise sum.
-- `u * v @ w` is `(u * v) @ w` — dot product of the Hadamard result with `w` (left-to-right among `*`, `/`, `@`).
-- `u + v @ w` groups as `u + (v @ w)` under these rules; to dot a **sum** with another vector, parenthesize the sum: `(u + v) @ w`.
-
-#### `println` and passing vectors around
-
-`println` accepts vector values; output is built from the element type and axis layout. Vectors can be passed as **function arguments** and **returned** by value when the signature uses the same vector type name.
-
-#### Compound assignment on vector variables
-
-Statements like `u += v`, `u -= v`, and `u *= rhs` expand to `u = u + v`, `u = u - v`, and `u = u * rhs`. So `*=` can apply a **Hadamard** update (`u *= v` with `v` the same vector type) or **scaling** (`u *= s` with `s` the element type). For a running dot sum, use a scalar accumulator, e.g. `let acc = acc + (u @ v);`.
-
-#### Further examples
-
-- Extended demo (two types, `Vec2` and `Vec3`, more `println` cases): `examples/sample_vector_arith.nia`.
-- Anonymous vectors (`<...>`), scalar scaling, dot product, and `outer`: `examples/sample_anon_vector.nia`.
-- Minimal walk-through (single `Vec2` type): see **example 4** under [Large Working Examples](#large-working-examples) below.
-- Stricter typing rules and rejected forms: [docs/vector-limitations.md](docs/vector-limitations.md).
-
-## Linear algebra: concepts and more examples
-
-The types and operators above are chosen so that **familiar math notation** has a direct counterpart in NiaLang:
-
-| Idea | In NiaLang | Notes |
-|------|------------|--------|
-| Vector in **R**^n (fixed dimension) | `vector` + literal `Ty [ X: …, Y: … ]`, or anonymous `<1, 2, 3>` | Named vectors are nominal with axis fields; anonymous vectors are structural by element type and length. |
-| Inner product *u·v* (standard dot) | `u @ v` | Result is the **scalar** element type of that vector. |
-| Hadamard product *u* ∘ *v* | `u * v` | Same vector type on both sides. |
-| Scalar multiplication α*v* | `v * alpha` or `alpha * v` | `alpha` must match the vector’s element type. |
-| Matrix-vector product *Av* | `A @ v` | Requires `matrix_cols(A) == len(v)`; result length is `matrix_rows(A)`. |
-| Vector-matrix product *vA* | `v @ A` | Requires `len(v) == matrix_rows(A)`; result length is `matrix_cols(A)`. |
-| Matrix product *AB* | `A @ B` | Requires `matrix_cols(A) == matrix_rows(B)`. |
-| Rank-1 outer product (column times row) | `outer(u, v)` | Rows from the first vector, columns from the second (same element type). |
-| Determinant det *A* (square) | `A.det()` | Non-square matrices abort at runtime. |
-
-### Example: orthogonal projection coefficient (integer grid)
-
-With vectors `u` and `v`, the scalar *c* = (*u*·*v*) / (*v*·*v*) is a simple use of two dot products. Here `Vec2` uses `i32` (integer division follows the language’s `/` rules):
+The determinant is exposed as a `Matrix` method:
 
 ```nia
-vector Vec2 i32 [ X, Y ]
+def main() -> i32 {
+    let m = matrix([
+        [1, 2, 0, 1, 3],
+        [2, 5, 1, 0, 4],
+        [0, 1, 3, 2, 1],
+        [1, 0, 2, 4, 2],
+        [3, 1, 0, 2, 5],
+    ]);
 
-fn main() i32 {
-    let u = Vec2 [X: 1, Y: 0];
-    let v = Vec2 [X: 3, Y: 4];
-    let num: i32 = u @ v;
-    let den: i32 = v @ v;
-    let c: i32 = num / den;   // 12 / 25 → 0 for i32 division
-    let along = v * c;       // scale v by c (here zero)
-    println(along);
-    0
-}
-```
+    println(m.det());
 
-For the same geometry with rationals, use a float element type (e.g. `vector Vec2 f64 [ X, Y ]`) and `f64` literals so `/` matches real division.
-
-### Example: 2×2 multiplication and determinant
-
-```nia
-fn main() i32 {
-    let a: Matrix = matrix([[1, 2], [3, 4]]);
-    let b: Matrix = matrix([[10, 20], [30, 40]]);
-    let ab: Matrix = a @ b;
-    println(ab);
-
-    let det: i32 = a.det();
-    println(det);   // -2
-
-    matrix_drop(ab);
-    matrix_drop(b);
-    matrix_drop(a);
-    0
-}
-```
-
-### Example: outer product as a rank-1 matrix
-
-```nia
-vector Vec3i i32 [ X, Y, Z ]
-vector Vec2i i32 [ U, V ]
-
-fn main() i32 {
-    let u = Vec3i [X: 1, Y: 2, Z: 3];
-    let v = Vec2i [U: 4, V: 5];
-    let m: Matrix = outer(u, v);
-    println(m);   // 3×2 matrix
     matrix_drop(m);
-    0
+    return 0;
 }
 ```
 
-### Runnable samples (linear algebra)
+Only square matrices have determinants.
 
-| File | What it highlights |
-|------|---------------------|
-| `examples/sample_vector.nia` | One `vector` type, literal, `println`. |
-| `examples/sample_vector_arith.nia` | Two vector types, component ops, dot product, more `println`. |
-| `examples/sample_anon_vector.nia` | Anonymous `<...>` vectors, compatible arithmetic, `@`, scalar scaling, `outer`. |
-| `examples/sample_matrix_rc.nia` | `Matrix` lifecycle: build, print, clone, refcount, `matrix_drop`. |
-| `examples/sample_matrix_arith.nia` | Matrix `+`, `-`, `*`, `@`, scalar `*`, `.det()`. |
-| `examples/sample_matrix_vector.nia` | `Matrix @ vector` and `vector @ Matrix` for named and anonymous vectors. |
-| `examples/sample_matrix_vector_large.nia` | Larger `32 x 32` Matrix/vector products, 1024 matrix cells. |
+### Larger Matrix/Vector Sample
 
-Eigenvalues, decompositions, and sparse linear algebra are **not** built in; for that you would call out to other libraries or extend the toolchain. The sweet spot is **small dense** vectors and matrices with explicit, predictable lowering to LLVM.
+The project includes a larger matrix-vector example with roughly a thousand
+elements and non-uniform generated values:
 
-## Large Working Examples
+```bash
+cargo run -- examples/sample_matrix_vector_large.nia
+```
 
-The first three examples below are mirrored under `examples/tests/ok_readme_*.nia` and validated by `cargo test`. The vector example matches the same rules as `examples/sample_vector_arith.nia` (second vector type and more `println` calls live there).
+It is useful as a smoke test for generated loops and larger dense values.
 
-### 1) Arrays: reverse + bubble sort
+## Matrix Ownership
+
+`Matrix` values are reference-counted heap handles in the runtime. For now,
+matrix lifetime management is explicit:
 
 ```nia
-fn reverse_array(arr: [u8; 8]) [u8; 8] {
-    for i in 0..len(arr) / 2 {
-        let temp = arr[i];
-        arr[i] = arr[len(arr) - 1 - i];
-        arr[len(arr) - 1 - i] = temp;
+let m = matrix([
+    [1, 2],
+    [3, 4],
+]);
+
+println(m.det());
+matrix_drop(m);
+```
+
+This is intentionally simple while the language is young. Long term, this is
+one of the areas where the compiler can grow more ownership and lifetime help.
+
+## The Rest of the Language
+
+NiaLang is not only a matrix calculator. It has a small general-purpose core
+around the linear algebra features.
+
+### Types
+
+Primitive types:
+
+```nia
+let i: i32 = 42;
+let f: f64 = 3.14;
+let ok: bool = true;
+let msg: string = "hello";
+```
+
+Arrays:
+
+```nia
+let xs = [1, 2, 3, 4];
+println(xs[0]);
+```
+
+Pointers and heap allocation:
+
+```nia
+let p = box(123);
+println(*p);
+free(p);
+```
+
+### Control Flow
+
+```nia
+def main() -> i32 {
+    let n = 5;
+
+    if n > 0 {
+        println("positive");
+    } else {
+        println("not positive");
     }
-    arr
-}
 
-fn bubble_sort(arr: [u8; 8]) [u8; 8] {
-    for i in 0..len(arr) {
-        for j in 0..len(arr) - 1 - i {
-            if arr[j] > arr[j + 1] {
-                let temp = arr[j];
-                arr[j] = arr[j + 1];
-                arr[j + 1] = temp;
-            }
-        }
+    let acc = 0;
+    let i = 0;
+    while i < 5 {
+        acc = acc + i;
+        i = i + 1;
     }
-    arr
-}
 
-fn main() i32 {
-    let src: [u8; 8] = [8, 3, 6, 1, 4, 7, 2, 5];
-    let rev = reverse_array(src);
-    let sorted = bubble_sort(src);
-    println(src);
-    println(rev);
-    println(sorted);
-    0
+    println(acc);
+    return 0;
 }
 ```
 
-Fixture: `examples/tests/ok_readme_arrays.nia`
-
-### 2) Enums with payload and `match`
+### Structs, Enums, Match
 
 ```nia
-enum Msg {
-    Ping,
-    Add(i32, i32),
-    Move { x: i32, y: i32 },
+struct Point {
+    x: i32,
+    y: i32,
 }
 
-fn eval(m: Msg) i32 {
-    match m {
-        Msg::Ping => 0,
-        Msg::Add(a, b) => a + b,
-        Msg::Move { x, y } => x + y,
+enum Shape {
+    Dot,
+    Circle(i32),
+    Rect(i32, i32),
+}
+
+def area(shape: Shape) -> i32 {
+    match shape {
+        Shape::Dot => 0,
+        Shape::Circle(r) => r * r,
+        Shape::Rect(w, h) => w * h,
     }
 }
-
-fn main() i32 {
-    println(eval(Msg::Ping));
-    println(eval(Msg::Add(7, 5)));
-    println(eval(Msg::Move { x: 10, y: 20 }));
-    0
-}
 ```
 
-Fixture: `examples/tests/ok_readme_enums.nia`
+### Impl Methods
 
-### 3) Pointers and heap operations
+NiaLang has Rust-style `impl` blocks as syntax sugar over normal functions:
 
 ```nia
-struct Pair(i32, i32)
-
-fn write_mid(arr_ptr: &[u8; 4]) {
-    (*arr_ptr)[1] = 9;
+struct Counter {
+    value: i32,
 }
 
-fn main() i32 {
-    let p: &i32 = alloc(42);
-    println(*p);
+impl Counter {
+    def new(value: i32) -> Counter {
+        return Counter { value: value };
+    }
 
-    let p2: &i32 = realloc(p, 100);
-    println(*p2);
-    dealloc(p2);
+    def inc(self) -> Counter {
+        return Counter { value: self.value + 1 };
+    }
 
-    let pair_ptr: &Pair = alloc(Pair(7, 9));
-    println((*pair_ptr).0);
-    dealloc(pair_ptr);
-
-    let arr: [u8; 4] = [1, 2, 3, 4];
-    write_mid(&arr);
-    println(arr);
-    0
+    def get(&self) -> i32 {
+        return self.value;
+    }
 }
-```
 
-Fixture: `examples/tests/ok_readme_pointers.nia`
-
-### 4) Fixed-size vectors: components, scaling, dot product
-
-```nia
-// `vector Name ElementTy [ axes... ]` — fixed 2D integer vector (X,Y are i32 fields).
-vector Vec2 i32 [ X, Y ]
-
-fn main() i32 {
-    // Literals: same shape as struct literals, one value per axis.
-    let u = Vec2 [X: 3, Y: 4];
-    let v = Vec2 [X: 1, Y: 2];
-    let w = Vec2 [X: 1, Y: 1];
-
-    // `+` / `-` : component-wise (per-axis) sum / difference; result type is Vec2.
-    let sum = u + v;       // [3+1, 4+2] = [4, 6]
-    let diff = u - v;      // [3-1, 4-2] = [2, 2]
-
-    // `*` with another Vec2: Hadamard (component-wise) product, still Vec2.
-    let had = u * v;       // [3*1, 4*2] = [3, 8]
-
-    // `*` with a scalar of the *axis* type (here i32): scale every component.
-    let scaled = u * 2;    // [3*2, 4*2] = [6, 8]   (same as `2 * u`)
-
-    // `@` : dot product — u.X*v.X + u.Y*v.Y; result is scalar i32.
-    let dot = u @ v;       // 3*1 + 4*2 = 11
-
-    // `@` binds like `*`; parentheses group the vector sum before dotting with w.
-    let mixed = (u + v) @ w;   // (u+v) is Vec2, then dot with w → scalar i32
-
-    println(sum);    // whole-vector print
-    println(diff);
-    println(had);
-    println(scaled);
-    println(dot);    // scalar
-    println(mixed);  // scalar
-    0
+def main() -> i32 {
+    let c = Counter::new(10).inc();
+    println(c.get());
+    return 0;
 }
 ```
 
-See also: `examples/sample_vector_arith.nia` (includes a second vector type `Vec3`) and `examples/sample_anon_vector.nia` (uses `<1, 2, 3>` without a named declaration).
+Both `self` and `&self` are supported in method syntax. Mutable self is not part
+of the language yet.
 
-## Project Layout
+## Example Map
 
-```text
-src/
-  ast/
-  lexer/
-  parser/
-  semantics/typecheck/
-  backend/codegen/
-  driver/
-```
+Good places to start:
 
-Tests for each component live in separate files alongside modules:
-- `src/lexer/tests.rs`
-- `src/parser/tests.rs`
-- `src/semantics/typecheck/tests.rs`
-- `src/backend/codegen/tests.rs`
-- `src/driver/tests.rs`
+| File | What it shows |
+| --- | --- |
+| `examples/sample_linalg_commented.nia` | guided linear algebra tour |
+| `examples/sample_vector.nia` | named vector basics |
+| `examples/sample_vector_arith.nia` | vector arithmetic |
+| `examples/sample_anon_vector.nia` | anonymous vectors |
+| `examples/sample_matrix_arith.nia` | matrix arithmetic and multiplication |
+| `examples/sample_matrix_vector.nia` | matrix-vector and vector-matrix products |
+| `examples/sample_matrix_vector_large.nia` | larger dense matrix-vector smoke test |
+| `examples/sample_matrix_det.nia` | determinant as `m.det()` |
+| `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
+| `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
+| `examples/sample_all.nia` | broad language feature sample |
+
+## Project Status
+
+NiaLang is an experimental compiler and language playground.
+
+Currently available:
+
+- scalar arithmetic, variables, functions, and control flow
+- arrays, structs, enums, pattern matching, pointers, and heap allocation
+- named and anonymous vectors
+- dense matrices
+- vector arithmetic, dot products, outer products
+- matrix arithmetic and matrix multiplication
+- matrix-vector and vector-matrix multiplication
+- determinant as a `Matrix` method
+- Rust-style `impl` method syntax
+
+Still intentionally small or unfinished:
+
+- no sparse matrices
+- no eigenvalues, QR, SVD, or advanced decomposition APIs
+- explicit matrix lifetime management
+- limited diagnostics compared with production languages
+- experimental syntax and type inference
+
+The sweet spot today is compact examples, compiler experiments, and dense linear
+algebra programs that should read close to the math.
