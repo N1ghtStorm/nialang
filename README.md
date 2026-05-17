@@ -354,6 +354,26 @@ fn main() i32 {
 }
 ```
 
+### Scoped Blocks
+
+`quant { ... }` is reserved syntax for future quant-specific behavior. Today it
+acts like a normal block scope: bindings declared inside do not escape, while
+assignments to outer variables still work.
+
+```nia
+fn main() i32 {
+    let x = 1;
+    let y = 0;
+
+    quant {
+        let local = 41;
+        y = x + local;
+    }
+
+    y
+}
+```
+
 ### Structs, Enums, Match
 
 ```nia

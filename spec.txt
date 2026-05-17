@@ -90,3 +90,18 @@ fn main() i32 {
 }
 
 `break` внутри `while` / `for` пока не поддерживается (в отличие от Rust).
+
+---------
+
+quant scope (reserved syntax; currently behaves like a normal block scope):
+
+fn main() i32 {
+    let x = 1;
+    quant {
+        let local = x + 41;
+        println(local);
+    }
+    0
+}
+
+Bindings created inside `quant` do not escape the block.

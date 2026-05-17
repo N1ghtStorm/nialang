@@ -28,6 +28,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_tuple_struct.nia"),
         include_str!("../../../examples/tests/ok_struct_named.nia"),
         include_str!("../../../examples/tests/ok_impl_methods.nia"),
+        include_str!("../../../examples/tests/ok_quant_scope.nia"),
         include_str!("../../../examples/tests/ok_print_primitives.nia"),
         include_str!("../../../examples/tests/ok_pointers.nia"),
         include_str!("../../../examples/tests/ok_nested_if.nia"),
@@ -63,6 +64,37 @@ fn typecheck_ok_fixtures() {
         let r = check_all(src);
         assert!(r.is_ok(), "{r:?}");
     }
+}
+
+#[test]
+fn typecheck_quant_scope_does_not_leak_bindings() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        let hidden = 1;
+        println(hidden);
+    }
+    hidden
+}
+"#;
+    let err = check_all(src).expect_err("quant-local binding must not leak");
+    assert!(err.contains("unknown variable `hidden`"), "{err}");
+}
+
+#[test]
+fn typecheck_quant_expression_uses_tail_type_and_scoped_bindings() {
+    let src = r#"
+fn main() i32 {
+    let x = 1;
+    let y = quant {
+        let local = 41;
+        x + local
+    };
+    y
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
 }
 
 #[test]

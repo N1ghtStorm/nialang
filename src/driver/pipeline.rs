@@ -3,7 +3,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backend::codegen;
-use crate::frontend::parser::{tokenize, Parser};
+use crate::frontend::parser::{Parser, tokenize};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
 
 /// Compiles nialang source text into one textual LLVM IR module.
@@ -271,6 +271,7 @@ fn token_lexeme(token: &str) -> Option<&'static str> {
         "Struct" => Some("struct"),
         "Vector" => Some("vector"),
         "Enum" => Some("enum"),
+        "Quant" => Some("quant"),
         "If" => Some("if"),
         "While" => Some("while"),
         "Loop" => Some("loop"),
