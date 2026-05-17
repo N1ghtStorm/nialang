@@ -20,6 +20,24 @@ fn codegen_contains_if_branching() {
 }
 
 #[test]
+fn codegen_quant_expression_emits_tail_value() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let x = 1;
+    let y = quant {
+        let local = 41;
+        x + local
+    };
+    y
+}
+"#,
+    );
+    assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("%local.addr = alloca i32"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_impl_method_lowers_to_function_call() {
     let ll = emit(include_str!("../../../examples/tests/ok_impl_methods.nia"));
     assert!(ll.contains("define i32 @Point__sum(ptr %self)"), "IR:\n{ll}");

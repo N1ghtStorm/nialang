@@ -17,7 +17,7 @@ fn collect(src: &str) -> Vec<Token> {
 #[test]
 /// Verifies all supported keywords and primitive type names are recognized.
 fn lex_keywords_and_types() {
-    let src = "fn let struct impl if return true false i8 u8 i16 u16 i32 i64 u64 i128 isize usize u128 bool f16 f32 f64";
+    let src = "fn let struct impl quant if return true false i8 u8 i16 u16 i32 i64 u64 i128 isize usize u128 bool f16 f32 f64";
     let toks = collect(src);
     assert_eq!(
         toks,
@@ -26,6 +26,7 @@ fn lex_keywords_and_types() {
             Token::Let,
             Token::Struct,
             Token::Impl,
+            Token::Quant,
             Token::If,
             Token::Return,
             Token::Bool(true),

@@ -33,6 +33,26 @@ fn parse_fixture_impl_methods() {
 }
 
 #[test]
+fn parse_fixture_quant_scope() {
+    parse_ok(include_str!("../../examples/tests/ok_quant_scope.nia"));
+}
+
+#[test]
+fn parse_quant_expression_with_tail() {
+    parse_ok(
+        r#"
+fn main() i32 {
+    let y = quant {
+        let local = 41;
+        local
+    };
+    y
+}
+"#,
+    );
+}
+
+#[test]
 fn parse_rejects_impl_method_without_self() {
     let src = r#"
 struct Point { x: i32, y: i32 }

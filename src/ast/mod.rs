@@ -193,6 +193,10 @@ pub enum Stmt {
         end: Expr,
         body: Block,
     },
+    /// `quant { ... }` — reserved syntax that currently behaves like a block scope.
+    Quant {
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +258,10 @@ pub enum Expr {
     Match {
         scrutinee: Box<Expr>,
         arms: Vec<(MatchPattern, Expr)>,
+    },
+    /// `quant { ... }` used as an expression; evaluates to the block tail or `()`.
+    Quant {
+        body: Box<Block>,
     },
     Field(Box<Expr>, String),
     Index(Box<Expr>, Box<Expr>),

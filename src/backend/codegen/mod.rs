@@ -81,6 +81,7 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
                 collect_string_literals_expr(ae, out);
             }
         }
+        Expr::Quant { body } => collect_string_literals_block(body, out),
         Expr::Index(a, i) => {
             collect_string_literals_expr(a, out);
             collect_string_literals_expr(i, out);
@@ -121,6 +122,7 @@ fn collect_string_literals_stmt(st: &Stmt, out: &mut BTreeSet<String>) {
             collect_string_literals_expr(end, out);
             collect_string_literals_block(body, out);
         }
+        Stmt::Quant { body } => collect_string_literals_block(body, out),
         Stmt::Break => {}
     }
 }
@@ -3945,6 +3947,24 @@ impl<'a> Gen<'a> {
 
                 writeln!(self.out, "{}:", exit).unwrap();
             }
+            Stmt::Quant { body } => {
+                if self.terminated {
+                    return;
+                }
+                let mut body_locals = locals.clone();
+                self.terminated = false;
+                for st in &body.stmts {
+                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    if self.terminated {
+                        break;
+                    }
+                }
+                if !self.terminated {
+                    if let Some(tail) = &body.tail {
+                        self.emit_expr(tail, &body_locals, None);
+                    }
+                }
+            }
         }
     }
 
@@ -5193,6 +5213,21 @@ impl<'a> Gen<'a> {
                         .join(", ");
                     writeln!(self.out, "  %{} = phi {} {}", phi, ll, incoming).unwrap();
                     (out_ty, format!("%{phi}"))
+                }
+            }
+            Expr::Quant { body } => {
+                let mut body_locals = locals.clone();
+                for st in &body.stmts {
+                    self.emit_stmt(st, &mut body_locals, None);
+                    debug_assert!(
+                        !self.terminated,
+                        "typecheck rejects terminating statements in quant expressions"
+                    );
+                }
+                if let Some(tail) = &body.tail {
+                    self.emit_expr(tail, &body_locals, hint)
+                } else {
+                    (Ty::Unit, String::new())
                 }
             }
             Expr::ArrayLit(elems) => {

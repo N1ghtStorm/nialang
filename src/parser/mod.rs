@@ -1,6 +1,6 @@
 use crate::ast::{
-    method_symbol, Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern,
-    Stmt, StructDef, Ty, VectorDef,
+    Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
+    Ty, VectorDef, method_symbol,
 };
 use crate::lexer::Token;
 
@@ -444,6 +444,9 @@ impl Parser {
                 Token::For => {
                     stmts.push(self.parse_for_stmt()?);
                 }
+                Token::Quant => {
+                    stmts.push(self.parse_quant_stmt()?);
+                }
                 Token::Return => {
                     stmts.push(self.parse_return_stmt()?);
                 }
@@ -552,6 +555,13 @@ impl Parser {
             end,
             body,
         })
+    }
+
+    /// Parses `quant { ... }`.
+    fn parse_quant_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Quant)?;
+        let body = self.parse_block()?;
+        Ok(Stmt::Quant { body })
     }
 
     /// Parses condition expression for `if` / `while`.
@@ -824,6 +834,13 @@ impl Parser {
     /// and array literals. Struct literals start here too after identifier lookahead.
     fn parse_atom(&mut self) -> Result<Expr, String> {
         match self.peek() {
+            Token::Quant => {
+                self.bump();
+                let body = self.parse_block()?;
+                Ok(Expr::Quant {
+                    body: Box::new(body),
+                })
+            }
             Token::Match => self.parse_match_expr(),
             Token::Amp => {
                 self.bump();

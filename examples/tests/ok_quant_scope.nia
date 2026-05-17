@@ -1,0 +1,12 @@
+fn main() i32 {
+    let x = 1;
+    let y = 0;
+
+    quant {
+        let local = 41;
+        y = x + local;
+        println("inside quant");
+    }
+
+    y
+}
