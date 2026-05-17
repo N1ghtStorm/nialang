@@ -447,6 +447,9 @@ impl Parser {
                 Token::Quant => {
                     stmts.push(self.parse_quant_stmt()?);
                 }
+                Token::Gpu => {
+                    stmts.push(self.parse_gpu_stmt()?);
+                }
                 Token::Return => {
                     stmts.push(self.parse_return_stmt()?);
                 }
@@ -562,6 +565,13 @@ impl Parser {
         self.expect(&Token::Quant)?;
         let body = self.parse_block()?;
         Ok(Stmt::Quant { body })
+    }
+
+    /// Parses `gpu { ... }`.
+    fn parse_gpu_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Gpu)?;
+        let body = self.parse_block()?;
+        Ok(Stmt::Gpu { body })
     }
 
     /// Parses condition expression for `if` / `while`.
@@ -838,6 +848,13 @@ impl Parser {
                 self.bump();
                 let body = self.parse_block()?;
                 Ok(Expr::Quant {
+                    body: Box::new(body),
+                })
+            }
+            Token::Gpu => {
+                self.bump();
+                let body = self.parse_block()?;
+                Ok(Expr::Gpu {
                     body: Box::new(body),
                 })
             }

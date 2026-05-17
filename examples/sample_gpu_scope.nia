@@ -1,0 +1,14 @@
+fn main() i32 {
+    let x = 1;
+    let y = 0;
+
+    let val = gpu {
+        let local = 41;
+        y = x + local;
+        println("inside gpu");
+        y
+    };
+    println(val);
+
+    y
+}

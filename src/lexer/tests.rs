@@ -17,7 +17,7 @@ fn collect(src: &str) -> Vec<Token> {
 #[test]
 /// Verifies all supported keywords and primitive type names are recognized.
 fn lex_keywords_and_types() {
-    let src = "fn let struct impl quant if return true false i8 u8 i16 u16 i32 i64 u64 i128 isize usize u128 bool f16 f32 f64";
+    let src = "fn let struct impl quant gpu if return true false i8 u8 i16 u16 i32 i64 u64 i128 isize usize u128 bool f16 f32 f64";
     let toks = collect(src);
     assert_eq!(
         toks,
@@ -27,6 +27,7 @@ fn lex_keywords_and_types() {
             Token::Struct,
             Token::Impl,
             Token::Quant,
+            Token::Gpu,
             Token::If,
             Token::Return,
             Token::Bool(true),
@@ -67,10 +68,7 @@ fn lex_float_literals_fraction_and_exponent() {
 #[test]
 fn lex_while_keyword() {
     let toks = collect("while x");
-    assert_eq!(
-        toks,
-        vec![Token::While, Token::Ident("x".into()),]
-    );
+    assert_eq!(toks, vec![Token::While, Token::Ident("x".into()),]);
 }
 
 #[test]
@@ -209,7 +207,12 @@ fn lex_unknown_char_stops_token_stream() {
     let toks = collect(src);
     assert_eq!(
         toks,
-        vec![Token::Let, Token::Ident("x".into()), Token::Eq, Token::Int(1)]
+        vec![
+            Token::Let,
+            Token::Ident("x".into()),
+            Token::Eq,
+            Token::Int(1)
+        ]
     );
 }
 

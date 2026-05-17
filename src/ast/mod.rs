@@ -197,6 +197,10 @@ pub enum Stmt {
     Quant {
         body: Block,
     },
+    /// `gpu { ... }` — reserved syntax that currently behaves like a block scope.
+    Gpu {
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -261,6 +265,10 @@ pub enum Expr {
     },
     /// `quant { ... }` used as an expression; evaluates to the block tail or `()`.
     Quant {
+        body: Box<Block>,
+    },
+    /// `gpu { ... }` used as an expression; evaluates to the block tail or `()`.
+    Gpu {
         body: Box<Block>,
     },
     Field(Box<Expr>, String),

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     ast::VectorDef,
-    parser::{tokenize, Parser},
+    parser::{Parser, tokenize},
 };
 
 fn parse(src: &str) -> (Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>, Vec<VectorDef>) {
@@ -29,6 +29,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_struct_named.nia"),
         include_str!("../../../examples/tests/ok_impl_methods.nia"),
         include_str!("../../../examples/tests/ok_quant_scope.nia"),
+        include_str!("../../../examples/tests/ok_gpu_scope.nia"),
         include_str!("../../../examples/tests/ok_print_primitives.nia"),
         include_str!("../../../examples/tests/ok_pointers.nia"),
         include_str!("../../../examples/tests/ok_nested_if.nia"),
@@ -87,6 +88,26 @@ fn typecheck_quant_expression_uses_tail_type_and_scoped_bindings() {
 fn main() i32 {
     let x = 1;
     let y = quant {
+        let local = 41;
+        x + local
+    };
+    y
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_gpu_scope_and_expression_match_quant_behavior() {
+    let src = r#"
+fn main() i32 {
+    let x = 1;
+    gpu {
+        let hidden = x + 1;
+        println(hidden);
+    }
+    let y = gpu {
         let local = 41;
         x + local
     };

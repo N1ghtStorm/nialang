@@ -38,11 +38,34 @@ fn parse_fixture_quant_scope() {
 }
 
 #[test]
+fn parse_fixture_gpu_scope() {
+    parse_ok(include_str!("../../examples/tests/ok_gpu_scope.nia"));
+}
+
+#[test]
 fn parse_quant_expression_with_tail() {
     parse_ok(
         r#"
 fn main() i32 {
     let y = quant {
+        let local = 41;
+        local
+    };
+    y
+}
+"#,
+    );
+}
+
+#[test]
+fn parse_gpu_scope_and_expression_with_tail() {
+    parse_ok(
+        r#"
+fn main() i32 {
+    gpu {
+        println(1);
+    }
+    let y = gpu {
         let local = 41;
         local
     };
@@ -191,7 +214,9 @@ fn parse_fixture_enum_match() {
 
 #[test]
 fn parse_fixture_enum_payload_match() {
-    parse_ok(include_str!("../../examples/tests/ok_enum_payload_match.nia"));
+    parse_ok(include_str!(
+        "../../examples/tests/ok_enum_payload_match.nia"
+    ));
 }
 
 #[test]
@@ -254,7 +279,9 @@ let x: u8 = arr[1];
 
 #[test]
 fn parse_fixture_array_index_store() {
-    parse_ok(include_str!("../../examples/tests/ok_array_index_store.nia"));
+    parse_ok(include_str!(
+        "../../examples/tests/ok_array_index_store.nia"
+    ));
 }
 
 #[test]

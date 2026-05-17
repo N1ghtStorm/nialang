@@ -1,5 +1,5 @@
 use super::*;
-use crate::parser::{tokenize, Parser};
+use crate::parser::{Parser, tokenize};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
 
 fn emit(src: &str) -> String {
@@ -38,12 +38,39 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_gpu_expression_emits_tail_value() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let x = 1;
+    let y = gpu {
+        let local = 41;
+        x + local
+    };
+    y
+}
+"#,
+    );
+    assert!(ll.contains("add nsw i32"), "IR:\n{ll}");
+    assert!(ll.contains("%local.addr = alloca i32"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_impl_method_lowers_to_function_call() {
     let ll = emit(include_str!("../../../examples/tests/ok_impl_methods.nia"));
-    assert!(ll.contains("define i32 @Point__sum(ptr %self)"), "IR:\n{ll}");
-    assert!(ll.contains("define i32 @Point__add(%struct.Point %self, i32 %n)"), "IR:\n{ll}");
+    assert!(
+        ll.contains("define i32 @Point__sum(ptr %self)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("define i32 @Point__add(%struct.Point %self, i32 %n)"),
+        "IR:\n{ll}"
+    );
     assert!(ll.contains("call i32 @Point__sum(ptr"), "IR:\n{ll}");
-    assert!(ll.contains("call i32 @Point__add(%struct.Point"), "IR:\n{ll}");
+    assert!(
+        ll.contains("call i32 @Point__add(%struct.Point"),
+        "IR:\n{ll}"
+    );
 }
 
 #[test]

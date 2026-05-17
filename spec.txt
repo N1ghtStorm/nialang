@@ -93,7 +93,7 @@ fn main() i32 {
 
 ---------
 
-quant scope (reserved syntax; currently behaves like a normal block scope):
+quant/gpu scopes (reserved syntax; currently behave like normal block scopes):
 
 fn main() i32 {
     let x = 1;
@@ -101,7 +101,10 @@ fn main() i32 {
         let local = x + 41;
         println(local);
     }
+    gpu {
+        println(x);
+    }
     0
 }
 
-Bindings created inside `quant` do not escape the block.
+Bindings created inside `quant` or `gpu` do not escape the block.

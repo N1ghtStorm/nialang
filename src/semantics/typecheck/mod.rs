@@ -1643,7 +1643,44 @@ fn infer_expr(
             }
             let mut body_env = env.clone();
             for st in &body.stmts {
-                check_stmt(st, &mut body_env, structs, enums, vectors, fns, None, 0, false)?;
+                check_stmt(
+                    st,
+                    &mut body_env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    None,
+                    0,
+                    false,
+                )?;
+            }
+            if let Some(tail) = &body.tail {
+                infer_expr(tail, &body_env, structs, enums, vectors, fns, hint)
+            } else {
+                Ok(Ty::Unit)
+            }
+        }
+        Expr::Gpu { body } => {
+            if block_contains_return(body) {
+                return Err("`return` is not allowed inside `gpu` expressions".into());
+            }
+            if block_has_break(body) {
+                return Err("`break` is not allowed inside `gpu` expressions".into());
+            }
+            let mut body_env = env.clone();
+            for st in &body.stmts {
+                check_stmt(
+                    st,
+                    &mut body_env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    None,
+                    0,
+                    false,
+                )?;
             }
             if let Some(tail) = &body.tail {
                 infer_expr(tail, &body_env, structs, enums, vectors, fns, hint)
@@ -1856,6 +1893,7 @@ fn stmt_contains_return(st: &Stmt) -> bool {
         Stmt::Loop { body } => block_contains_return(body),
         Stmt::For { body, .. } => block_contains_return(body),
         Stmt::Quant { body } => block_contains_return(body),
+        Stmt::Gpu { body } => block_contains_return(body),
         Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Break => false,
     }
 }
@@ -1867,7 +1905,8 @@ fn stmt_has_break(st: &Stmt) -> bool {
         Stmt::While { body, .. }
         | Stmt::Loop { body }
         | Stmt::For { body, .. }
-        | Stmt::Quant { body } => block_has_break(body),
+        | Stmt::Quant { body }
+        | Stmt::Gpu { body } => block_has_break(body),
         Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Return(_) => false,
     }
 }
@@ -2152,6 +2191,33 @@ fn check_stmt(
             }
         }
         Stmt::Quant { body } => {
+            let mut body_env = env.clone();
+            for st in &body.stmts {
+                check_stmt(
+                    st,
+                    &mut body_env,
+                    struct_fields,
+                    enums,
+                    vectors,
+                    fn_sigs,
+                    fn_ret,
+                    loop_depth,
+                    break_inside_while_or_for,
+                )?;
+            }
+            if let Some(tail) = &body.tail {
+                infer_expr(
+                    tail,
+                    &body_env,
+                    struct_fields,
+                    enums,
+                    vectors,
+                    fn_sigs,
+                    None,
+                )?;
+            }
+        }
+        Stmt::Gpu { body } => {
             let mut body_env = env.clone();
             for st in &body.stmts {
                 check_stmt(

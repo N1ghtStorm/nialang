@@ -272,6 +272,7 @@ fn token_lexeme(token: &str) -> Option<&'static str> {
         "Vector" => Some("vector"),
         "Enum" => Some("enum"),
         "Quant" => Some("quant"),
+        "Gpu" => Some("gpu"),
         "If" => Some("if"),
         "While" => Some("while"),
         "Loop" => Some("loop"),

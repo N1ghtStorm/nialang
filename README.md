@@ -356,9 +356,9 @@ fn main() i32 {
 
 ### Scoped Blocks
 
-`quant { ... }` is reserved syntax for future quant-specific behavior. Today it
-acts like a normal block scope: bindings declared inside do not escape, while
-assignments to outer variables still work.
+`quant { ... }` and `gpu { ... }` are reserved syntax for future specialized
+behavior. Today they act like normal block scopes: bindings declared inside do
+not escape, while assignments to outer variables still work.
 
 ```nia
 fn main() i32 {
@@ -368,6 +368,10 @@ fn main() i32 {
     quant {
         let local = 41;
         y = x + local;
+    }
+
+    gpu {
+        y = y + 1;
     }
 
     y
