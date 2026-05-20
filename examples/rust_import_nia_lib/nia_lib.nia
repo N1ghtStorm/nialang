@@ -12,3 +12,10 @@ extern fn nia_add(a: i32, b: i32) i32 {
 extern fn nia_double(x: i32) i32 {
     nia_add(x, x)
 }
+
+extern fn something() i32 {
+    let a: i32<> = <1, 2, 3>;
+    println("Лалка");
+    println(a);
+    666
+}
