@@ -4209,9 +4209,15 @@ impl<'a> Gen<'a> {
             let ps = sanitize(pname);
             params.push(format!("{ll} %{ps}"));
         }
+        let linkage = if f.is_extern || f.name == "main" {
+            ""
+        } else {
+            "internal "
+        };
         writeln!(
             self.out,
-            "define {} @{}({}) {{",
+            "define {}{} @{}({}) {{",
+            linkage,
             ret_ll,
             sanitize(&f.name),
             params.join(", ")

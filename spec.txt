@@ -8,7 +8,8 @@ fn bar(a: i32, b: i32) i32 {
     a + b
 }
 
-extern fn marker is accepted now; it currently behaves like a normal function:
+top-level extern fn with a body exports an unmangled C ABI symbol.
+For now, extern signatures accept only primitive C-compatible scalars, string, and pointers:
 
 extern fn baz(a: i32) i32 {
     a

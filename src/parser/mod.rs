@@ -90,11 +90,13 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut methods = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
-            if !matches!(self.peek(), Token::Fn | Token::Extern) {
-                return Err(format!(
-                    "expected method `fn` or `extern fn`, got {:?}",
-                    self.peek()
-                ));
+            if matches!(self.peek(), Token::Extern) {
+                return Err(
+                    "extern methods are not supported; export a top-level extern fn instead".into(),
+                );
+            }
+            if !matches!(self.peek(), Token::Fn) {
+                return Err(format!("expected method `fn`, got {:?}", self.peek()));
             }
             let mut method = self.parse_method(&owner)?;
             let Some((first_name, first_ty)) = method.params.first() else {
@@ -125,12 +127,6 @@ impl Parser {
     }
 
     fn parse_method(&mut self, owner: &Ty) -> Result<FnDef, String> {
-        let is_extern = if matches!(self.peek(), Token::Extern) {
-            self.bump();
-            true
-        } else {
-            false
-        };
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
         self.expect(&Token::LParen)?;
@@ -157,7 +153,7 @@ impl Parser {
         let body = self.parse_block()?;
         Ok(FnDef {
             name,
-            is_extern,
+            is_extern: false,
             params,
             ret,
             body,

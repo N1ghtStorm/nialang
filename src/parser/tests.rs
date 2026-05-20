@@ -94,7 +94,7 @@ fn main() i32 {
 }
 
 #[test]
-fn parse_extern_method_marker() {
+fn parse_rejects_extern_method_marker() {
     let src = r#"
 struct Counter { value: i32 }
 
@@ -110,12 +110,8 @@ fn main() i32 {
 }
 "#;
     let toks = tokenize(src);
-    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
-    let method = fns
-        .iter()
-        .find(|f| f.name == "Counter__get")
-        .expect("method");
-    assert!(method.is_extern);
+    let err = Parser::new(toks).parse_file().expect_err("extern method");
+    assert!(err.contains("extern methods are not supported"), "{err}");
 }
 
 #[test]

@@ -68,6 +68,57 @@ fn typecheck_ok_fixtures() {
 }
 
 #[test]
+fn typecheck_extern_fn_allows_c_abi_scalars_and_pointers() {
+    let src = r#"
+extern fn add(a: i32, b: i32) i32 {
+    a + b
+}
+
+extern fn store(p: &i32, v: i32) {
+    *p = v;
+}
+
+fn main() i32 {
+    add(1, 2)
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_extern_fn_rejects_non_c_abi_param_type() {
+    let src = r#"
+struct Pair { x: i32, y: i32 }
+
+extern fn bad(p: Pair) i32 {
+    p.x
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("non-C-ABI extern param");
+    assert!(err.contains("non-C-ABI type"), "{err}");
+}
+
+#[test]
+fn typecheck_extern_fn_rejects_non_c_abi_return_type() {
+    let src = r#"
+extern fn bad() i32<3> {
+    <1, 2, 3>
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("non-C-ABI extern return");
+    assert!(err.contains("return type is non-C-ABI"), "{err}");
+}
+
+#[test]
 fn typecheck_quant_scope_does_not_leak_bindings() {
     let src = r#"
 fn main() i32 {

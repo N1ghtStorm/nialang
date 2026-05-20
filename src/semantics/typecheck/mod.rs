@@ -259,6 +259,9 @@ pub fn check_fn(
     if sig.params.len() != f.params.len() {
         return Err("internal param len mismatch".into());
     }
+    if f.is_extern {
+        check_extern_c_abi(f, sig)?;
+    }
     let mut env: HashMap<String, Ty> = HashMap::new();
     for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
         if env.contains_key(pname) {
@@ -373,6 +376,48 @@ fn is_integer_ty(t: &Ty) -> bool {
 
 fn is_numeric_ty(t: &Ty) -> bool {
     is_integer_ty(t) || is_float_ty(t)
+}
+
+fn is_c_abi_ty(t: &Ty) -> bool {
+    match t {
+        Ty::I8
+        | Ty::U8
+        | Ty::I16
+        | Ty::U16
+        | Ty::I32
+        | Ty::I64
+        | Ty::U64
+        | Ty::I128
+        | Ty::Isize
+        | Ty::Usize
+        | Ty::U128
+        | Ty::Bool
+        | Ty::F32
+        | Ty::F64
+        | Ty::String
+        | Ty::Ptr(_) => true,
+        _ => false,
+    }
+}
+
+fn check_extern_c_abi(f: &FnDef, sig: &FnSig) -> Result<(), String> {
+    for ((name, _), ty) in f.params.iter().zip(&sig.params) {
+        if !is_c_abi_ty(ty) {
+            return Err(format!(
+                "extern fn `{}` parameter `{name}` has non-C-ABI type {ty:?}",
+                f.name
+            ));
+        }
+    }
+    if let Some(ret) = &sig.ret {
+        if !is_c_abi_ty(ret) {
+            return Err(format!(
+                "extern fn `{}` return type is non-C-ABI type {ret:?}",
+                f.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Returns whether type is a primitive printable scalar (`int` or `bool`).

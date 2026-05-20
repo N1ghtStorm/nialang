@@ -1,0 +1,17 @@
+// `extern fn` exports an unmangled C ABI symbol.
+// In the generated LLVM IR this function is emitted as:
+//   define i32 @nia_add(i32 %a, i32 %b)
+extern fn nia_add(a: i32, b: i32) i32 {
+    a + b
+}
+
+// A normal helper stays internal in generated LLVM IR.
+fn double(x: i32) i32 {
+    nia_add(x, x)
+}
+
+fn main() i32 {
+    let value = double(21);
+    println(value);
+    value
+}

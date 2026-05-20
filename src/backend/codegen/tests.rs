@@ -13,6 +13,23 @@ fn emit(src: &str) -> String {
 }
 
 #[test]
+fn codegen_extern_fn_exports_c_abi_symbol() {
+    let ll = emit(
+        r#"
+extern fn add(a: i32, b: i32) i32 {
+    a + b
+}
+
+fn main() i32 {
+    add(1, 2)
+}
+"#,
+    );
+    assert!(ll.contains("define i32 @add(i32 %a, i32 %b)"), "IR:\n{ll}");
+    assert!(ll.contains("call i32 @add(i32 1, i32 2)"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_contains_if_branching() {
     let ll = emit(include_str!("../../../examples/tests/ok_if_return.nia"));
     assert!(ll.contains("br i1"));
@@ -59,11 +76,11 @@ fn main() i32 {
 fn codegen_impl_method_lowers_to_function_call() {
     let ll = emit(include_str!("../../../examples/tests/ok_impl_methods.nia"));
     assert!(
-        ll.contains("define i32 @Point__sum(ptr %self)"),
+        ll.contains("define internal i32 @Point__sum(ptr %self)"),
         "IR:\n{ll}"
     );
     assert!(
-        ll.contains("define i32 @Point__add(%struct.Point %self, i32 %n)"),
+        ll.contains("define internal i32 @Point__add(%struct.Point %self, i32 %n)"),
         "IR:\n{ll}"
     );
     assert!(ll.contains("call i32 @Point__sum(ptr"), "IR:\n{ll}");
@@ -307,7 +324,7 @@ fn codegen_contains_print_for_primitives() {
 fn codegen_pointer_load_present() {
     let ll = emit(include_str!("../../../examples/tests/ok_pointers.nia"));
     assert!(ll.contains("load i32, ptr"));
-    assert!(ll.contains("define i32 @id_ptr"));
+    assert!(ll.contains("define internal i32 @id_ptr"));
 }
 
 #[test]
@@ -359,7 +376,10 @@ fn codegen_array_index_store_emits_store() {
 #[test]
 fn codegen_array_reverse_has_helper_and_swaps() {
     let ll = emit(include_str!("../../../examples/tests/ok_array_reverse.nia"));
-    assert!(ll.contains("define [8 x i8] @reverse_array"), "IR:\n{ll}");
+    assert!(
+        ll.contains("define internal [8 x i8] @reverse_array"),
+        "IR:\n{ll}"
+    );
     assert!(ll.contains("getelementptr inbounds [8 x i8]"), "IR:\n{ll}");
     assert!(ll.matches("store i8").count() >= 3, "IR:\n{ll}");
 }
