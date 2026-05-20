@@ -52,7 +52,7 @@ pub enum Ty {
     /// Result of a void call or `println`; not storable in `let`.
     Unit,
     Vector(String, Box<Ty>),
-    /// Anonymous fixed-size vector literal `<...>` with homogeneous element type.
+    /// Anonymous fixed-size vector type, written as `T<N>` in source annotations.
     AnonVector(Box<Ty>, usize),
     /// Built-in reference-counted heap matrix with one numeric cell type.
     ///

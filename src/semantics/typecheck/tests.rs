@@ -1084,6 +1084,35 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_anon_vector_type_annotation_ok() {
+    let src = r#"
+fn main() i32 {
+    let a: i64<3> = <1, 2, 3>;
+    let b: i64<3> = <4, 5, 6>;
+    let dot: i64 = a @ b;
+    println(a + b);
+    println(dot);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_anon_vector_type_annotation_rejects_length_mismatch() {
+    let src = r#"
+fn main() i32 {
+    let a: i32<3> = <1, 2>;
+    println(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn typecheck_anon_vector_rejects_different_lengths() {
     let src = r#"
 fn main() i32 {

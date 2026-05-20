@@ -147,6 +147,20 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_anon_vector_type_annotation_uses_element_hint() {
+    let src = r#"
+fn main() i32 {
+    let a: i64<3> = <1, 2, 3>;
+    println(a);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("[3 x i64]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [3 x i64]"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_outer_emits_matrix_allocation_and_products() {
     let src = r#"
 vector V3 i32 [ X, Y, Z ]

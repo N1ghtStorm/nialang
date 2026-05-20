@@ -263,7 +263,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::Ptr(inner) => format!("&{}", ty_print_label(inner)),
         Ty::Unit => "()".into(),
         Ty::Vector(n, inner) => format!("{} {}", n, ty_print_label(inner)),
-        Ty::AnonVector(inner, n) => format!("<{}; {}>", ty_print_label(inner), n),
+        Ty::AnonVector(inner, n) => format!("{}<{}>", ty_print_label(inner), n),
         Ty::Matrix(inner, _) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
         Ty::Matrix(inner, _) => format!("Matrix<{}>", ty_print_label(inner)),
     }

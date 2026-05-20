@@ -599,16 +599,16 @@ impl Parser {
     /// - struct names (`MyStruct`)
     /// - pointers (`&T`)
     /// - fixed arrays (`[T; N]`)
+    /// - anonymous vector types (`T<N>`)
     ///
     /// Pointer and array forms are recursive, so nested types like `&[i32; 4]`
     /// parse naturally.
     fn parse_ty(&mut self) -> Result<Ty, String> {
-        if matches!(self.peek(), Token::Amp) {
+        let mut ty = if matches!(self.peek(), Token::Amp) {
             self.bump();
             let inner = self.parse_ty()?;
-            return Ok(Ty::Ptr(Box::new(inner)));
-        }
-        if matches!(self.peek(), Token::LBracket) {
+            Ty::Ptr(Box::new(inner))
+        } else if matches!(self.peek(), Token::LBracket) {
             self.bump();
             let elem = self.parse_ty()?;
             self.expect(&Token::Semi)?;
@@ -617,28 +617,45 @@ impl Parser {
                 other => return Err(format!("expected non-negative array length, got {other:?}")),
             };
             self.expect(&Token::RBracket)?;
-            return Ok(Ty::Array(Box::new(elem), len));
+            Ty::Array(Box::new(elem), len)
+        } else {
+            match self.bump() {
+                Token::TyI8 => Ok(Ty::I8),
+                Token::TyU8 => Ok(Ty::U8),
+                Token::TyI16 => Ok(Ty::I16),
+                Token::TyU16 => Ok(Ty::U16),
+                Token::TyI32 => Ok(Ty::I32),
+                Token::TyI64 => Ok(Ty::I64),
+                Token::TyU64 => Ok(Ty::U64),
+                Token::TyI128 => Ok(Ty::I128),
+                Token::TyIsize => Ok(Ty::Isize),
+                Token::TyUsize => Ok(Ty::Usize),
+                Token::TyU128 => Ok(Ty::U128),
+                Token::TyBool => Ok(Ty::Bool),
+                Token::TyF16 => Ok(Ty::F16),
+                Token::TyF32 => Ok(Ty::F32),
+                Token::TyF64 => Ok(Ty::F64),
+                Token::TyString => Ok(Ty::String),
+                Token::Ident(n) => Ok(Ty::Struct(n)),
+                other => Err(format!("expected type, got {other:?}")),
+            }?
+        };
+
+        while matches!(self.peek(), Token::Lt) {
+            self.bump();
+            let len = match self.bump() {
+                Token::Int(n) if n > 0 => n as usize,
+                other => {
+                    return Err(format!(
+                        "expected positive anonymous vector length, got {other:?}"
+                    ));
+                }
+            };
+            self.expect(&Token::Gt)?;
+            ty = Ty::AnonVector(Box::new(ty), len);
         }
-        match self.bump() {
-            Token::TyI8 => Ok(Ty::I8),
-            Token::TyU8 => Ok(Ty::U8),
-            Token::TyI16 => Ok(Ty::I16),
-            Token::TyU16 => Ok(Ty::U16),
-            Token::TyI32 => Ok(Ty::I32),
-            Token::TyI64 => Ok(Ty::I64),
-            Token::TyU64 => Ok(Ty::U64),
-            Token::TyI128 => Ok(Ty::I128),
-            Token::TyIsize => Ok(Ty::Isize),
-            Token::TyUsize => Ok(Ty::Usize),
-            Token::TyU128 => Ok(Ty::U128),
-            Token::TyBool => Ok(Ty::Bool),
-            Token::TyF16 => Ok(Ty::F16),
-            Token::TyF32 => Ok(Ty::F32),
-            Token::TyF64 => Ok(Ty::F64),
-            Token::TyString => Ok(Ty::String),
-            Token::Ident(n) => Ok(Ty::Struct(n)),
-            other => Err(format!("expected type, got {other:?}")),
-        }
+
+        Ok(ty)
     }
 
     /// Expression entrypoint with comparison precedence above arithmetic.

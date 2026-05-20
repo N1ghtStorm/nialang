@@ -208,6 +208,37 @@ fn parse_fixture_anon_vector() {
 }
 
 #[test]
+fn parse_anon_vector_type_annotation() {
+    let src = r#"
+fn main(v: i32<6>) i32 {
+    let pair: f64<2> = <1.0, 2.0>;
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    assert_eq!(fns[0].params[0].1, Ty::AnonVector(Box::new(Ty::I32), 6));
+    match &fns[0].body.stmts[0] {
+        Stmt::Let { ty: Some(ty), .. } => {
+            assert_eq!(ty, &Ty::AnonVector(Box::new(Ty::F64), 2));
+        }
+        other => panic!("expected typed let, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_rejects_zero_anon_vector_type_length() {
+    let src = r#"
+fn main(v: i32<0>) i32 {
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let r = Parser::new(toks).parse_file();
+    assert!(r.is_err());
+}
+
+#[test]
 fn parse_fixture_enum_match() {
     parse_ok(include_str!("../../examples/tests/ok_enum_match.nia"));
 }

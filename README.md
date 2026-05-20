@@ -88,8 +88,8 @@ named vector type:
 
 ```nia
 fn main() i32 {
-    let a = <1, 2, 3, 4>;
-    let b = <10, 20, 30, 40>;
+    let a: i32<4> = <1, 2, 3, 4>;
+    let b: i32<4> = <10, 20, 30, 40>;
 
     println(a + b);     // [11, 22, 33, 44]
     println(a * b);     // [10, 40, 90, 160]
@@ -99,7 +99,8 @@ fn main() i32 {
 }
 ```
 
-The same arithmetic works for integer and float vectors.
+The explicit anonymous-vector type spelling is `T<N>`: element type `T`,
+length `N`. The same arithmetic works for integer and float vectors.
 
 ## Matrices
 

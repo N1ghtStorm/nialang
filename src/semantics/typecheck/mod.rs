@@ -59,6 +59,10 @@ fn normalize_ty(
             Box::new(normalize_ty(elem, structs, enums, vectors)?),
             *n,
         )),
+        Ty::AnonVector(elem, n) => Ok(Ty::AnonVector(
+            Box::new(normalize_ty(elem, structs, enums, vectors)?),
+            *n,
+        )),
         other => Ok(other.clone()),
     }
 }
