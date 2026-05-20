@@ -79,6 +79,8 @@ pub struct VectorDef {
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
+    /// Source-level `extern fn` marker. Currently parsed and preserved only.
+    pub is_extern: bool,
     pub params: Vec<(String, Ty)>,
     pub ret: Option<Ty>,
     pub body: Block,

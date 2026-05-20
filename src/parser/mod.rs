@@ -50,6 +50,7 @@ impl Parser {
     /// - `struct ...`
     /// - `impl ...`
     /// - `fn ...`
+    /// - `extern fn ...`
     ///
     /// Any other token at top level is a hard parse error. This strictness keeps
     /// recovery and diagnostics simple for a small language.
@@ -74,7 +75,7 @@ impl Parser {
                 Token::Impl => {
                     fns.extend(self.parse_impl()?);
                 }
-                Token::Fn => {
+                Token::Fn | Token::Extern => {
                     fns.push(self.parse_fn()?);
                 }
                 other => return Err(format!("unexpected token at top level: {other:?}")),
@@ -89,8 +90,11 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut methods = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
-            if !matches!(self.peek(), Token::Fn) {
-                return Err(format!("expected method `fn`, got {:?}", self.peek()));
+            if !matches!(self.peek(), Token::Fn | Token::Extern) {
+                return Err(format!(
+                    "expected method `fn` or `extern fn`, got {:?}",
+                    self.peek()
+                ));
             }
             let mut method = self.parse_method(&owner)?;
             let Some((first_name, first_ty)) = method.params.first() else {
@@ -121,6 +125,12 @@ impl Parser {
     }
 
     fn parse_method(&mut self, owner: &Ty) -> Result<FnDef, String> {
+        let is_extern = if matches!(self.peek(), Token::Extern) {
+            self.bump();
+            true
+        } else {
+            false
+        };
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
         self.expect(&Token::LParen)?;
@@ -147,6 +157,7 @@ impl Parser {
         let body = self.parse_block()?;
         Ok(FnDef {
             name,
+            is_extern,
             params,
             ret,
             body,
@@ -376,7 +387,14 @@ impl Parser {
     /// Return type is omitted for `void` functions:
     /// - `fn foo() { ... }` => no explicit return type
     /// - `fn foo() i32 { ... }` => typed return
+    /// - `extern fn foo() i32 { ... }` => parsed marker, same behavior for now
     fn parse_fn(&mut self) -> Result<FnDef, String> {
+        let is_extern = if matches!(self.peek(), Token::Extern) {
+            self.bump();
+            true
+        } else {
+            false
+        };
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
         self.expect(&Token::LParen)?;
@@ -404,6 +422,7 @@ impl Parser {
         let body = self.parse_block()?;
         Ok(FnDef {
             name,
+            is_extern,
             params,
             ret,
             body,

@@ -76,6 +76,49 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_extern_fn_marker() {
+    let src = r#"
+extern fn helper(x: i32) i32 {
+    x + 1
+}
+
+fn main() i32 {
+    helper(41)
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    assert!(fns[0].is_extern);
+    assert_eq!(fns[0].name, "helper");
+    assert!(!fns[1].is_extern);
+}
+
+#[test]
+fn parse_extern_method_marker() {
+    let src = r#"
+struct Counter { value: i32 }
+
+impl Counter {
+    extern fn get(self) i32 {
+        self.value
+    }
+}
+
+fn main() i32 {
+    let c = Counter { value: 7 };
+    c.get()
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    let method = fns
+        .iter()
+        .find(|f| f.name == "Counter__get")
+        .expect("method");
+    assert!(method.is_extern);
+}
+
+#[test]
 fn parse_rejects_impl_method_without_self() {
     let src = r#"
 struct Point { x: i32, y: i32 }

@@ -266,6 +266,7 @@ fn diagnostic_terms(message: &str) -> Vec<String> {
 
 fn token_lexeme(token: &str) -> Option<&'static str> {
     match token {
+        "Extern" => Some("extern"),
         "Fn" => Some("fn"),
         "Let" => Some("let"),
         "Struct" => Some("struct"),

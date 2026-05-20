@@ -3,6 +3,7 @@ use std::str::Chars;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
+    Extern,
     Fn,
     Let,
     Struct,
@@ -269,6 +270,7 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 match s.as_str() {
+                    "extern" => Token::Extern,
                     "fn" => Token::Fn,
                     "let" => Token::Let,
                     "struct" => Token::Struct,
