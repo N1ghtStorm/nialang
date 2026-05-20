@@ -1,10 +1,29 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::backend::codegen;
+use crate::backend::{codegen, qir};
 use crate::frontend::parser::{Parser, tokenize};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
+
+/// Which backend should consume the validated AST and emit LLVM IR text.
+///
+/// The default backend lowers nialang to classical LLVM IR consumed by `clang`.
+/// `Qir` is currently a **stub** in `crate::backend::qir` that emits a
+/// placeholder QIR-flavored module; it exists so that the `-q` / `--qir`
+/// CLI flag and the dispatch path can be wired up ahead of real lowering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    Default,
+    Qir,
+}
+
+impl Default for Backend {
+    fn default() -> Self {
+        Backend::Default
+    }
+}
 
 /// Compiles nialang source text into one textual LLVM IR module.
 ///
@@ -22,6 +41,17 @@ use crate::semantics::typecheck::{check_fn, collect_sigs};
 ///
 /// Each stage depends on previous output, so failures are intentionally not aggregated.
 pub fn compile_to_ll(src: &str) -> Result<String, String> {
+    compile_to_ll_with(src, Backend::Default)
+}
+
+/// Same as [`compile_to_ll`] but lets the caller pick which backend consumes
+/// the validated AST.
+///
+/// Frontend and semantic stages always run unchanged so that diagnostics
+/// behave identically across backends; only the final lowering step is
+/// dispatched. `Backend::Qir` currently routes to a placeholder emitter
+/// (`crate::backend::qir::emit_module`).
+pub fn compile_to_ll_with(src: &str, backend: Backend) -> Result<String, String> {
     if let Some((line, column, ch)) = find_unsupported_char(src) {
         return Err(format_diagnostic_at_line(
             src,
@@ -42,9 +72,10 @@ pub fn compile_to_ll(src: &str) -> Result<String, String> {
         check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs)
             .map_err(|e| format_diagnostic(src, "type error", Some(&f.name), &e))?;
     }
-    Ok(codegen::emit_module(
-        &structs, &enums, &vectors, &fns, &fn_sigs,
-    ))
+    Ok(match backend {
+        Backend::Default => codegen::emit_module(&structs, &enums, &vectors, &fns, &fn_sigs),
+        Backend::Qir => qir::emit_module(&structs, &enums, &vectors, &fns, &fn_sigs),
+    })
 }
 
 fn format_diagnostic(src: &str, kind: &str, function: Option<&str>, message: &str) -> String {
@@ -421,9 +452,10 @@ pub fn run_cli() -> Result<i32, String> {
     // Read the input program after path resolution, so diagnostics include final path.
     let src =
         std::fs::read_to_string(&in_path).map_err(|e| format!("{}: {e}", in_path.display()))?;
-    let ll = compile_to_ll(&src)?;
+    let ll = compile_to_ll_with(&src, cli.backend)?;
 
     match cli.mode {
+        BuildMode::Emit { out_ll } => emit_only_mode(&ll, out_ll),
         BuildMode::Run { out_ll } => run_executable_mode(&ll, out_ll),
         BuildMode::Lib { out_lib } => {
             build_shared_library(&ll, &out_lib)?;
@@ -431,6 +463,24 @@ pub fn run_cli() -> Result<i32, String> {
             Ok(0)
         }
     }
+}
+
+/// Writes IR to `-o` if provided, otherwise dumps it to stdout. Always exits
+/// `0` on success without invoking `clang` — used by emit-only backends
+/// (currently `-q` / `--qir`).
+fn emit_only_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String> {
+    match out_ll {
+        Some(p) => {
+            write_text_file(&p, ll)?;
+            eprintln!("wrote {}", p.display());
+        }
+        None => {
+            std::io::stdout()
+                .write_all(ll.as_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(0)
 }
 
 fn run_executable_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String> {
@@ -543,10 +593,15 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
 pub(crate) struct CliArgs {
     pub(crate) in_path: PathBuf,
     pub(crate) mode: BuildMode,
+    pub(crate) backend: Backend,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BuildMode {
+    /// Emit IR only (write to `-o` path if given, otherwise stdout). Does not
+    /// invoke `clang`. Selected automatically when a non-default backend is
+    /// chosen (e.g. `-q`/`--qir`).
+    Emit { out_ll: Option<PathBuf> },
     Run { out_ll: Option<PathBuf> },
     Lib { out_lib: PathBuf },
 }
@@ -560,9 +615,11 @@ where
     let in_path: PathBuf = args.next().ok_or_else(usage)?.into();
     let mut out: Option<PathBuf> = None;
     let mut lib = false;
+    let mut qir = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--lib" => lib = true,
+            "-q" | "--qir" => qir = true,
             "-o" => {
                 if out.is_some() {
                     return Err("duplicate -o flag".into());
@@ -577,21 +634,34 @@ where
         }
     }
 
+    if qir && lib {
+        return Err("`-q`/`--qir` cannot be combined with `--lib`".into());
+    }
+
+    let backend = if qir { Backend::Qir } else { Backend::Default };
     let mode = if lib {
         BuildMode::Lib {
             out_lib: out.ok_or_else(|| "--lib requires -o <library-path>".to_string())?,
         }
+    } else if qir {
+        BuildMode::Emit { out_ll: out }
     } else {
         BuildMode::Run { out_ll: out }
     };
-    Ok(CliArgs { in_path, mode })
+    Ok(CliArgs {
+        in_path,
+        mode,
+        backend,
+    })
 }
 
 fn usage() -> String {
     "usage: nialang <file.nia> [-o out.ll]\n\
      usage: nialang <file.nia> --lib -o libname.{dylib,so,dll}\n\
+     usage: nialang <file.nia> -q [-o out.ll]   (QIR backend, stub; emit-only)\n\
      Default mode compiles with clang, runs the executable, then exits with its status.\n\
-     Use --lib to build a shared library instead of running the program."
+     Use --lib to build a shared library instead of running the program.\n\
+     Use -q / --qir to emit a placeholder QIR module (no clang/run is invoked)."
         .to_string()
 }
 
