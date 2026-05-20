@@ -1,0 +1,14 @@
+// This Nia source is built as a shared library by build.rs.
+//
+// C header:
+//   #include <stdint.h>
+//   int32_t nia_add(int32_t a, int32_t b);
+//   int32_t nia_double(int32_t x);
+
+extern fn nia_add(a: i32, b: i32) i32 {
+    a + b
+}
+
+extern fn nia_double(x: i32) i32 {
+    nia_add(x, x)
+}
