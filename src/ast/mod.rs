@@ -54,6 +54,8 @@ pub enum Ty {
     Vector(String, Box<Ty>),
     /// Anonymous fixed-size vector type, written as `T<N>` in source annotations.
     AnonVector(Box<Ty>, usize),
+    /// Reference-counted heap vector with dynamic length, written as `T<>`.
+    HeapVector(Box<Ty>),
     /// Built-in reference-counted heap matrix with one numeric cell type.
     ///
     /// The optional `(rows, cols)` shape is known for matrix literals and derived
@@ -109,6 +111,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::Ptr(inner) => format!("ptr_{}", ty_symbol_fragment(inner)),
         Ty::Unit => "unit".into(),
         Ty::AnonVector(elem, n) => format!("anonvec_{}_{}", ty_symbol_fragment(elem), n),
+        Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::Matrix(_, _) => "Matrix".into(),
     }
 }

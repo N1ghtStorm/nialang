@@ -2,6 +2,7 @@
 //
 // `<...>` creates a fixed-size vector whose type is determined by element type
 // and length. The explicit type spelling is `T<N>`, for example `i32<3>`.
+// `T<>` allocates an anonymous vector on the heap with a reference counter.
 // Arithmetic requires the same element type and length.
 
 fn main() i32 {
@@ -42,6 +43,23 @@ fn main() i32 {
     println(fa * 2.0);
     println("--- Float dot product: fa @ fb");
     println(fa @ fb);
+
+    // Heap anonymous vectors.
+    let hv: f64<> = <1.0, 2.0, 3.0>;
+    println("--- Heap anonymous vector: hv: f64<> = <1.0, 2.0, 3.0>");
+    println(hv);
+    println("--- Heap vector length and refcount");
+    println(vector_len(hv));
+    println(vector_refcount(hv));
+    let hv_shared: f64<> = vector_clone(hv);
+    println(vector_refcount(hv));
+    vector_set(hv_shared, 1, 9.0);
+    println("--- Shared heap vector after vector_set(hv_shared, 1, 9.0)");
+    println(hv);
+    println(vector_get(hv, 1));
+    vector_drop(hv_shared);
+    println(vector_refcount(hv));
+    vector_drop(hv);
 
     matrix_drop(out);
 

@@ -102,6 +102,21 @@ fn main() i32 {
 The explicit anonymous-vector type spelling is `T<N>`: element type `T`,
 length `N`. The same arithmetic works for integer and float vectors.
 
+Use `T<>` for a reference-counted heap anonymous vector:
+
+```nia
+let v: f64<> = <1.0, 2.0, 3.0>;
+println(vector_len(v));
+println(len(v));
+println(vector_refcount(v));
+
+let shared: f64<> = vector_clone(v);
+vector_set(shared, 1, 9.0);
+println(vector_get(v, 1));
+vector_drop(shared);
+vector_drop(v);
+```
+
 ## Matrices
 
 Matrices are built with `matrix([...])`:

@@ -7,7 +7,8 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC,
+    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC, VECTOR_CLONE,
+    VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -264,6 +265,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::Unit => "()".into(),
         Ty::Vector(n, inner) => format!("{} {}", n, ty_print_label(inner)),
         Ty::AnonVector(inner, n) => format!("{}<{}>", ty_print_label(inner), n),
+        Ty::HeapVector(inner) => format!("{}<>", ty_print_label(inner)),
         Ty::Matrix(inner, _) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
         Ty::Matrix(inner, _) => format!("Matrix<{}>", ty_print_label(inner)),
     }
@@ -416,6 +418,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Unit => "void".into(),
         Ty::Vector(n, _) => format!("%struct.{}", sanitize(n)),
         Ty::AnonVector(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
+        Ty::HeapVector(_) => "ptr".into(),
         Ty::Matrix(_, _) => "ptr".into(),
     }
 }
@@ -780,6 +783,105 @@ impl<'a> Gen<'a> {
         format!("%{cell}")
     }
 
+    fn heap_vector_field_ptr(&mut self, vector: &str, field: u32) -> String {
+        let out = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {{ i64, ptr, i64 }}, ptr {}, i32 0, i32 {}",
+            out, vector, field
+        )
+        .unwrap();
+        format!("%{out}")
+    }
+
+    fn heap_vector_load_i64_field(&mut self, vector: &str, field: u32) -> String {
+        let ptr = self.heap_vector_field_ptr(vector, field);
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr {}", out, ptr).unwrap();
+        format!("%{out}")
+    }
+
+    fn heap_vector_load_data_ptr(&mut self, vector: &str) -> String {
+        let ptr = self.heap_vector_field_ptr(vector, 1);
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load ptr, ptr {}", out, ptr).unwrap();
+        format!("%{out}")
+    }
+
+    fn heap_vector_cell_ptr(&mut self, vector: &str, idx: &str, elem_ty: &Ty) -> String {
+        let idx64 = self.fresh();
+        let data = self.heap_vector_load_data_ptr(vector);
+        let cell = self.fresh();
+        writeln!(self.out, "  %{} = sext i32 {} to i64", idx64, idx).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i64 %{}",
+            cell,
+            llvm_ty(elem_ty, self.structs),
+            data,
+            idx64
+        )
+        .unwrap();
+        format!("%{cell}")
+    }
+
+    fn heap_vector_data_cell_ptr(&mut self, data: &str, idx: &str, elem_ty: &Ty) -> String {
+        let cell = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i64 {}",
+            cell,
+            llvm_ty(elem_ty, self.structs),
+            data,
+            idx
+        )
+        .unwrap();
+        format!("%{cell}")
+    }
+
+    fn emit_heap_vector_alloc(&mut self, elem_ty: &Ty, len: &str) -> (String, String) {
+        let elem_size = self.emit_sizeof_i64(elem_ty);
+        let bytes = self.fresh();
+        let data = self.fresh();
+        let vector = self.fresh();
+        writeln!(self.out, "  %{} = mul i64 {}, {}", bytes, len, elem_size).unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 %{})", data, bytes).unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 24)", vector).unwrap();
+
+        let rc_ptr = self.heap_vector_field_ptr(&format!("%{vector}"), 0);
+        let data_ptr = self.heap_vector_field_ptr(&format!("%{vector}"), 1);
+        let len_ptr = self.heap_vector_field_ptr(&format!("%{vector}"), 2);
+        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
+        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", len, len_ptr).unwrap();
+        (format!("%{vector}"), format!("%{data}"))
+    }
+
+    fn emit_heap_vector_shape_check(&mut self, left: &str, right: &str, label: &str) -> String {
+        let left_len = self.heap_vector_load_i64_field(left, 2);
+        let right_len = self.heap_vector_load_i64_field(right, 2);
+        let same_len = self.fresh();
+        let ok_lbl = self.fresh_label(&format!("heap.vector.{label}.len.ok"));
+        let abort_lbl = self.fresh_label(&format!("heap.vector.{label}.len.abort"));
+        writeln!(
+            self.out,
+            "  %{} = icmp eq i64 {}, {}",
+            same_len, left_len, right_len
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            same_len, ok_lbl, abort_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", abort_lbl).unwrap();
+        writeln!(self.out, "  call void @abort()").unwrap();
+        writeln!(self.out, "  unreachable").unwrap();
+        writeln!(self.out, "{}:", ok_lbl).unwrap();
+        left_len
+    }
+
     fn matrix_data_cell_ptr(
         &mut self,
         data: &str,
@@ -1031,6 +1133,7 @@ impl<'a> Gen<'a> {
             | Ty::Unit
             | Ty::Vector(_, _)
             | Ty::AnonVector(_, _)
+            | Ty::HeapVector(_)
             | Ty::Matrix(_, _) => unreachable!("typechecked"),
         }
     }
@@ -1471,6 +1574,9 @@ impl<'a> Gen<'a> {
             Ty::AnonVector(elem_ty, n) => {
                 self.emit_print_array(elem_ty, *n, v, newline);
             }
+            Ty::HeapVector(elem_ty) => {
+                self.emit_print_heap_vector(elem_ty, v, newline);
+            }
             Ty::Enum(ename) => {
                 self.emit_print_enum(ename, v, newline);
             }
@@ -1478,6 +1584,77 @@ impl<'a> Gen<'a> {
                 self.emit_print_matrix(elem_ty, v, newline);
             }
             _ => self.emit_print_primitive(ty, v, newline),
+        }
+    }
+
+    fn emit_print_heap_vector(&mut self, elem_ty: &Ty, vector: &str, newline: bool) {
+        let len = self.heap_vector_load_i64_field(vector, 2);
+        let data = self.heap_vector_load_data_ptr(vector);
+        let idx_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+
+        let cond_lbl = self.fresh_label("println.heap.vector.cond");
+        let body_lbl = self.fresh_label("println.heap.vector.body");
+        let sep_lbl = self.fresh_label("println.heap.vector.sep");
+        let item_lbl = self.fresh_label("println.heap.vector.item");
+        let latch_lbl = self.fresh_label("println.heap.vector.latch");
+        let done_lbl = self.fresh_label("println.heap.vector.done");
+
+        self.emit_printf_text("nialang.std.txt.arr_open", 2);
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", cond_lbl).unwrap();
+        let idx = self.fresh();
+        let has_item = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(self.out, "  %{} = icmp slt i64 %{}, {}", has_item, idx, len).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_item, body_lbl, done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let first = self.fresh();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", first, idx).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            first, item_lbl, sep_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", sep_lbl).unwrap();
+        self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+        writeln!(self.out, "  br label %{}", item_lbl).unwrap();
+
+        writeln!(self.out, "{}:", item_lbl).unwrap();
+        let cell_ptr = self.heap_vector_data_cell_ptr(&data, &format!("%{idx}"), elem_ty);
+        let cell = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            cell,
+            llvm_ty(elem_ty, self.structs),
+            cell_ptr
+        )
+        .unwrap();
+        self.emit_print_value(elem_ty, &format!("%{cell}"), false);
+        writeln!(self.out, "  br label %{}", latch_lbl).unwrap();
+
+        writeln!(self.out, "{}:", latch_lbl).unwrap();
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        if newline {
+            self.emit_printf_text("nialang.std.txt.arr_close_ln", 3);
+        } else {
+            self.emit_printf_text("nialang.std.txt.arr_close", 2);
         }
     }
 
@@ -1673,6 +1850,113 @@ impl<'a> Gen<'a> {
             writeln!(self.out, "  %{} = mul i64 {}, {}", len, rows, cols).unwrap();
             format!("%{len}")
         };
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = trunc i64 {} to i32", out, value64).unwrap();
+        (Ty::I32, format!("%{out}"))
+    }
+
+    fn emit_heap_vector_clone(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (vector_ty, vector) = self.emit_expr(&args[0], locals, None);
+        let rc_ptr = self.heap_vector_field_ptr(&vector, 0);
+        let old = self.fresh();
+        let new = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", new, old).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
+        (vector_ty, vector)
+    }
+
+    fn emit_heap_vector_drop(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (_, vector) = self.emit_expr(&args[0], locals, None);
+        let rc_ptr = self.heap_vector_field_ptr(&vector, 0);
+        let old = self.fresh();
+        let new = self.fresh();
+        let is_zero = self.fresh();
+        let free_lbl = self.fresh_label("heap.vector.drop.free");
+        let cont_lbl = self.fresh_label("heap.vector.drop.cont");
+        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = sub i64 %{}, 1", new, old).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_zero, new).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_zero, free_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", free_lbl).unwrap();
+        let data = self.heap_vector_load_data_ptr(&vector);
+        writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
+        writeln!(self.out, "  call void @free(ptr {})", vector).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        (Ty::Unit, String::new())
+    }
+
+    fn emit_heap_vector_get(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (vector_ty, vector) = self.emit_expr(&args[0], locals, None);
+        let Ty::HeapVector(elem_ty) = vector_ty else {
+            unreachable!("typechecked vector_get")
+        };
+        let (_, idx) = self.emit_expr(&args[1], locals, Some(&Ty::I32));
+        let cell = self.heap_vector_cell_ptr(&vector, &idx, &elem_ty);
+        let out = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            out,
+            llvm_ty(&elem_ty, self.structs),
+            cell
+        )
+        .unwrap();
+        ((*elem_ty).clone(), format!("%{out}"))
+    }
+
+    fn emit_heap_vector_set(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (vector_ty, vector) = self.emit_expr(&args[0], locals, None);
+        let Ty::HeapVector(elem_ty) = vector_ty else {
+            unreachable!("typechecked vector_set")
+        };
+        let (_, idx) = self.emit_expr(&args[1], locals, Some(&Ty::I32));
+        let (value_ty, value) = self.emit_expr(&args[2], locals, Some(&elem_ty));
+        debug_assert!(types_match(&value_ty, &elem_ty));
+        let cell = self.heap_vector_cell_ptr(&vector, &idx, &elem_ty);
+        writeln!(
+            self.out,
+            "  store {} {}, ptr {}",
+            llvm_ty(&elem_ty, self.structs),
+            value,
+            cell
+        )
+        .unwrap();
+        (Ty::Unit, String::new())
+    }
+
+    fn emit_heap_vector_info(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (_, vector) = self.emit_expr(&args[0], locals, None);
+        let field = if name == VECTOR_REFCOUNT { 0 } else { 2 };
+        let value64 = self.heap_vector_load_i64_field(&vector, field);
         let out = self.fresh();
         writeln!(self.out, "  %{} = trunc i64 {} to i32", out, value64).unwrap();
         (Ty::I32, format!("%{out}"))
@@ -3168,6 +3452,292 @@ impl<'a> Gen<'a> {
         (elem_ty, format!("%{id}"))
     }
 
+    fn emit_heap_vector_lit(
+        &mut self,
+        elems: &[Expr],
+        elem_ty: &Ty,
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let len = elems.len();
+        let (vector, data) = self.emit_heap_vector_alloc(elem_ty, &len.to_string());
+        for (i, elem) in elems.iter().enumerate() {
+            let (et, value) = self.emit_expr(elem, locals, Some(elem_ty));
+            debug_assert!(types_match(&et, elem_ty));
+            let cell = self.heap_vector_data_cell_ptr(&data, &i.to_string(), elem_ty);
+            writeln!(
+                self.out,
+                "  store {} {}, ptr {}",
+                llvm_ty(elem_ty, self.structs),
+                value,
+                cell
+            )
+            .unwrap();
+        }
+        (Ty::HeapVector(Box::new(elem_ty.clone())), vector)
+    }
+
+    fn emit_heap_vector_binop(
+        &mut self,
+        elem_ty: &Ty,
+        left: &str,
+        right: &str,
+        is_add: bool,
+    ) -> (Ty, String) {
+        let len =
+            self.emit_heap_vector_shape_check(left, right, if is_add { "add" } else { "sub" });
+        let (out_vector, out_data) = self.emit_heap_vector_alloc(elem_ty, &len);
+        let left_data = self.heap_vector_load_data_ptr(left);
+        let right_data = self.heap_vector_load_data_ptr(right);
+        let idx_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+
+        let label = if is_add { "add" } else { "sub" };
+        let cond_lbl = self.fresh_label(&format!("heap.vector.{label}.cond"));
+        let body_lbl = self.fresh_label(&format!("heap.vector.{label}.body"));
+        let latch_lbl = self.fresh_label(&format!("heap.vector.{label}.latch"));
+        let done_lbl = self.fresh_label(&format!("heap.vector.{label}.done"));
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", cond_lbl).unwrap();
+        let idx = self.fresh();
+        let has_item = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(self.out, "  %{} = icmp slt i64 %{}, {}", has_item, idx, len).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_item, body_lbl, done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let left_ptr = self.heap_vector_data_cell_ptr(&left_data, &format!("%{idx}"), elem_ty);
+        let right_ptr = self.heap_vector_data_cell_ptr(&right_data, &format!("%{idx}"), elem_ty);
+        let out_ptr = self.heap_vector_data_cell_ptr(&out_data, &format!("%{idx}"), elem_ty);
+        let left_cell = self.fresh();
+        let right_cell = self.fresh();
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            left_cell, elem_ll, left_ptr
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            right_cell, elem_ll, right_ptr
+        )
+        .unwrap();
+        let value = self.emit_scalar_vec_binop(elem_ty, &left_cell, &right_cell, is_add);
+        writeln!(self.out, "  store {} %{}, ptr {}", elem_ll, value, out_ptr).unwrap();
+        writeln!(self.out, "  br label %{}", latch_lbl).unwrap();
+
+        writeln!(self.out, "{}:", latch_lbl).unwrap();
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        (Ty::HeapVector(Box::new(elem_ty.clone())), out_vector)
+    }
+
+    fn emit_heap_vector_component_mul(
+        &mut self,
+        elem_ty: &Ty,
+        left: &str,
+        right: &str,
+    ) -> (Ty, String) {
+        let len = self.emit_heap_vector_shape_check(left, right, "mul");
+        let (out_vector, out_data) = self.emit_heap_vector_alloc(elem_ty, &len);
+        let left_data = self.heap_vector_load_data_ptr(left);
+        let right_data = self.heap_vector_load_data_ptr(right);
+        let idx_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+
+        let cond_lbl = self.fresh_label("heap.vector.mul.cond");
+        let body_lbl = self.fresh_label("heap.vector.mul.body");
+        let latch_lbl = self.fresh_label("heap.vector.mul.latch");
+        let done_lbl = self.fresh_label("heap.vector.mul.done");
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", cond_lbl).unwrap();
+        let idx = self.fresh();
+        let has_item = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(self.out, "  %{} = icmp slt i64 %{}, {}", has_item, idx, len).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_item, body_lbl, done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let left_ptr = self.heap_vector_data_cell_ptr(&left_data, &format!("%{idx}"), elem_ty);
+        let right_ptr = self.heap_vector_data_cell_ptr(&right_data, &format!("%{idx}"), elem_ty);
+        let out_ptr = self.heap_vector_data_cell_ptr(&out_data, &format!("%{idx}"), elem_ty);
+        let left_cell = self.fresh();
+        let right_cell = self.fresh();
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            left_cell, elem_ll, left_ptr
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            right_cell, elem_ll, right_ptr
+        )
+        .unwrap();
+        let value = self.emit_scalar_vec_mul_pair(elem_ty, &left_cell, &right_cell);
+        writeln!(self.out, "  store {} %{}, ptr {}", elem_ll, value, out_ptr).unwrap();
+        writeln!(self.out, "  br label %{}", latch_lbl).unwrap();
+
+        writeln!(self.out, "{}:", latch_lbl).unwrap();
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        (Ty::HeapVector(Box::new(elem_ty.clone())), out_vector)
+    }
+
+    fn emit_heap_vector_scalar_mul(
+        &mut self,
+        elem_ty: &Ty,
+        vector: &str,
+        scalar: &str,
+    ) -> (Ty, String) {
+        let len = self.heap_vector_load_i64_field(vector, 2);
+        let (out_vector, out_data) = self.emit_heap_vector_alloc(elem_ty, &len);
+        let data = self.heap_vector_load_data_ptr(vector);
+        let idx_addr = self.fresh();
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+
+        let cond_lbl = self.fresh_label("heap.vector.scalar.mul.cond");
+        let body_lbl = self.fresh_label("heap.vector.scalar.mul.body");
+        let latch_lbl = self.fresh_label("heap.vector.scalar.mul.latch");
+        let done_lbl = self.fresh_label("heap.vector.scalar.mul.done");
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", cond_lbl).unwrap();
+        let idx = self.fresh();
+        let has_item = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(self.out, "  %{} = icmp slt i64 %{}, {}", has_item, idx, len).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_item, body_lbl, done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let cell_ptr = self.heap_vector_data_cell_ptr(&data, &format!("%{idx}"), elem_ty);
+        let out_ptr = self.heap_vector_data_cell_ptr(&out_data, &format!("%{idx}"), elem_ty);
+        let cell = self.fresh();
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        writeln!(self.out, "  %{} = load {}, ptr {}", cell, elem_ll, cell_ptr).unwrap();
+        let value = self.emit_scalar_vec_mul(elem_ty, &cell, scalar);
+        writeln!(self.out, "  store {} %{}, ptr {}", elem_ll, value, out_ptr).unwrap();
+        writeln!(self.out, "  br label %{}", latch_lbl).unwrap();
+
+        writeln!(self.out, "{}:", latch_lbl).unwrap();
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        (Ty::HeapVector(Box::new(elem_ty.clone())), out_vector)
+    }
+
+    fn emit_heap_vector_dot(&mut self, elem_ty: &Ty, left: &str, right: &str) -> (Ty, String) {
+        let len = self.emit_heap_vector_shape_check(left, right, "dot");
+        let left_data = self.heap_vector_load_data_ptr(left);
+        let right_data = self.heap_vector_load_data_ptr(right);
+        let idx_addr = self.fresh();
+        let acc_addr = self.fresh();
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  %{} = alloca {}", acc_addr, elem_ll).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            elem_ll,
+            matrix_zero_value(elem_ty),
+            acc_addr
+        )
+        .unwrap();
+
+        let cond_lbl = self.fresh_label("heap.vector.dot.cond");
+        let body_lbl = self.fresh_label("heap.vector.dot.body");
+        let latch_lbl = self.fresh_label("heap.vector.dot.latch");
+        let done_lbl = self.fresh_label("heap.vector.dot.done");
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", cond_lbl).unwrap();
+        let idx = self.fresh();
+        let has_item = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(self.out, "  %{} = icmp slt i64 %{}, {}", has_item, idx, len).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_item, body_lbl, done_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let left_ptr = self.heap_vector_data_cell_ptr(&left_data, &format!("%{idx}"), elem_ty);
+        let right_ptr = self.heap_vector_data_cell_ptr(&right_data, &format!("%{idx}"), elem_ty);
+        let left_cell = self.fresh();
+        let right_cell = self.fresh();
+        let acc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            left_cell, elem_ll, left_ptr
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            right_cell, elem_ll, right_ptr
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", acc, elem_ll, acc_addr).unwrap();
+        let product = self.emit_scalar_vec_mul_pair(elem_ty, &left_cell, &right_cell);
+        let next_acc = self.emit_scalar_vec_binop(elem_ty, &acc, &product, true);
+        writeln!(
+            self.out,
+            "  store {} %{}, ptr %{}",
+            elem_ll, next_acc, acc_addr
+        )
+        .unwrap();
+        writeln!(self.out, "  br label %{}", latch_lbl).unwrap();
+
+        writeln!(self.out, "{}:", latch_lbl).unwrap();
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", out, elem_ll, acc_addr).unwrap();
+        (elem_ty.clone(), format!("%{out}"))
+    }
+
     fn emit_anon_vector_lit(
         &mut self,
         elems: &[Expr],
@@ -3177,6 +3747,9 @@ impl<'a> Gen<'a> {
         let mut emitted: Vec<String> = Vec::new();
         let (elem_ty, n) = match hint {
             Some(Ty::AnonVector(elem_ty, n)) => (elem_ty.as_ref().clone(), *n),
+            Some(Ty::HeapVector(elem_ty)) => {
+                return self.emit_heap_vector_lit(elems, elem_ty, locals);
+            }
             _ => {
                 let first = elems
                     .first()
@@ -3949,6 +4522,7 @@ impl<'a> Gen<'a> {
                     | Ty::String
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
+                    | Ty::HeapVector(_)
                     | Ty::Matrix(_, _) => unreachable!("typechecked for range"),
                 }
                 writeln!(self.out, "  br label %{}", header).unwrap();
@@ -4034,6 +4608,7 @@ impl<'a> Gen<'a> {
                 Some(Ty::Struct(_))
                 | Some(Ty::Vector(_, _))
                 | Some(Ty::AnonVector(_, _))
+                | Some(Ty::HeapVector(_))
                 | Some(Ty::Enum(_))
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
@@ -4121,6 +4696,7 @@ impl<'a> Gen<'a> {
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
+                    | Ty::HeapVector(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -4143,6 +4719,9 @@ impl<'a> Gen<'a> {
                 if let Ty::AnonVector(elem_ty, n) = &tl {
                     let out_v = self.emit_anon_vector_binop(elem_ty, *n, &vl, &vr, true);
                     return (tl, out_v);
+                }
+                if let Ty::HeapVector(elem_ty) = &tl {
+                    return self.emit_heap_vector_binop(elem_ty, &vl, &vr, true);
                 }
                 if let Ty::Matrix(elem_ty, shape) = &tl {
                     return self.emit_matrix_binop(&vl, &vr, elem_ty, *shape, "+");
@@ -4172,6 +4751,7 @@ impl<'a> Gen<'a> {
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
+                    | Ty::HeapVector(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -4194,6 +4774,9 @@ impl<'a> Gen<'a> {
                 if let Ty::AnonVector(elem_ty, n) = &tl {
                     let out_v = self.emit_anon_vector_binop(elem_ty, *n, &vl, &vr, false);
                     return (tl, out_v);
+                }
+                if let Ty::HeapVector(elem_ty) = &tl {
+                    return self.emit_heap_vector_binop(elem_ty, &vl, &vr, false);
                 }
                 if let Ty::Matrix(elem_ty, shape) = &tl {
                     return self.emit_matrix_binop(&vl, &vr, elem_ty, *shape, "-");
@@ -4223,6 +4806,7 @@ impl<'a> Gen<'a> {
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
+                    | Ty::HeapVector(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -4260,6 +4844,18 @@ impl<'a> Gen<'a> {
                     let out_v = self.emit_anon_vector_scalar_mul(elem_ty, *n, &vl, &vr);
                     return (tl, out_v);
                 }
+                if let Ty::HeapVector(elem_ty) = &tl {
+                    let (tr, vr) = match r.as_ref() {
+                        Expr::AnonVectorLit(_) => self.emit_expr(r, locals, Some(&tl)),
+                        _ => self.emit_expr(r, locals, Some(elem_ty)),
+                    };
+                    if matches!(tr, Ty::HeapVector(_)) {
+                        debug_assert!(types_match(&tl, &tr));
+                        return self.emit_heap_vector_component_mul(elem_ty, &vl, &vr);
+                    }
+                    debug_assert!(types_match(&tr, elem_ty));
+                    return self.emit_heap_vector_scalar_mul(elem_ty, &vl, &vr);
+                }
                 if let Ty::Matrix(elem_ty, shape) = &tl {
                     let (tr, vr) = self.emit_expr(r, locals, None);
                     if let Ty::Matrix(_, _) = tr {
@@ -4287,6 +4883,14 @@ impl<'a> Gen<'a> {
                     debug_assert!(types_match(&tl, elem_ty));
                     let out_v = self.emit_anon_vector_scalar_mul(elem_ty, *n, &vr, &vl);
                     return (tr, out_v);
+                }
+                if let Ty::HeapVector(elem_ty) = &tr {
+                    if matches!(tl, Ty::HeapVector(_)) {
+                        debug_assert!(types_match(&tl, &tr));
+                        return self.emit_heap_vector_component_mul(elem_ty, &vl, &vr);
+                    }
+                    debug_assert!(types_match(&tl, elem_ty));
+                    return self.emit_heap_vector_scalar_mul(elem_ty, &vr, &vl);
                 }
                 if let Ty::Matrix(elem_ty, shape) = &tr {
                     debug_assert!(types_match(&tl, elem_ty));
@@ -4321,6 +4925,7 @@ impl<'a> Gen<'a> {
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
+                    | Ty::HeapVector(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -4370,6 +4975,14 @@ impl<'a> Gen<'a> {
                         unreachable!("typechecked Matrix @ vector result length")
                     };
                     return self.emit_matrix_vector_product(&vl, &tr, &vr, out_ty, elem_ty);
+                }
+                if let Ty::HeapVector(elem_ty) = &tl {
+                    let (tr, vr) = match r.as_ref() {
+                        Expr::AnonVectorLit(_) => self.emit_expr(r, locals, Some(&tl)),
+                        _ => self.emit_expr(r, locals, None),
+                    };
+                    debug_assert!(types_match(&tl, &tr));
+                    return self.emit_heap_vector_dot(elem_ty, &vl, &vr);
                 }
                 let (tr, vr) = self.emit_expr(r, locals, None);
                 if let Ty::Matrix(elem_ty, matrix_shape) = &tr {
@@ -4453,6 +5066,7 @@ impl<'a> Gen<'a> {
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
+                    | Ty::HeapVector(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -4562,11 +5176,17 @@ impl<'a> Gen<'a> {
                     return (Ty::Unit, String::new());
                 }
                 if name == LEN {
-                    let (at, _) = self.emit_expr(&args[0], locals, None);
-                    let Ty::Array(_, n) = at else {
-                        unreachable!("typechecked len")
-                    };
-                    return (Ty::I32, format!("{n}"));
+                    let (at, av) = self.emit_expr(&args[0], locals, None);
+                    if let Ty::Array(_, n) = at {
+                        return (Ty::I32, format!("{n}"));
+                    }
+                    if matches!(at, Ty::HeapVector(_)) {
+                        let len64 = self.heap_vector_load_i64_field(&av, 2);
+                        let out = self.fresh();
+                        writeln!(self.out, "  %{} = trunc i64 {} to i32", out, len64).unwrap();
+                        return (Ty::I32, format!("%{out}"));
+                    }
+                    unreachable!("typechecked len")
                 }
                 if name == MATRIX_NEW {
                     return self.emit_matrix_new(args, locals);
@@ -4589,6 +5209,21 @@ impl<'a> Gen<'a> {
                 }
                 if name == MATRIX_DROP {
                     return self.emit_matrix_drop(args, locals);
+                }
+                if name == VECTOR_GET {
+                    return self.emit_heap_vector_get(args, locals);
+                }
+                if name == VECTOR_SET {
+                    return self.emit_heap_vector_set(args, locals);
+                }
+                if name == VECTOR_LEN || name == VECTOR_REFCOUNT {
+                    return self.emit_heap_vector_info(name, args, locals);
+                }
+                if name == VECTOR_CLONE {
+                    return self.emit_heap_vector_clone(args, locals);
+                }
+                if name == VECTOR_DROP {
+                    return self.emit_heap_vector_drop(args, locals);
                 }
                 if name == OUTER {
                     return self.emit_outer(args, locals);
@@ -5519,6 +6154,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Vector(xn, xt), Ty::Vector(yn, yt)) => xn == yn && types_match(xt, yt),
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_match(xt, yt),
+        (Ty::HeapVector(xt), Ty::HeapVector(yt)) => types_match(xt, yt),
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),

@@ -62,7 +62,7 @@
       "name": "support.function.builtin.outer.nia"
     },
     "builtins": {
-      "match": "\\b(println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop)\\b",
+      "match": "\\b(println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop|vector_get|vector_set|vector_len|vector_clone|vector_refcount|vector_drop)\\b",
       "name": "support.function.builtin.nia"
     },
     "type-ident": {
@@ -70,7 +70,7 @@
       "name": "entity.name.type.nia"
     },
     "function-call": {
-      "match": "\\b(?!fn|let|quant|gpu|if|while|loop|break|for|in|match|return|struct|enum|vector|impl|self|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|string|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop)([a-z_][\\w]*)(?=\\s*\\()",
+      "match": "\\b(?!fn|let|quant|gpu|if|while|loop|break|for|in|match|return|struct|enum|vector|impl|self|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|string|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop|vector_get|vector_set|vector_len|vector_clone|vector_refcount|vector_drop)([a-z_][\\w]*)(?=\\s*\\()",
       "captures": {
         "1": { "name": "entity.name.function.call.nia" }
       }
@@ -137,7 +137,7 @@
       ]
     },
     "identifiers": {
-      "match": "\\b(?!fn|let|quant|gpu|if|while|loop|break|for|in|match|return|struct|enum|vector|impl|self|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|string|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop)([a-z_][\\w]*)\\b",
+      "match": "\\b(?!fn|let|quant|gpu|if|while|loop|break|for|in|match|return|struct|enum|vector|impl|self|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|string|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop|vector_get|vector_set|vector_len|vector_clone|vector_refcount|vector_drop)([a-z_][\\w]*)\\b",
       "captures": {
         "1": { "name": "variable.other.nia" }
       }

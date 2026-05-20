@@ -7,6 +7,7 @@ use crate::ast::{
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PRINTLN, REALLOC,
+    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 
 /// Canonical function signature table entry used across semantic passes.
@@ -63,6 +64,9 @@ fn normalize_ty(
             Box::new(normalize_ty(elem, structs, enums, vectors)?),
             *n,
         )),
+        Ty::HeapVector(elem) => Ok(Ty::HeapVector(Box::new(normalize_ty(
+            elem, structs, enums, vectors,
+        )?))),
         other => Ok(other.clone()),
     }
 }
@@ -192,6 +196,12 @@ pub fn collect_sigs(
             || f.name == MATRIX_CLONE
             || f.name == MATRIX_REFCOUNT
             || f.name == MATRIX_DROP
+            || f.name == VECTOR_GET
+            || f.name == VECTOR_SET
+            || f.name == VECTOR_LEN
+            || f.name == VECTOR_CLONE
+            || f.name == VECTOR_REFCOUNT
+            || f.name == VECTOR_DROP
             || f.name == OUTER
         {
             return Err(format!(
@@ -326,6 +336,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
         (Ty::Vector(xn, xt), Ty::Vector(yn, yt)) => xn == yn && types_equal(xt, yt),
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_equal(xt, yt),
+        (Ty::HeapVector(x), Ty::HeapVector(y)) => types_equal(x, y),
         // Vector values are currently represented as struct-shaped aggregates in AST/codegen.
         // Accept name-equivalence across these forms at semantic boundaries.
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
@@ -400,6 +411,7 @@ fn is_printable_ty_inner(
         Ty::Matrix(_, _) => true,
         Ty::Vector(_, elem) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
         Ty::AnonVector(elem, _) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
+        Ty::HeapVector(elem) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
         Ty::Struct(name) => {
             if !seen.insert(name.clone()) {
                 return true;
@@ -602,6 +614,19 @@ fn infer_arithmetic_bin(
         let shape = (*left_shape).or(*right_shape);
         return Ok(Ty::Matrix(left_elem.clone(), shape));
     }
+    if let Ty::HeapVector(elem_ty) = &tl {
+        if !is_numeric_ty(elem_ty) {
+            return Err(format!(
+                "cannot use `{op}` on heap vectors with non-numeric element type {elem_ty:?}"
+            ));
+        }
+        if op == "+" || op == "-" {
+            return Ok(tl);
+        }
+        return Err(format!(
+            "cannot use `{op}` on heap vector values (only `+` and `-` are supported)"
+        ));
+    }
     // Component-wise linear algebra on fixed-size `vector` types (`vector Name Ty [ ... ]`).
     if is_nia_vector_ty(&tl, vectors) {
         let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
@@ -674,6 +699,38 @@ fn infer_mul_bin(
         ));
     }
 
+    if let Ty::HeapVector(elem_ty) = &tl {
+        if !is_numeric_ty(elem_ty) {
+            return Err(format!(
+                "cannot use `*` on heap vectors with non-numeric element type {elem_ty:?}"
+            ));
+        }
+        let tr = match r {
+            Expr::AnonVectorLit(_) => infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?,
+            _ => infer_expr(r, env, structs, enums, vectors, fns, Some(elem_ty))?,
+        };
+        if matches!(tr, Ty::Unit) {
+            return Err("void value on the right of `*`".into());
+        }
+        if matches!(tr, Ty::Ptr(_)) {
+            return Err("cannot use `*` on a pointer value".into());
+        }
+        if matches!(tr, Ty::HeapVector(_)) {
+            if types_equal(&tl, &tr) {
+                return Ok(tl);
+            }
+            return Err(format!(
+                "`*` on heap vectors requires the same element type; got {tl:?} and {tr:?}"
+            ));
+        }
+        if types_equal(&tr, elem_ty) {
+            return Ok(tl);
+        }
+        return Err(format!(
+            "heap vector `*` expects scalar of element type {elem_ty:?} or a heap vector of the same element type, got {tr:?}"
+        ));
+    }
+
     if is_nia_vector_ty(&tl, vectors) {
         let et = nia_vector_elem_ty(&tl, vectors).expect("vector type must exist in map");
         if !is_integer_ty(et) && !is_float_ty(et) {
@@ -727,6 +784,35 @@ fn infer_mul_bin(
         }
         return Err(format!(
             "matrix `*` expects scalar {elem_ty:?} on the left, got {tl:?}"
+        ));
+    }
+
+    if let Ty::HeapVector(elem_ty) = &tr {
+        if !is_numeric_ty(elem_ty) {
+            return Err(format!(
+                "cannot use `*` on heap vectors with non-numeric element type {elem_ty:?}"
+            ));
+        }
+        let tl = infer_expr(l, env, structs, enums, vectors, fns, Some(elem_ty))?;
+        if matches!(tl, Ty::Unit) {
+            return Err("void value on the left of `*`".into());
+        }
+        if matches!(tl, Ty::Ptr(_)) {
+            return Err("cannot use `*` on a pointer value".into());
+        }
+        if matches!(tl, Ty::HeapVector(_)) {
+            if types_equal(&tl, &tr) {
+                return Ok(tr);
+            }
+            return Err(format!(
+                "`*` on heap vectors requires the same element type; got {tl:?} and {tr:?}"
+            ));
+        }
+        if types_equal(&tl, elem_ty) {
+            return Ok(tr);
+        }
+        return Err(format!(
+            "heap vector `*` expects scalar of element type {elem_ty:?} or a heap vector of the same element type, got {tl:?}"
         ));
     }
 
@@ -865,6 +951,29 @@ fn infer_vec_dot_bin(
             return Ok(tr);
         }
         return Ok(Ty::AnonVector(left_elem.clone(), *rows));
+    }
+    if let Ty::HeapVector(elem_ty) = &tl {
+        if !is_numeric_ty(elem_ty) {
+            return Err(format!(
+                "cannot use `@` on heap vectors with non-numeric element type {elem_ty:?}"
+            ));
+        }
+        let tr = match r {
+            Expr::AnonVectorLit(_) => infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?,
+            _ => infer_expr(r, env, structs, enums, vectors, fns, None)?,
+        };
+        if matches!(tr, Ty::Unit) {
+            return Err("void value on the right of `@`".into());
+        }
+        if matches!(tr, Ty::Ptr(_)) {
+            return Err("cannot use `@` on a pointer value".into());
+        }
+        if !types_equal(&tl, &tr) {
+            return Err(format!(
+                "`@` operands must be heap vectors with the same element type; got {tl:?} and {tr:?}"
+            ));
+        }
+        return Ok(elem_ty.as_ref().clone());
     }
     if !is_nia_vector_ty(&tl, vectors) {
         return Err(format!(
@@ -1128,8 +1237,10 @@ fn infer_expr(
                 }
                 let t = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
                 return match t {
-                    Ty::Array(_, _) => Ok(Ty::I32),
-                    _ => Err(format!("`{LEN}` expects an array, got {t:?}")),
+                    Ty::Array(_, _) | Ty::HeapVector(_) => Ok(Ty::I32),
+                    _ => Err(format!(
+                        "`{LEN}` expects an array or heap vector, got {t:?}"
+                    )),
                 };
             }
             if name == ALLOC {
@@ -1291,6 +1402,90 @@ fn infer_expr(
                 if !matches!(matrix_ty, Ty::Matrix(_, _)) {
                     return Err(format!(
                         "`{MATRIX_DROP}` argument 1 type mismatch: expected Matrix, got {matrix_ty:?}"
+                    ));
+                }
+                return Ok(Ty::Unit);
+            }
+            if name == VECTOR_GET {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "`{VECTOR_GET}` expects exactly 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let vector_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                let Ty::HeapVector(elem_ty) = vector_ty else {
+                    return Err(format!(
+                        "`{VECTOR_GET}` argument 1 type mismatch: expected heap vector, got {vector_ty:?}"
+                    ));
+                };
+                expect_arg_ty(name, args, 1, &Ty::I32, env, structs, enums, vectors, fns)?;
+                return Ok((*elem_ty).clone());
+            }
+            if name == VECTOR_SET {
+                if args.len() != 3 {
+                    return Err(format!(
+                        "`{VECTOR_SET}` expects exactly 3 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let vector_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                let Ty::HeapVector(elem_ty) = vector_ty else {
+                    return Err(format!(
+                        "`{VECTOR_SET}` argument 1 type mismatch: expected heap vector, got {vector_ty:?}"
+                    ));
+                };
+                expect_arg_ty(name, args, 1, &Ty::I32, env, structs, enums, vectors, fns)?;
+                let value_ty =
+                    infer_expr(&args[2], env, structs, enums, vectors, fns, Some(&elem_ty))?;
+                if !types_equal(&value_ty, &elem_ty) {
+                    return Err(format!(
+                        "`{VECTOR_SET}` value type mismatch: expected {elem_ty:?}, got {value_ty:?}"
+                    ));
+                }
+                return Ok(Ty::Unit);
+            }
+            if name == VECTOR_LEN || name == VECTOR_REFCOUNT {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{name}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let vector_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !matches!(vector_ty, Ty::HeapVector(_)) {
+                    return Err(format!(
+                        "`{name}` argument 1 type mismatch: expected heap vector, got {vector_ty:?}"
+                    ));
+                }
+                return Ok(Ty::I32);
+            }
+            if name == VECTOR_CLONE {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{VECTOR_CLONE}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let vector_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !matches!(vector_ty, Ty::HeapVector(_)) {
+                    return Err(format!(
+                        "`{VECTOR_CLONE}` argument 1 type mismatch: expected heap vector, got {vector_ty:?}"
+                    ));
+                }
+                return Ok(vector_ty);
+            }
+            if name == VECTOR_DROP {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{VECTOR_DROP}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let vector_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !matches!(vector_ty, Ty::HeapVector(_)) {
+                    return Err(format!(
+                        "`{VECTOR_DROP}` argument 1 type mismatch: expected heap vector, got {vector_ty:?}"
                     ));
                 }
                 return Ok(Ty::Unit);
@@ -1779,6 +1974,17 @@ fn infer_expr(
                         }
                     }
                     Ok(Ty::AnonVector(elem_ty.clone(), *n))
+                }
+                Some(Ty::HeapVector(elem_ty)) => {
+                    for e in elems {
+                        let et = infer_expr(e, env, structs, enums, vectors, fns, Some(elem_ty))?;
+                        if !types_equal(&et, elem_ty) {
+                            return Err(format!(
+                                "heap vector element type mismatch: expected {elem_ty:?}, got {et:?}"
+                            ));
+                        }
+                    }
+                    Ok(Ty::HeapVector(elem_ty.clone()))
                 }
                 Some(other) => Err(format!("anonymous vector literal cannot satisfy {other:?}")),
                 None => {

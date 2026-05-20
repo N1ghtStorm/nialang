@@ -1113,6 +1113,63 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_heap_anon_vector_builtins_ok() {
+    let src = r#"
+fn main() i32 {
+    let v: f64<> = <1.0, 2.0, 3.0>;
+    println(vector_len(v));
+    println(len(v));
+    println(vector_get(v, 1));
+    vector_set(v, 2, 9.0);
+    let shared: f64<> = vector_clone(v);
+    println(vector_refcount(v));
+    println(shared);
+    vector_drop(shared);
+    vector_drop(v);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_heap_anon_vector_arithmetic_ok() {
+    let src = r#"
+fn main() i32 {
+    let a: i32<> = <1, 2, 3>;
+    let b: i32<> = <4, 5, 6>;
+    let c: i32<> = a + b;
+    let d: i32<> = c * 2;
+    let dot: i32 = d @ <7, 8, 9>;
+    println(dot);
+    vector_drop(d);
+    vector_drop(c);
+    vector_drop(b);
+    vector_drop(a);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_heap_anon_vector_rejects_static_length_annotation() {
+    let src = r#"
+fn main() i32 {
+    let v: i32<> = <1, 2, 3>;
+    let bad: i32<3> = v;
+    println(bad);
+    vector_drop(v);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn typecheck_anon_vector_rejects_different_lengths() {
     let src = r#"
 fn main() i32 {

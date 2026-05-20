@@ -227,6 +227,25 @@ fn main(v: i32<6>) i32 {
 }
 
 #[test]
+fn parse_heap_anon_vector_type_annotation() {
+    let src = r#"
+fn main(v: f64<>) i32 {
+    let heap: i32<> = <1, 2, 3>;
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    assert_eq!(fns[0].params[0].1, Ty::HeapVector(Box::new(Ty::F64)));
+    match &fns[0].body.stmts[0] {
+        Stmt::Let { ty: Some(ty), .. } => {
+            assert_eq!(ty, &Ty::HeapVector(Box::new(Ty::I32)));
+        }
+        other => panic!("expected typed let, got {other:?}"),
+    }
+}
+
+#[test]
 fn parse_rejects_zero_anon_vector_type_length() {
     let src = r#"
 fn main(v: i32<0>) i32 {

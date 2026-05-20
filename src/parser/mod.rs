@@ -600,6 +600,7 @@ impl Parser {
     /// - pointers (`&T`)
     /// - fixed arrays (`[T; N]`)
     /// - anonymous vector types (`T<N>`)
+    /// - heap anonymous vector types (`T<>`)
     ///
     /// Pointer and array forms are recursive, so nested types like `&[i32; 4]`
     /// parse naturally.
@@ -643,6 +644,11 @@ impl Parser {
 
         while matches!(self.peek(), Token::Lt) {
             self.bump();
+            if matches!(self.peek(), Token::Gt) {
+                self.bump();
+                ty = Ty::HeapVector(Box::new(ty));
+                continue;
+            }
             let len = match self.bump() {
                 Token::Int(n) if n > 0 => n as usize,
                 other => {

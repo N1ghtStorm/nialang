@@ -161,6 +161,57 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_heap_anon_vector_uses_rc_header_and_len() {
+    let src = r#"
+fn main() i32 {
+    let v: f64<> = <1.0, 2.0, 3.0>;
+    println(vector_len(v));
+    println(len(v));
+    println(vector_refcount(v));
+    let shared: f64<> = vector_clone(v);
+    vector_set(shared, 1, 9.0);
+    println(vector_get(v, 1));
+    println(v);
+    vector_drop(shared);
+    vector_drop(v);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(
+        ll.contains("getelementptr inbounds { i64, ptr, i64 }"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call ptr @malloc(i64 24)"), "IR:\n{ll}");
+    assert!(ll.contains("heap.vector.drop.free"), "IR:\n{ll}");
+    assert!(ll.contains("println.heap.vector.cond"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_heap_anon_vector_arithmetic_checks_lengths() {
+    let src = r#"
+fn main() i32 {
+    let a: i32<> = <1, 2, 3>;
+    let b: i32<> = <4, 5, 6>;
+    let c: i32<> = a + b;
+    let d: i32<> = c * 2;
+    let dot: i32 = d @ b;
+    println(dot);
+    vector_drop(d);
+    vector_drop(c);
+    vector_drop(b);
+    vector_drop(a);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("heap.vector.add.len.ok"), "IR:\n{ll}");
+    assert!(ll.contains("heap.vector.scalar.mul.cond"), "IR:\n{ll}");
+    assert!(ll.contains("heap.vector.dot.len.ok"), "IR:\n{ll}");
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_outer_emits_matrix_allocation_and_products() {
     let src = r#"
 vector V3 i32 [ X, Y, Z ]
