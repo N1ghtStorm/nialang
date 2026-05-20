@@ -67,6 +67,13 @@ fn normalize_ty(
         Ty::HeapVector(elem) => Ok(Ty::HeapVector(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
+        Ty::Matrix(elem, shape) => {
+            let norm = normalize_ty(elem, structs, enums, vectors)?;
+            if matches!(norm, Ty::Matrix(_, _)) {
+                return Err("matrix element type cannot itself be a matrix".into());
+            }
+            Ok(Ty::Matrix(Box::new(norm), *shape))
+        }
         other => Ok(other.clone()),
     }
 }

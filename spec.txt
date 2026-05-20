@@ -60,6 +60,19 @@ let arr: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
 
 ---------
 
+matrix type annotation:
+
+T[]  — shorthand for a heap-backed matrix with element type T, equivalent to the bare
+       `Matrix` annotation but makes the element type explicit.
+
+let a: i32[] = matrix([[1, 2], [3, 4]])
+let f: f64[] = matrix([[1.0, 0.0], [0.0, 1.0]])
+
+The shape is not written in the annotation; the compiler infers it from the literal or
+expression on the right-hand side.
+
+---------
+
 for loop (half-open integer range, like Rust `..`):
 
 fn main() i32 {

@@ -619,6 +619,9 @@ impl Parser {
     ///
     /// Pointer and array forms are recursive, so nested types like `&[i32; 4]`
     /// parse naturally.
+    ///
+    /// Postfix `T[]` desugars to `Ty::Matrix(T, None)` — a heap-backed matrix
+    /// with element type `T` and unknown shape (same as the bare `Matrix` annotation).
     fn parse_ty(&mut self) -> Result<Ty, String> {
         let mut ty = if matches!(self.peek(), Token::Amp) {
             self.bump();
@@ -657,23 +660,33 @@ impl Parser {
             }?
         };
 
-        while matches!(self.peek(), Token::Lt) {
-            self.bump();
-            if matches!(self.peek(), Token::Gt) {
+        loop {
+            if matches!(self.peek(), Token::Lt) {
                 self.bump();
-                ty = Ty::HeapVector(Box::new(ty));
-                continue;
-            }
-            let len = match self.bump() {
-                Token::Int(n) if n > 0 => n as usize,
-                other => {
-                    return Err(format!(
-                        "expected positive anonymous vector length, got {other:?}"
-                    ));
+                if matches!(self.peek(), Token::Gt) {
+                    self.bump();
+                    ty = Ty::HeapVector(Box::new(ty));
+                    continue;
                 }
-            };
-            self.expect(&Token::Gt)?;
-            ty = Ty::AnonVector(Box::new(ty), len);
+                let len = match self.bump() {
+                    Token::Int(n) if n > 0 => n as usize,
+                    other => {
+                        return Err(format!(
+                            "expected positive anonymous vector length, got {other:?}"
+                        ));
+                    }
+                };
+                self.expect(&Token::Gt)?;
+                ty = Ty::AnonVector(Box::new(ty), len);
+            } else if matches!(self.peek(), Token::LBracket)
+                && matches!(self.peek_n(1), Token::RBracket)
+            {
+                self.bump();
+                self.bump();
+                ty = Ty::Matrix(Box::new(ty), None);
+            } else {
+                break;
+            }
         }
 
         Ok(ty)

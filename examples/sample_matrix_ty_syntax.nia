@@ -1,0 +1,37 @@
+// T[] is a shorthand matrix type annotation, equivalent to the bare `Matrix`
+// annotation but carries the element type explicitly.
+//
+//   i32[]   ==  Matrix with i32 cells
+//   f64[]   ==  Matrix with f64 cells
+//
+// The shape is not part of the annotation; the compiler infers it from the
+// matrix literal on the right-hand side.
+
+fn main() i32 {
+    let a: i32[] = matrix([
+        [1, 2, 3],
+        [4, 5, 6],
+    ]);
+
+    let b: i32[] = matrix([
+        [7,  8],
+        [9,  10],
+        [11, 12],
+    ]);
+
+    println(a @ b);
+
+    matrix_drop(a);
+    matrix_drop(b);
+
+    let f: f64[] = matrix([
+        [1.0, 0.0],
+        [0.0, 1.0],
+    ]);
+
+    println(f);
+    println(f.det());
+    matrix_drop(f);
+
+    0
+}
