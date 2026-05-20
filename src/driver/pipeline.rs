@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -401,6 +401,7 @@ fn find_function_bounds(src: &str, name: &str) -> Option<(usize, usize)> {
 ///
 /// ## Supported CLI shape
 /// `nialang <file.nia> [-o out.ll]`
+/// `nialang <file.nia> --lib -o libname.{dylib,so,dll}`
 ///
 /// ## Behavior
 /// - Resolves input path robustly for `cargo run` and direct binary usage.
@@ -414,40 +415,29 @@ fn find_function_bounds(src: &str, name: &str) -> Option<(usize, usize)> {
 /// Returns descriptive errors for bad CLI flags, read/write failures, missing clang,
 /// clang compile failures, and runtime launch failures.
 pub fn run_cli() -> Result<i32, String> {
-    let mut args = std::env::args().skip(1);
-    let in_path: PathBuf = args
-        .next()
-        .ok_or_else(|| {
-            "usage: nialang <file.nia> [-o out.ll]\n\
-             Compiles the file with clang, runs the executable, then exits with its status.\n\
-             Use -o to also save LLVM IR to a file."
-                .to_string()
-        })?
-        .into();
-    let in_path = resolve_input_path(in_path)?;
-    let mut out_ll: Option<PathBuf> = None;
-    while let Some(a) = args.next() {
-        if a == "-o" {
-            out_ll = Some(
-                args.next()
-                    .ok_or_else(|| "-o requires a path".to_string())?
-                    .into(),
-            );
-        } else {
-            return Err(format!("unknown flag `{a}`"));
-        }
-    }
+    let cli = parse_cli_args(std::env::args().skip(1))?;
+    let in_path = resolve_input_path(cli.in_path)?;
 
     // Read the input program after path resolution, so diagnostics include final path.
     let src =
         std::fs::read_to_string(&in_path).map_err(|e| format!("{}: {e}", in_path.display()))?;
     let ll = compile_to_ll(&src)?;
 
+    match cli.mode {
+        BuildMode::Run { out_ll } => run_executable_mode(&ll, out_ll),
+        BuildMode::Lib { out_lib } => {
+            build_shared_library(&ll, &out_lib)?;
+            eprintln!("built {}", out_lib.display());
+            Ok(0)
+        }
+    }
+}
+
+fn run_executable_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String> {
     if let Some(ref p) = out_ll {
-        std::fs::write(p, &ll).map_err(|e| e.to_string())?;
+        write_text_file(p, ll)?;
         eprintln!("wrote {}", p.display());
     }
-
     // Use pid + timestamp nonce to avoid tmp filename collisions between runs.
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -458,7 +448,7 @@ pub fn run_cli() -> Result<i32, String> {
     let tmp_ll = tmp_dir.join(format!("nialang-{pid}-{nonce}.ll"));
     let tmp_exe = tmp_exe_path(&tmp_dir, pid, nonce);
 
-    std::fs::write(&tmp_ll, &ll).map_err(|e| e.to_string())?;
+    std::fs::write(&tmp_ll, ll).map_err(|e| e.to_string())?;
 
     // Compile generated IR into a native executable via system clang.
     let clang_ok = Command::new("clang")
@@ -490,6 +480,119 @@ pub fn run_cli() -> Result<i32, String> {
         .code()
         .unwrap_or(if run_status.success() { 0 } else { 101 });
     Ok(code)
+}
+
+fn build_shared_library(ll: &str, out_lib: &Path) -> Result<(), String> {
+    ensure_parent_dir(out_lib)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let pid = std::process::id();
+    let tmp_dir = std::env::temp_dir();
+    let tmp_ll = tmp_dir.join(format!("nialang-{pid}-{nonce}-lib.ll"));
+    std::fs::write(&tmp_ll, ll).map_err(|e| e.to_string())?;
+
+    let mut cmd = Command::new("clang");
+    if cfg!(target_os = "macos") {
+        cmd.arg("-dynamiclib");
+    } else {
+        cmd.arg("-shared");
+        if !cfg!(windows) {
+            cmd.arg("-fPIC");
+        }
+    }
+    let clang_ok = cmd
+        .arg(&tmp_ll)
+        .arg("-o")
+        .arg(out_lib)
+        .status()
+        .map_err(|e| {
+            format!(
+                "failed to run `clang`: {e}\n\
+                 Install LLVM/clang and ensure `clang` is on PATH."
+            )
+        })?;
+
+    let _ = std::fs::remove_file(&tmp_ll);
+    if !clang_ok.success() {
+        return Err(format!(
+            "clang failed to build shared library `{}`",
+            out_lib.display()
+        ));
+    }
+    Ok(())
+}
+
+fn write_text_file(path: &Path, text: &str) -> Result<(), String> {
+    ensure_parent_dir(path)?;
+    std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), String> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CliArgs {
+    pub(crate) in_path: PathBuf,
+    pub(crate) mode: BuildMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BuildMode {
+    Run { out_ll: Option<PathBuf> },
+    Lib { out_lib: PathBuf },
+}
+
+pub(crate) fn parse_cli_args<I, S>(args: I) -> Result<CliArgs, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut args = args.into_iter().map(Into::into);
+    let in_path: PathBuf = args.next().ok_or_else(usage)?.into();
+    let mut out: Option<PathBuf> = None;
+    let mut lib = false;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--lib" => lib = true,
+            "-o" => {
+                if out.is_some() {
+                    return Err("duplicate -o flag".into());
+                }
+                out = Some(
+                    args.next()
+                        .ok_or_else(|| "-o requires a path".to_string())?
+                        .into(),
+                );
+            }
+            _ => return Err(format!("unknown flag `{a}`\n{}", usage())),
+        }
+    }
+
+    let mode = if lib {
+        BuildMode::Lib {
+            out_lib: out.ok_or_else(|| "--lib requires -o <library-path>".to_string())?,
+        }
+    } else {
+        BuildMode::Run { out_ll: out }
+    };
+    Ok(CliArgs { in_path, mode })
+}
+
+fn usage() -> String {
+    "usage: nialang <file.nia> [-o out.ll]\n\
+     usage: nialang <file.nia> --lib -o libname.{dylib,so,dll}\n\
+     Default mode compiles with clang, runs the executable, then exits with its status.\n\
+     Use --lib to build a shared library instead of running the program."
+        .to_string()
 }
 
 /// Resolves user-supplied input file path to an existing file.

@@ -46,6 +46,8 @@ fn compile_fixtures_pipeline() {
         "examples/sample_matrix_arith.nia",
         "examples/sample_matrix_det.nia",
         "examples/sample_matrix_vector.nia",
+        "examples/sample_extern_fn.nia",
+        "examples/sample_extern_lib.nia",
     ];
     for f in files {
         compile_fixture_ok(f);
@@ -76,6 +78,30 @@ fn compile_multiple_error_fixtures() {
         let r = crate::driver::pipeline::compile_to_ll(&src);
         assert!(r.is_err(), "fixture unexpectedly compiled: {f}");
     }
+}
+
+#[test]
+fn parse_cli_args_supports_library_mode() {
+    let args = crate::driver::pipeline::parse_cli_args([
+        "examples/sample_extern_lib.nia",
+        "--lib",
+        "-o",
+        "build/libnia_sample.dylib",
+    ])
+    .expect("parse args");
+    assert_eq!(
+        args.mode,
+        crate::driver::pipeline::BuildMode::Lib {
+            out_lib: std::path::PathBuf::from("build/libnia_sample.dylib")
+        }
+    );
+}
+
+#[test]
+fn parse_cli_args_rejects_library_mode_without_output() {
+    let err = crate::driver::pipeline::parse_cli_args(["examples/sample_extern_lib.nia", "--lib"])
+        .expect_err("missing lib output");
+    assert!(err.contains("--lib requires -o"), "{err}");
 }
 
 #[test]

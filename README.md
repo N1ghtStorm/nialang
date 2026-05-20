@@ -29,6 +29,12 @@ Build and run an example:
 cargo run -- examples/sample_linalg_commented.nia
 ```
 
+Build a shared library from exported `extern fn` symbols:
+
+```bash
+cargo run -- examples/sample_extern_lib.nia --lib -o build/libnia_sample.dylib
+```
+
 Run the compiler test suite:
 
 ```bash

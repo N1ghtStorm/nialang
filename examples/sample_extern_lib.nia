@@ -1,0 +1,15 @@
+// Build as a shared library:
+//   cargo run -- examples/sample_extern_lib.nia --lib -o build/libnia_sample.dylib
+//
+// C header:
+//   #include <stdint.h>
+//   int32_t nia_add(int32_t a, int32_t b);
+//   int32_t nia_double(int32_t x);
+
+extern fn nia_add(a: i32, b: i32) i32 {
+    a + b
+}
+
+extern fn nia_double(x: i32) i32 {
+    nia_add(x, x)
+}
