@@ -15,7 +15,7 @@ fn main() i32 {
     let right_scaled = a * 3;
     let left_scaled = 2 * b;
     let dot = a @ b;
-    let out: Matrix = outer(a, <7, 8>);
+    let out: i32[] = outer(a, <7, 8>);
 
     println("--- Integer vector literal: a = <1, 2, 3>");
     println(a);

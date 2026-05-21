@@ -1,5 +1,8 @@
-functions should be like this:
+# NiaLang Language Reference
 
+## Functions
+
+```
 fn foo() {
     let a = 1;
 }
@@ -7,114 +10,214 @@ fn foo() {
 fn bar(a: i32, b: i32) i32 {
     a + b
 }
+```
 
-top-level extern fn with a body exports an unmangled C ABI symbol.
-For now, extern signatures accept only primitive C-compatible scalars, string, and pointers:
+A top-level `extern fn` with a body exports an unmangled C ABI symbol.
+Extern signatures accept only primitive C-compatible scalars, `string`, and pointers.
 
+```
 extern fn baz(a: i32) i32 {
     a
 }
+```
 
------
+## Variables
 
-create variable
-
+```
 let a: i32 = 1
-
 let b = bar(a, 2)
+```
 
-compound assignment (like Rust): `+=`, `-=`, `*=`, `/=` (integers only; `/=` uses signed or unsigned division like LLVM).
+Compound assignment operators: `+=`, `-=`, `*=`, `/=` (integers only;
+`/=` uses signed or unsigned division depending on the integer type).
 
+## Primitive Types
 
--------
+```
+i8  u8  i16  u16  i32  i64  u64  i128  u128  isize  usize
+f16  f32  f64
+bool
+string
+```
 
-create struct:
+## Structs
 
+Named-field struct:
+
+```
 struct Foo {
     a: i32,
     b: u128,
 }
+```
 
--------
+Tuple struct:
 
-if conditions:
+```
+struct Foo(u8, i32, u8, u128)
+```
 
-fn bar(foo: bool) i32 {
-    if foo {
-        return 1
-    }
-    0
+## Enums and Match
+
+```
+enum Shape {
+    Dot,
+    Circle(i32),
+    Rect(i32, i32),
 }
 
-----------
+fn area(s: Shape) i32 {
+    match s {
+        Shape::Dot        => 0,
+        Shape::Circle(r)  => r * r,
+        Shape::Rect(w, h) => w * h,
+    }
+}
+```
 
-tuple struct example:
+## Impl Methods
 
-struct Foo (u8, i32, u8, u128)
+```
+impl Foo {
+    fn new(v: i32) Foo { Foo { a: v, b: 0 } }
+    fn get(&self) i32  { self.a }
+    fn inc(self) Foo   { Foo { a: self.a + 1, b: self.b } }
+}
+```
 
----------
+Both `self` and `&self` are supported. Mutable self is not.
 
-arrays example
+## Arrays
 
+Fixed-size stack array:
+
+```
 let arr: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
+```
 
----------
+## Pointers
 
-matrix type annotation:
+```
+let p: &i32 = box(42)
+println(*p)
+free(p)
+```
 
-T[]  — shorthand for a heap-backed matrix with element type T, equivalent to the bare
-       `Matrix` annotation but makes the element type explicit.
+## Vectors
 
-let a: i32[] = matrix([[1, 2], [3, 4]])
-let f: f64[] = matrix([[1.0, 0.0], [0.0, 1.0]])
+Named vector (fixed axes with labels):
 
-The shape is not written in the annotation; the compiler infers it from the literal or
-expression on the right-hand side.
+```
+vector Vec2 i32 [X, Y]
 
----------
+let u = Vec2 [X: 1, Y: 2]
+let v = Vec2 [X: 3, Y: 4]
+println(u + v)   // element-wise add
+println(u @ v)   // dot product
+println(3 * u)   // scalar multiply
+```
 
-for loop (half-open integer range, like Rust `..`):
+Anonymous fixed-size vector (`T<N>`):
 
-fn main() i32 {
-    for i in 0..10 {
-        println(i);
-    }
-    0
+```
+let a: i32<3> = <1, 2, 3>
+let b: i32<3> = <4, 5, 6>
+println(a + b)   // [5, 7, 9]
+println(a @ b)   // 32
+```
+
+Anonymous heap vector (`T<>`, reference-counted, dynamic length):
+
+```
+let v: f64<> = <1.0, 2.0, 3.0>
+println(vector_len(v))
+vector_set(v, 1, 9.0)
+println(vector_get(v, 1))
+vector_drop(v)
+```
+
+Vector operators: `+` `-` `*` (element-wise), `@` (dot product), `k * v` (scalar multiply), `-v` (negate).
+
+## Matrices
+
+`T[]` is a heap-backed reference-counted matrix with element type `T`.
+The shape is inferred from the literal or expression on the right-hand side.
+
+```
+let a: i32[] = matrix([
+    [1, 2, 3],
+    [4, 5, 6],
+])
+
+let b: f64[] = matrix([
+    [1.0, 0.0],
+    [0.0, 1.0],
+])
+```
+
+Matrix operators: `+` `-` `*` (element-wise), `@` (matrix multiply), `m * k` (scalar multiply).
+
+```
+let c: i32[] = a @ matrix([[7, 8], [9, 10], [11, 12]])
+println(b.det())
+```
+
+Outer product:
+
+```
+let m: i32[] = outer(<1, 2, 3>, <4, 5>)
+```
+
+Matrix builtins: `matrix_get`, `matrix_set`, `matrix_rows`, `matrix_cols`,
+`matrix_len`, `matrix_clone`, `matrix_refcount`, `matrix_drop`.
+
+## Control Flow
+
+```
+if foo {
+    return 1
 }
+```
 
-`return` is not allowed inside the `for` body (so the compiler can lower loops to valid LLVM).
+`for` loop (half-open integer range, like Rust `..`):
 
----------
-
-while loop (condition uses the same restricted grammar as `if` — no bare `Type {` ambiguity):
-
-fn main() i32 {
-    let c: bool = true;
-    while c {
-        println(1);
-        c = false;
-    }
-    0
+```
+for i in 0..10 {
+    println(i);
 }
+```
 
----------
+`return` is not allowed inside a `for` body.
 
-loop (exit with `break;` — тело должно содержать хотя бы одну `break`):
+`while` loop:
 
-fn main() i32 {
-    loop {
-        println(1);
-        break;
-    }
-    0
+```
+let c: bool = true;
+while c {
+    println(1);
+    c = false;
 }
+```
 
-`break` внутри `while` / `for` пока не поддерживается (в отличие от Rust).
+`loop` with `break`:
 
----------
+```
+loop {
+    println(1);
+    break;
+}
+```
 
-quant/gpu scopes (reserved syntax; currently behave like normal block scopes):
+The body of `loop` must contain at least one `break`.
+`break` inside `while` / `for` is not yet supported.
 
+## Scoped Blocks
+
+`quant { ... }` and `gpu { ... }` are reserved syntax for future specialised
+execution contexts. Today they act like normal block scopes: bindings declared
+inside do not escape the block.
+
+```
 fn main() i32 {
     let x = 1;
     quant {
@@ -126,5 +229,4 @@ fn main() i32 {
     }
     0
 }
-
-Bindings created inside `quant` or `gpu` do not escape the block.
+```

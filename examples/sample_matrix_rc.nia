@@ -7,7 +7,7 @@
 // - column count.
 
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2, 3],
         [4, 5, 6],
     ]);
@@ -22,7 +22,7 @@ fn main() i32 {
     println(matrix_get(m, 1, 2));
 
     println(matrix_refcount(m));
-    let shared: Matrix = matrix_clone(m);
+    let shared: i32[] = matrix_clone(m);
     println(matrix_refcount(m));
     println(shared);
     println(matrix_get(shared, 1, 2));

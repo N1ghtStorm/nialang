@@ -187,7 +187,7 @@ fn main() i32 {
 fn typecheck_matrix_det_method_ok() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
@@ -203,7 +203,7 @@ fn main() i32 {
 fn typecheck_matrix_det_method_rejects_args() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
@@ -263,7 +263,7 @@ fn main() i32 {
 fn typecheck_matrix_accepts_nested_numeric_arrays() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
@@ -279,15 +279,15 @@ fn main() i32 {
 fn typecheck_matrix_add_ok_same_cell_type() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let b: Matrix = matrix([
+    let b: i32[] = matrix([
         [10, 20],
         [30, 40],
     ]);
-    let c: Matrix = a + b;
+    let c: i32[] = a + b;
     println(c);
     matrix_drop(c);
     matrix_drop(b);
@@ -303,15 +303,15 @@ fn main() i32 {
 fn typecheck_matrix_add_rejects_different_cell_types() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let b: Matrix = matrix([
+    let b: f64[] = matrix([
         [1.0, 2.0],
         [3.0, 4.0],
     ]);
-    let c: Matrix = a + b;
+    let c: i32[] = a + b;
     matrix_drop(c);
     matrix_drop(b);
     matrix_drop(a);
@@ -326,15 +326,15 @@ fn main() i32 {
 fn typecheck_matrix_sub_ok_same_cell_type() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let b: Matrix = matrix([
+    let b: i32[] = matrix([
         [10, 20],
         [30, 40],
     ]);
-    let c: Matrix = a - b;
+    let c: i32[] = a - b;
     println(c);
     matrix_drop(c);
     matrix_drop(b);
@@ -350,15 +350,15 @@ fn main() i32 {
 fn typecheck_matrix_sub_rejects_different_cell_types() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let b: Matrix = matrix([
+    let b: f64[] = matrix([
         [1.0, 2.0],
         [3.0, 4.0],
     ]);
-    let c: Matrix = a - b;
+    let c: i32[] = a - b;
     matrix_drop(c);
     matrix_drop(b);
     matrix_drop(a);
@@ -373,15 +373,15 @@ fn main() i32 {
 fn typecheck_matrix_mul_ok_same_cell_type() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let b: Matrix = matrix([
+    let b: i32[] = matrix([
         [10, 20],
         [30, 40],
     ]);
-    let c: Matrix = a * b;
+    let c: i32[] = a * b;
     println(c);
     matrix_drop(c);
     matrix_drop(b);
@@ -397,15 +397,15 @@ fn main() i32 {
 fn typecheck_matrix_mul_rejects_different_cell_types() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let b: Matrix = matrix([
+    let b: f64[] = matrix([
         [1.0, 2.0],
         [3.0, 4.0],
     ]);
-    let c: Matrix = a * b;
+    let c: i32[] = a * b;
     matrix_drop(c);
     matrix_drop(b);
     matrix_drop(a);
@@ -420,16 +420,16 @@ fn main() i32 {
 fn typecheck_matrix_matmul_ok_same_cell_type() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2, 3],
         [4, 5, 6],
     ]);
-    let b: Matrix = matrix([
+    let b: i32[] = matrix([
         [7, 8],
         [9, 10],
         [11, 12],
     ]);
-    let c: Matrix = a @ b;
+    let c: i32[] = a @ b;
     println(c);
     matrix_drop(c);
     matrix_drop(b);
@@ -445,15 +445,15 @@ fn main() i32 {
 fn typecheck_matrix_matmul_rejects_different_cell_types() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let b: Matrix = matrix([
+    let b: f64[] = matrix([
         [1.0, 2.0],
         [3.0, 4.0],
     ]);
-    let c: Matrix = a @ b;
+    let c: i32[] = a @ b;
     matrix_drop(c);
     matrix_drop(b);
     matrix_drop(a);
@@ -471,7 +471,7 @@ vector Vec2i i32 [X, Y]
 vector Vec3i i32 [A, B, C]
 
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2, 3],
         [4, 5, 6],
     ]);
@@ -497,7 +497,7 @@ fn typecheck_matrix_vector_rejects_static_shape_mismatch() {
 vector Vec3i i32 [A, B, C]
 
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
@@ -521,7 +521,7 @@ vector Vec2i i32 [U, V]
 fn main() i32 {
     let a = Vec3i [X: 1, Y: 2, Z: 3];
     let b = Vec2i [U: 4, V: 5];
-    let c: Matrix = outer(a, b);
+    let c: i32[] = outer(a, b);
     println(c);
     matrix_drop(c);
     0
@@ -540,7 +540,7 @@ vector Vec2f f64 [X, Y]
 fn main() i32 {
     let a = Vec2i [X: 1, Y: 2];
     let b = Vec2f [X: 1.0, Y: 2.0];
-    let c: Matrix = outer(a, b);
+    let c: i32[] = outer(a, b);
     matrix_drop(c);
     0
 }
@@ -556,7 +556,7 @@ vector Vec2i i32 [X, Y]
 
 fn main() i32 {
     let a = Vec2i [X: 1, Y: 2];
-    let c: Matrix = outer(a, 3);
+    let c: i32[] = outer(a, 3);
     matrix_drop(c);
     0
 }
@@ -569,7 +569,7 @@ fn main() i32 {
 fn typecheck_def_call_is_not_builtin() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
@@ -584,12 +584,12 @@ fn main() i32 {
 fn typecheck_matrix_scalar_mul_ok_same_cell_type_both_orders() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let right: Matrix = a * 3;
-    let left: Matrix = 2 * a;
+    let right: i32[] = a * 3;
+    let left: i32[] = 2 * a;
     println(right);
     println(left);
     matrix_drop(left);
@@ -606,11 +606,11 @@ fn main() i32 {
 fn typecheck_matrix_scalar_mul_float_ok() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: f64[] = matrix([
         [1.0, 2.0],
         [3.0, 4.0],
     ]);
-    let scaled: Matrix = a * 2.0;
+    let scaled: f64[] = a * 2.0;
     println(scaled);
     matrix_drop(scaled);
     matrix_drop(a);
@@ -625,11 +625,11 @@ fn main() i32 {
 fn typecheck_matrix_scalar_mul_rejects_different_cell_type() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let scaled: Matrix = a * 2.0;
+    let scaled: f64[] = a * 2.0;
     matrix_drop(scaled);
     matrix_drop(a);
     0
@@ -643,11 +643,11 @@ fn main() i32 {
 fn typecheck_matrix_float_scalar_mul_rejects_int_literal() {
     let src = r#"
 fn main() i32 {
-    let a: Matrix = matrix([
+    let a: f64[] = matrix([
         [1.0, 2.0],
         [3.0, 4.0],
     ]);
-    let scaled: Matrix = a * 2;
+    let scaled: f64[] = a * 2;
     matrix_drop(scaled);
     matrix_drop(a);
     0
@@ -661,7 +661,7 @@ fn main() i32 {
 fn typecheck_matrix_rejects_mixed_numeric_cell_types() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2],
         [3.5, 4.5],
     ]);
@@ -676,7 +676,7 @@ fn main() i32 {
 fn typecheck_matrix_rejects_int_literal_inside_float_matrix() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: f64[] = matrix([
         [1.0, 2],
         [3.0, 4.0],
     ]);
@@ -691,7 +691,7 @@ fn main() i32 {
 fn typecheck_matrix_rejects_bool_cells() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, true],
         [3, 4],
     ]);
@@ -706,7 +706,7 @@ fn main() i32 {
 fn typecheck_matrix_rejects_ragged_rows() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2],
         [3, 4, 5],
     ]);
@@ -1254,7 +1254,7 @@ fn main() i32 {
 fn typecheck_anon_vector_outer_ok() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = outer(<1, 2, 3>, <4, 5>);
+    let m: i32[] = outer(<1, 2, 3>, <4, 5>);
     println(m);
     matrix_drop(m);
     0
