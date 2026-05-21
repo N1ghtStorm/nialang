@@ -237,7 +237,7 @@ vector V2 i32 [ U, V ]
 fn main() i32 {
     let a = V3 [X: 1, Y: 2, Z: 3];
     let b = V2 [U: 4, V: 5];
-    let c: Matrix = outer(a, b);
+    let c: i32[] = outer(a, b);
     println(c);
     matrix_drop(c);
     0
@@ -542,7 +542,7 @@ fn codegen_matrix_vector_products_emit_shape_checks() {
 fn codegen_float_matrix_det_uses_lu() {
     let src = r#"
 fn main() f64 {
-    let m: Matrix = matrix([
+    let m: f64[] = matrix([
         [0.0, 1.0],
         [2.0, 3.0],
     ]);
@@ -562,7 +562,7 @@ fn main() f64 {
 fn codegen_int_matrix_det_method_uses_lu() {
     let src = r#"
 fn main() i32 {
-    let m: Matrix = matrix([
+    let m: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);

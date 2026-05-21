@@ -139,9 +139,9 @@ let B = matrix([
 ]);
 ```
 
-`Matrix` is a built-in heap-backed value. Internally the compiler tracks the
-element type and dimensions when it can, while user code writes the surface type
-as `Matrix`.
+A matrix is a built-in heap-backed value. Internally the compiler tracks the
+element type and dimensions when it can. User code annotates the type as `T[]`
+where `T` is the element type (e.g. `i32[]`, `f64[]`).
 
 ### Matrix Arithmetic
 

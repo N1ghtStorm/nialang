@@ -40,25 +40,25 @@ fn main() i32 {
     println(triple_dot);
 
     // --- 2×2 matrices: construction, element-wise ops, multiply, determinant ---
-    let A: Matrix = matrix([
+    let A: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
-    let B: Matrix = matrix([
+    let B: i32[] = matrix([
         [2, 0],
         [1, 3],
     ]);
 
     // Element-wise matrix addition (same cell type and same shape).
-    let Msum: Matrix = A + B;
+    let Msum: i32[] = A + B;
     println(Msum);
 
     // Element-wise product (do not confuse with matrix multiplication).
-    let Mhad: Matrix = A * B;
+    let Mhad: i32[] = A * B;
     println(Mhad);
 
     // Real matrix multiply: row times column, (2×2) @ (2×2) → (2×2).
-    let Mprod: Matrix = A @ B;
+    let Mprod: i32[] = A @ B;
     println(Mprod);
 
     // Determinant of a square matrix (non-square / wrong size aborts at runtime).
@@ -67,7 +67,7 @@ fn main() i32 {
 
     // Outer product of two vectors: matrix of size (dim u) × (dim v).
     // Here Vec2 × Vec2 → 2×2 matrix with the same numeric cell type as the axes.
-    let R: Matrix = outer(u, v);
+    let R: i32[] = outer(u, v);
     println(R);
     println(matrix_rows(R));
     println(matrix_cols(R));

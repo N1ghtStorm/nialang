@@ -15,43 +15,43 @@ vector Vec2i i32 [U, V]
 fn main() i32 {
     let outer_left = Vec3i [X: 1, Y: 2, Z: 3];
     let outer_right = Vec2i [U: 4, V: 5];
-    let outer_product: Matrix = outer(outer_left, outer_right);
+    let outer_product: i32[] = outer(outer_left, outer_right);
     println(outer_product);
     println(matrix_rows(outer_product));
     println(matrix_cols(outer_product));
 
-    let det_m: Matrix = matrix([
+    let det_m: i32[] = matrix([
         [1, 2],
         [3, 4],
     ]);
     println(det_m.det());
 
-    let det3_m: Matrix = matrix([
+    let det3_m: i32[] = matrix([
         [1, 2, 3],
         [0, 1, 4],
         [5, 6, 0],
     ]);
     println(det3_m.det());
 
-    let a: Matrix = matrix([
+    let a: i32[] = matrix([
         [1, 2, 3],
         [4, 5, 6],
     ]);
-    let b: Matrix = matrix([
+    let b: i32[] = matrix([
         [10, 20, 30],
         [40, 50, 60],
     ]);
-    let sum: Matrix = a + b;
-    let diff: Matrix = b - a;
-    let prod: Matrix = a * b;
-    let scaled_right: Matrix = a * 3;
-    let scaled_left: Matrix = 2 * b;
-    let mm_rhs: Matrix = matrix([
+    let sum: i32[] = a + b;
+    let diff: i32[] = b - a;
+    let prod: i32[] = a * b;
+    let scaled_right: i32[] = a * 3;
+    let scaled_left: i32[] = 2 * b;
+    let mm_rhs: i32[] = matrix([
         [7, 8, 9, 10],
         [11, 12, 13, 14],
         [15, 16, 17, 18],
     ]);
-    let matmul: Matrix = a @ mm_rhs;
+    let matmul: i32[] = a @ mm_rhs;
 
     println(a);
     println(b);
@@ -71,19 +71,19 @@ fn main() i32 {
     println(matrix_get(matmul, 0, 0));
     println(matrix_get(matmul, 1, 3));
 
-    let fa: Matrix = matrix([
+    let fa: f64[] = matrix([
         [1.0, 2.5],
         [3.0, 4.5],
     ]);
-    let fb: Matrix = matrix([
+    let fb: f64[] = matrix([
         [10.0, 20.5],
         [30.0, 40.5],
     ]);
-    let fsum: Matrix = fa + fb;
-    let fdiff: Matrix = fb - fa;
-    let fprod: Matrix = fa * fb;
-    let fscaled: Matrix = fa * 2.0;
-    let fmatmul: Matrix = fa @ fb;
+    let fsum: f64[] = fa + fb;
+    let fdiff: f64[] = fb - fa;
+    let fprod: f64[] = fa * fb;
+    let fscaled: f64[] = fa * 2.0;
+    let fmatmul: f64[] = fa @ fb;
     println(fa.det());
     println(fsum);
     println(fdiff);
@@ -91,27 +91,27 @@ fn main() i32 {
     println(fscaled);
     println(fmatmul);
 
-    let some1: Matrix = matrix([
+    let some1: f64[] = matrix([
         [10.0, 20.5, 2.0],
         [30.0, 40.5, 4.0],
     ]);
 
-    let some2: Matrix = matrix([
+    let some2: f64[] = matrix([
         [1.0, 2.5],
         [3.0, 4.5],
         [4.0, 7.5],
     ]);
 
-    let some3: Matrix = some1 @ some2;
-    let some4: Matrix = some2 @ some1;
+    let some3: f64[] = some1 @ some2;
+    let some4: f64[] = some2 @ some1;
 
     println(some3);
     println(some4);
 
     let outer_x = Vec3i [X: 1, Y: 2, Z: 3];
     let outer_y = Vec2i [U: 4, V: 5];
-    let outer_product_xy: Matrix = outer(outer_x, outer_y);
-    let outer_product_yx: Matrix = outer(outer_y, outer_x);
+    let outer_product_xy: i32[] = outer(outer_x, outer_y);
+    let outer_product_yx: i32[] = outer(outer_y, outer_x);
     println(outer_product_xy);
     println(outer_product_yx);
 

@@ -9,6 +9,7 @@ use crate::nia_std::{
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PRINTLN, REALLOC,
     VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
+// MATRIX_TYPE is used only for the reserved-name guard (struct/vector/enum named "Matrix").
 
 /// Canonical function signature table entry used across semantic passes.
 ///
@@ -36,7 +37,9 @@ fn normalize_ty(
     match t {
         Ty::Struct(name) => {
             if name == MATRIX_TYPE {
-                Ok(Ty::Matrix(Box::new(Ty::Unit), None))
+                Err(format!(
+                    "type `Matrix` is no longer a valid annotation; use `T[]` (e.g. `i32[]`)"
+                ))
             } else if enums.contains_key(name) {
                 Ok(Ty::Enum(name.clone()))
             } else if structs.contains_key(name) {
@@ -67,6 +70,13 @@ fn normalize_ty(
         Ty::HeapVector(elem) => Ok(Ty::HeapVector(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
+        Ty::Matrix(elem, shape) => {
+            let norm = normalize_ty(elem, structs, enums, vectors)?;
+            if matches!(norm, Ty::Matrix(_, _)) {
+                return Err("matrix element type cannot itself be a matrix".into());
+            }
+            Ok(Ty::Matrix(Box::new(norm), *shape))
+        }
         other => Ok(other.clone()),
     }
 }
@@ -345,9 +355,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
-        (Ty::Matrix(x, _), Ty::Matrix(y, _)) => {
-            matches!(x.as_ref(), Ty::Unit) || matches!(y.as_ref(), Ty::Unit) || types_equal(x, y)
-        }
+        (Ty::Matrix(x, _), Ty::Matrix(y, _)) => types_equal(x, y),
         _ => false,
     }
 }
