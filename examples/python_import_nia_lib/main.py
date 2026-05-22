@@ -16,20 +16,26 @@ def main() -> None:
     nia.nia_double.restype = ctypes.c_int32
     nia.something.argtypes = []
     nia.something.restype = ctypes.c_int32
+    vec4 = ctypes.c_double * 4
+    nia.vector_mul.argtypes = [ctypes.POINTER(vec4), ctypes.POINTER(vec4)]
+    nia.vector_mul.restype = ctypes.c_double
 
     sum_value = nia.nia_add(20, 22)
     doubled = nia.nia_double(21)
     smth = nia.something()
+    a = vec4(1.2, 2.0, 3.0, 4.0)
+    b = vec4(10.0, 20.0, 30.0, 40.0)
+    dot = nia.vector_mul(ctypes.byref(a), ctypes.byref(b))
     flush_c_stdout()
 
     print(f"nia_add(20, 22) = {sum_value}")
     print(f"nia_double(21) = {doubled}")
     print(f"something() = {smth}")
+    print(f"vector_mul(a, b) = {dot}")
 
     assert sum_value == 42
     assert doubled == 42
     assert smth == 666
-
 
 def build_nia_library() -> Path:
     example_dir = Path(__file__).resolve().parent

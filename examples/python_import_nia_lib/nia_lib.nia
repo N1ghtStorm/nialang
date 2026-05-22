@@ -21,3 +21,7 @@ extern fn something() i32 {
     666
 }
 
+extern fn vector_mul(a: &[f64; 4], b: &[f64; 4]) f64 {
+    (*a).to_vec() @ (*b).to_vec()
+}
+
