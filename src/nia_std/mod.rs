@@ -23,6 +23,7 @@ pub const VECTOR_CLONE: &str = "vector_clone";
 pub const VECTOR_REFCOUNT: &str = "vector_refcount";
 pub const VECTOR_DROP: &str = "vector_drop";
 pub const OUTER: &str = "outer";
+pub const TO_ARRAY: &str = "to_array";
 pub const TO_VEC: &str = "to_vec";
 
 /// LLVM IR prelude used by builtin `println` codegen.
@@ -61,6 +62,24 @@ pub fn llvm_prelude() -> &'static str {
 @nialang.std.txt.tuple_open = private unnamed_addr constant [2 x i8] c"(\00", align 1
 @nialang.std.txt.tuple_close = private unnamed_addr constant [2 x i8] c")\00", align 1
 @nialang.std.txt.tuple_close_ln = private unnamed_addr constant [3 x i8] c")\0A\00", align 1
+@nialang.std.txt.anonvec.close = private unnamed_addr constant [3 x i8] c"})\00", align 1
+@nialang.std.txt.anonvec.close_ln = private unnamed_addr constant [4 x i8] c"})\0A\00", align 1
+@nialang.std.txt.anonvec.open.i8 = private unnamed_addr constant [5 x i8] c"(i8{\00", align 1
+@nialang.std.txt.anonvec.open.u8 = private unnamed_addr constant [5 x i8] c"(u8{\00", align 1
+@nialang.std.txt.anonvec.open.i16 = private unnamed_addr constant [6 x i8] c"(i16{\00", align 1
+@nialang.std.txt.anonvec.open.u16 = private unnamed_addr constant [6 x i8] c"(u16{\00", align 1
+@nialang.std.txt.anonvec.open.i32 = private unnamed_addr constant [6 x i8] c"(i32{\00", align 1
+@nialang.std.txt.anonvec.open.i64 = private unnamed_addr constant [6 x i8] c"(i64{\00", align 1
+@nialang.std.txt.anonvec.open.u64 = private unnamed_addr constant [6 x i8] c"(u64{\00", align 1
+@nialang.std.txt.anonvec.open.i128 = private unnamed_addr constant [7 x i8] c"(i128{\00", align 1
+@nialang.std.txt.anonvec.open.isize = private unnamed_addr constant [8 x i8] c"(isize{\00", align 1
+@nialang.std.txt.anonvec.open.usize = private unnamed_addr constant [8 x i8] c"(usize{\00", align 1
+@nialang.std.txt.anonvec.open.u128 = private unnamed_addr constant [7 x i8] c"(u128{\00", align 1
+@nialang.std.txt.anonvec.open.f16 = private unnamed_addr constant [6 x i8] c"(f16{\00", align 1
+@nialang.std.txt.anonvec.open.f32 = private unnamed_addr constant [6 x i8] c"(f32{\00", align 1
+@nialang.std.txt.anonvec.open.f64 = private unnamed_addr constant [6 x i8] c"(f64{\00", align 1
+@nialang.std.txt.anonvec.open.bool = private unnamed_addr constant [7 x i8] c"(bool{\00", align 1
+@nialang.std.txt.anonvec.open.string = private unnamed_addr constant [9 x i8] c"(string{\00", align 1
 
 declare i32 @printf(ptr nocapture, ...)
 declare i32 @strcmp(ptr, ptr)

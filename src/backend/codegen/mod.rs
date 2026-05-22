@@ -7,8 +7,8 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC, TO_VEC,
-    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC, TO_ARRAY,
+    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -274,6 +274,28 @@ fn ty_print_label(t: &Ty) -> String {
 /// LLVM global holding `println` prefix between `(` and `{`: element type + ASCII space (unique per vector decl).
 fn vector_print_ty_prefix_symbol(vname: &str) -> String {
     format!("nialang.std.vector.ty.{}", sanitize(vname))
+}
+
+fn anon_vector_print_open_symbol(elem_ty: &Ty) -> Option<(&'static str, u32)> {
+    match elem_ty {
+        Ty::I8 => Some(("nialang.std.txt.anonvec.open.i8", 5)),
+        Ty::U8 => Some(("nialang.std.txt.anonvec.open.u8", 5)),
+        Ty::I16 => Some(("nialang.std.txt.anonvec.open.i16", 6)),
+        Ty::U16 => Some(("nialang.std.txt.anonvec.open.u16", 6)),
+        Ty::I32 => Some(("nialang.std.txt.anonvec.open.i32", 6)),
+        Ty::I64 => Some(("nialang.std.txt.anonvec.open.i64", 6)),
+        Ty::U64 => Some(("nialang.std.txt.anonvec.open.u64", 6)),
+        Ty::I128 => Some(("nialang.std.txt.anonvec.open.i128", 7)),
+        Ty::Isize => Some(("nialang.std.txt.anonvec.open.isize", 8)),
+        Ty::Usize => Some(("nialang.std.txt.anonvec.open.usize", 8)),
+        Ty::U128 => Some(("nialang.std.txt.anonvec.open.u128", 7)),
+        Ty::F16 => Some(("nialang.std.txt.anonvec.open.f16", 6)),
+        Ty::F32 => Some(("nialang.std.txt.anonvec.open.f32", 6)),
+        Ty::F64 => Some(("nialang.std.txt.anonvec.open.f64", 6)),
+        Ty::Bool => Some(("nialang.std.txt.anonvec.open.bool", 7)),
+        Ty::String => Some(("nialang.std.txt.anonvec.open.string", 9)),
+        _ => None,
+    }
 }
 
 fn enum_variant_prefix_symbol(ename: &str, vname: &str) -> String {
@@ -1165,6 +1187,32 @@ impl<'a> Gen<'a> {
         }
     }
 
+    fn emit_print_anon_vector(&mut self, elem_ty: &Ty, n: usize, vec_v: &str, newline: bool) {
+        let Some((open_sym, open_size)) = anon_vector_print_open_symbol(elem_ty) else {
+            unreachable!("typechecked anonymous vector print element type")
+        };
+        self.emit_printf_text(open_sym, open_size);
+        for i in 0..n {
+            if i > 0 {
+                self.emit_printf_text("nialang.std.txt.arr_sep", 3);
+            }
+            let ev = self.fresh();
+            let llvm_vec = format!("[{} x {}]", n, llvm_ty(elem_ty, self.structs));
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                ev, llvm_vec, vec_v, i
+            )
+            .unwrap();
+            self.emit_print_value(elem_ty, &format!("%{ev}"), false);
+        }
+        if newline {
+            self.emit_printf_text("nialang.std.txt.anonvec.close_ln", 4);
+        } else {
+            self.emit_printf_text("nialang.std.txt.anonvec.close", 3);
+        }
+    }
+
     /// Emits struct printing in two source-level forms:
     /// - named structs -> JSON-like object form (`{"x": 1, "y": 2}`)
     /// - tuple structs -> tuple form (`(1, 2)`)
@@ -1572,7 +1620,7 @@ impl<'a> Gen<'a> {
                 self.emit_print_vector(vname, v, newline);
             }
             Ty::AnonVector(elem_ty, n) => {
-                self.emit_print_array(elem_ty, *n, v, newline);
+                self.emit_print_anon_vector(elem_ty, *n, v, newline);
             }
             Ty::HeapVector(elem_ty) => {
                 self.emit_print_heap_vector(elem_ty, v, newline);
@@ -1588,6 +1636,9 @@ impl<'a> Gen<'a> {
     }
 
     fn emit_print_heap_vector(&mut self, elem_ty: &Ty, vector: &str, newline: bool) {
+        let Some((open_sym, open_size)) = anon_vector_print_open_symbol(elem_ty) else {
+            unreachable!("typechecked heap anonymous vector print element type")
+        };
         let len = self.heap_vector_load_i64_field(vector, 2);
         let data = self.heap_vector_load_data_ptr(vector);
         let idx_addr = self.fresh();
@@ -1601,7 +1652,7 @@ impl<'a> Gen<'a> {
         let latch_lbl = self.fresh_label("println.heap.vector.latch");
         let done_lbl = self.fresh_label("println.heap.vector.done");
 
-        self.emit_printf_text("nialang.std.txt.arr_open", 2);
+        self.emit_printf_text(open_sym, open_size);
         writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
 
         writeln!(self.out, "{}:", cond_lbl).unwrap();
@@ -1652,9 +1703,9 @@ impl<'a> Gen<'a> {
 
         writeln!(self.out, "{}:", done_lbl).unwrap();
         if newline {
-            self.emit_printf_text("nialang.std.txt.arr_close_ln", 3);
+            self.emit_printf_text("nialang.std.txt.anonvec.close_ln", 4);
         } else {
-            self.emit_printf_text("nialang.std.txt.arr_close", 2);
+            self.emit_printf_text("nialang.std.txt.anonvec.close", 3);
         }
     }
 
@@ -5345,6 +5396,19 @@ impl<'a> Gen<'a> {
                 name,
                 args,
             } => {
+                if name == TO_ARRAY {
+                    debug_assert!(args.is_empty());
+                    let receiver_hint = match hint {
+                        Some(Ty::Array(elem_ty, n)) => Some(Ty::AnonVector(elem_ty.clone(), *n)),
+                        _ => None,
+                    };
+                    let (recv_ty, recv_val) =
+                        self.emit_expr(receiver, locals, receiver_hint.as_ref());
+                    let Ty::AnonVector(elem_ty, n) = recv_ty else {
+                        unreachable!("typechecked to_array receiver")
+                    };
+                    return (Ty::Array(elem_ty, n), recv_val);
+                }
                 if name == TO_VEC {
                     debug_assert!(args.is_empty());
                     let receiver_hint = match hint {

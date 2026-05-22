@@ -7,7 +7,8 @@ use crate::ast::{
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PRINTLN, REALLOC,
-    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    TO_ARRAY, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT,
+    VECTOR_SET,
 };
 // MATRIX_TYPE is used only for the reserved-name guard (struct/vector/enum named "Matrix").
 
@@ -1639,6 +1640,39 @@ fn infer_expr(
             name,
             args,
         } => {
+            if name == TO_ARRAY {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "method `{TO_ARRAY}`: expected 0 args, got {}",
+                        args.len()
+                    ));
+                }
+                let receiver_hint = match hint {
+                    Some(Ty::Array(elem_ty, n)) => Some(Ty::AnonVector(elem_ty.clone(), *n)),
+                    _ => None,
+                };
+                let recv_ty = infer_expr(
+                    receiver,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    receiver_hint.as_ref(),
+                )?;
+                return match recv_ty {
+                    Ty::AnonVector(elem_ty, n) if is_numeric_ty(&elem_ty) => {
+                        Ok(Ty::Array(elem_ty, n))
+                    }
+                    Ty::AnonVector(elem_ty, _) => Err(format!(
+                        "method `{TO_ARRAY}` vector elements must be numeric, got {elem_ty:?}"
+                    )),
+                    Ty::HeapVector(_) => Err(format!(
+                        "method `{TO_ARRAY}` is only supported for fixed-size anonymous vectors"
+                    )),
+                    other => Err(format!("unknown method `{TO_ARRAY}` for type {other:?}")),
+                };
+            }
             if name == TO_VEC {
                 if !args.is_empty() {
                     return Err(format!(

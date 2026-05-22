@@ -40,6 +40,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_array_reverse.nia"),
         include_str!("../../../examples/tests/ok_array_len.nia"),
         include_str!("../../../examples/tests/ok_array_to_vec.nia"),
+        include_str!("../../../examples/tests/ok_vector_to_array.nia"),
         include_str!("../../../examples/tests/ok_print_array.nia"),
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
@@ -254,6 +255,62 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("to_vec args");
     assert!(err.contains("method `to_vec`: expected 0 args"), "{err}");
+}
+
+#[test]
+fn typecheck_vector_to_array_method_ok() {
+    let src = r#"
+fn main() i32 {
+    let floats: [f64; 3] = <1.0, 2.0, 3.0>.to_array();
+    let ints: [i32; 4] = <1, 2, 3, 4>.to_array();
+    println(floats);
+    println(ints);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_vector_to_array_rejects_non_numeric_elements() {
+    let src = r#"
+fn main() i32 {
+    let xs = <true, false>.to_array();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("non-numeric to_array");
+    assert!(
+        err.contains("method `to_array` vector elements must be numeric"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_vector_to_array_rejects_heap_vectors() {
+    let src = r#"
+fn main() i32 {
+    let xs: i32<> = <1, 2, 3>;
+    xs.to_array()
+}
+"#;
+    let err = check_all(src).expect_err("heap to_array");
+    assert!(
+        err.contains("method `to_array` is only supported for fixed-size anonymous vectors"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_vector_to_array_rejects_args() {
+    let src = r#"
+fn main() i32 {
+    <1, 2, 3>.to_array(1)
+}
+"#;
+    let err = check_all(src).expect_err("to_array args");
+    assert!(err.contains("method `to_array`: expected 0 args"), "{err}");
 }
 
 #[test]
