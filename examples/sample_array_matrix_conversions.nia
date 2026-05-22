@@ -1,0 +1,17 @@
+fn main() i32 {
+    let rows = [
+        [1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0],
+    ];
+
+    let m: f64[] = rows.to_matrix();
+    let back: [[f64; 3]; 2] = m.to_array();
+
+    println(rows);
+    println(m);
+    println(back);
+
+    matrix_drop(m);
+
+    0
+}

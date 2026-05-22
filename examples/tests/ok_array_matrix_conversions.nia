@@ -1,0 +1,14 @@
+fn main() i32 {
+    let rows = [
+        [1, 2, 3],
+        [4, 5, 6],
+    ];
+    let m: i32[] = rows.to_matrix();
+    let back: [[i32; 3]; 2] = m.to_array();
+
+    println(m);
+    println(back);
+    matrix_drop(m);
+
+    back[0][0] + back[1][2] - 7
+}

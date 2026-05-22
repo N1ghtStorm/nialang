@@ -8,7 +8,8 @@ use crate::ast::{
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC, TO_ARRAY,
-    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT,
+    VECTOR_SET,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -1715,6 +1716,10 @@ impl<'a> Gen<'a> {
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
         let (src_ty, src_val) = self.emit_expr(&args[0], locals, None);
+        self.emit_matrix_from_array(src_ty, &src_val)
+    }
+
+    fn emit_matrix_from_array(&mut self, src_ty: Ty, src_val: &str) -> (Ty, String) {
         let Ty::Array(row_ty, rows) = src_ty else {
             unreachable!("typechecked matrix source")
         };
@@ -1784,6 +1789,70 @@ impl<'a> Gen<'a> {
             Ty::Matrix(cell_ty.clone(), Some((rows, *cols))),
             format!("%{matrix}"),
         )
+    }
+
+    fn emit_matrix_to_array(
+        &mut self,
+        elem_ty: &Ty,
+        rows: usize,
+        cols: usize,
+        matrix: &str,
+    ) -> (Ty, String) {
+        let data = self.matrix_load_data_ptr(matrix);
+        let row_ty = Ty::Array(Box::new(elem_ty.clone()), cols);
+        let arr_ty = Ty::Array(Box::new(row_ty.clone()), rows);
+        let row_ll = llvm_ty(&row_ty, self.structs);
+        let arr_ll = llvm_ty(&arr_ty, self.structs);
+        let mut arr_agg = "poison".to_string();
+
+        for row in 0..rows {
+            let mut row_agg = "poison".to_string();
+            for col in 0..cols {
+                let flat = row * cols + col;
+                let cell_ptr = self.fresh();
+                let cell = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = getelementptr inbounds {}, ptr {}, i64 {}",
+                    cell_ptr,
+                    llvm_ty(elem_ty, self.structs),
+                    data,
+                    flat
+                )
+                .unwrap();
+                writeln!(
+                    self.out,
+                    "  %{} = load {}, ptr %{}",
+                    cell,
+                    llvm_ty(elem_ty, self.structs),
+                    cell_ptr
+                )
+                .unwrap();
+                let next_row = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = insertvalue {} {}, {} %{}, {}",
+                    next_row,
+                    row_ll,
+                    row_agg,
+                    llvm_ty(elem_ty, self.structs),
+                    cell,
+                    col
+                )
+                .unwrap();
+                row_agg = format!("%{next_row}");
+            }
+            let next_arr = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} {}, {}",
+                next_arr, arr_ll, arr_agg, row_ll, row_agg, row
+            )
+            .unwrap();
+            arr_agg = format!("%{next_arr}");
+        }
+
+        (arr_ty, arr_agg)
     }
 
     fn emit_matrix_clone(
@@ -5396,18 +5465,34 @@ impl<'a> Gen<'a> {
                 name,
                 args,
             } => {
+                if name == TO_MATRIX {
+                    debug_assert!(args.is_empty());
+                    let (recv_ty, recv_val) = self.emit_expr(receiver, locals, None);
+                    return self.emit_matrix_from_array(recv_ty, &recv_val);
+                }
                 if name == TO_ARRAY {
                     debug_assert!(args.is_empty());
                     let receiver_hint = match hint {
+                        Some(Ty::Array(row_ty, rows))
+                            if matches!(row_ty.as_ref(), Ty::Array(_, _)) =>
+                        {
+                            let Ty::Array(cell_ty, cols) = row_ty.as_ref() else {
+                                unreachable!("guarded above")
+                            };
+                            Some(Ty::Matrix(cell_ty.clone(), Some((*rows, *cols))))
+                        }
                         Some(Ty::Array(elem_ty, n)) => Some(Ty::AnonVector(elem_ty.clone(), *n)),
                         _ => None,
                     };
                     let (recv_ty, recv_val) =
                         self.emit_expr(receiver, locals, receiver_hint.as_ref());
-                    let Ty::AnonVector(elem_ty, n) = recv_ty else {
-                        unreachable!("typechecked to_array receiver")
+                    return match recv_ty {
+                        Ty::Matrix(elem_ty, Some((rows, cols))) => {
+                            self.emit_matrix_to_array(&elem_ty, rows, cols, &recv_val)
+                        }
+                        Ty::AnonVector(elem_ty, n) => (Ty::Array(elem_ty, n), recv_val),
+                        _ => unreachable!("typechecked to_array receiver"),
                     };
-                    return (Ty::Array(elem_ty, n), recv_val);
                 }
                 if name == TO_VEC {
                     debug_assert!(args.is_empty());

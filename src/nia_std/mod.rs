@@ -24,6 +24,7 @@ pub const VECTOR_REFCOUNT: &str = "vector_refcount";
 pub const VECTOR_DROP: &str = "vector_drop";
 pub const OUTER: &str = "outer";
 pub const TO_ARRAY: &str = "to_array";
+pub const TO_MATRIX: &str = "to_matrix";
 pub const TO_VEC: &str = "to_vec";
 
 /// LLVM IR prelude used by builtin `println` codegen.

@@ -41,6 +41,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_array_len.nia"),
         include_str!("../../../examples/tests/ok_array_to_vec.nia"),
         include_str!("../../../examples/tests/ok_vector_to_array.nia"),
+        include_str!("../../../examples/tests/ok_array_matrix_conversions.nia"),
         include_str!("../../../examples/tests/ok_print_array.nia"),
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
@@ -311,6 +312,67 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("to_array args");
     assert!(err.contains("method `to_array`: expected 0 args"), "{err}");
+}
+
+#[test]
+fn typecheck_array_matrix_conversion_methods_ok() {
+    let src = r#"
+fn main() i32 {
+    let rows = [
+        [1, 2, 3],
+        [4, 5, 6],
+    ];
+    let m: i32[] = rows.to_matrix();
+    let back: [[i32; 3]; 2] = m.to_array();
+    matrix_drop(m);
+    back[0][0]
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_array_to_matrix_rejects_flat_array() {
+    let src = r#"
+fn main() i32 {
+    [1, 2, 3].to_matrix()
+}
+"#;
+    let err = check_all(src).expect_err("flat array to_matrix");
+    assert!(
+        err.contains("method `to_matrix` expects an array of arrays"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_array_to_matrix_rejects_non_numeric_cells() {
+    let src = r#"
+fn main() i32 {
+    [[true, false]].to_matrix()
+}
+"#;
+    let err = check_all(src).expect_err("non-numeric to_matrix");
+    assert!(
+        err.contains("method `to_matrix` cells must be numeric"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_matrix_to_array_rejects_unknown_shape() {
+    let src = r#"
+fn f(m: i32[]) i32 {
+    let back = m.to_array();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("unknown matrix shape to_array");
+    assert!(
+        err.contains("method `to_array` needs a Matrix with a known shape"),
+        "{err}"
+    );
 }
 
 #[test]

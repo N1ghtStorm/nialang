@@ -429,6 +429,17 @@ fn codegen_vector_to_array_reuses_anon_vector_aggregate_as_array() {
 }
 
 #[test]
+fn codegen_array_matrix_conversions_copy_between_array_and_matrix_storage() {
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_array_matrix_conversions.nia"
+    ));
+    assert!(ll.contains("call ptr @malloc(i64 24)"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [3 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [2 x [3 x i32]]"), "IR:\n{ll}");
+    assert!(ll.contains("getelementptr inbounds i32"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_comparison_emits_icmp() {
     let src = r#"
 fn main() i32 {
