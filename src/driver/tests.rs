@@ -27,6 +27,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_array_index_store.nia",
         "examples/tests/ok_array_reverse.nia",
         "examples/tests/ok_array_len.nia",
+        "examples/tests/ok_array_to_vec.nia",
         "examples/tests/ok_alloc_heap.nia",
         "examples/tests/ok_ptr_write.nia",
         "examples/tests/ok_ptr_array_write.nia",

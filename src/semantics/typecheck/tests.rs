@@ -39,6 +39,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_array_index_store.nia"),
         include_str!("../../../examples/tests/ok_array_reverse.nia"),
         include_str!("../../../examples/tests/ok_array_len.nia"),
+        include_str!("../../../examples/tests/ok_array_to_vec.nia"),
         include_str!("../../../examples/tests/ok_print_array.nia"),
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
@@ -212,6 +213,47 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("det method args");
     assert!(err.contains("method `det`: expected 0 args"), "{err}");
+}
+
+#[test]
+fn typecheck_array_to_vec_method_ok() {
+    let src = r#"
+fn main() i32 {
+    let ints: i32<4> = [1, 2, 3, 4].to_vec();
+    let floats: f32<2> = [1.0, 2.0].to_vec();
+    println(ints);
+    println(floats);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_array_to_vec_rejects_non_numeric_elements() {
+    let src = r#"
+fn main() i32 {
+    let xs = [true, false].to_vec();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("non-numeric to_vec");
+    assert!(
+        err.contains("method `to_vec` array elements must be numeric"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_array_to_vec_rejects_args() {
+    let src = r#"
+fn main() i32 {
+    [1, 2, 3].to_vec(1)
+}
+"#;
+    let err = check_all(src).expect_err("to_vec args");
+    assert!(err.contains("method `to_vec`: expected 0 args"), "{err}");
 }
 
 #[test]

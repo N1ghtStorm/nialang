@@ -23,6 +23,7 @@ pub const VECTOR_CLONE: &str = "vector_clone";
 pub const VECTOR_REFCOUNT: &str = "vector_refcount";
 pub const VECTOR_DROP: &str = "vector_drop";
 pub const OUTER: &str = "outer";
+pub const TO_VEC: &str = "to_vec";
 
 /// LLVM IR prelude used by builtin `println` codegen.
 ///

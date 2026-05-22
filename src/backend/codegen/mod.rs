@@ -7,8 +7,8 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC, VECTOR_CLONE,
-    VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PRINTLN, REALLOC, TO_VEC,
+    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -5345,6 +5345,19 @@ impl<'a> Gen<'a> {
                 name,
                 args,
             } => {
+                if name == TO_VEC {
+                    debug_assert!(args.is_empty());
+                    let receiver_hint = match hint {
+                        Some(Ty::AnonVector(elem_ty, n)) => Some(Ty::Array(elem_ty.clone(), *n)),
+                        _ => None,
+                    };
+                    let (recv_ty, recv_val) =
+                        self.emit_expr(receiver, locals, receiver_hint.as_ref());
+                    let Ty::Array(elem_ty, n) = recv_ty else {
+                        unreachable!("typechecked to_vec receiver")
+                    };
+                    return (Ty::AnonVector(elem_ty, n), recv_val);
+                }
                 let (recv_ty, recv_val) = self.emit_expr(receiver, locals, None);
                 if name == "det" {
                     if let Ty::Matrix(elem_ty, _) = method_receiver_owner_ty(&recv_ty) {

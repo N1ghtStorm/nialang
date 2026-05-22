@@ -1,0 +1,11 @@
+fn main() i32 {
+    let v: i32<4> = [1, 2, 3, 4].to_vec();
+    let w: i32<4> = [10, 20, 30, 40].to_vec();
+
+    println(v);
+    println(w);
+    println(v + w);
+    println(v @ w);
+
+    0
+}

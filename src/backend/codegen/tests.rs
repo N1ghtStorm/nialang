@@ -391,6 +391,15 @@ fn codegen_builtin_len_emits_array_length_constant() {
 }
 
 #[test]
+fn codegen_array_to_vec_reuses_array_aggregate_as_anon_vector() {
+    let ll = emit(include_str!("../../../examples/tests/ok_array_to_vec.nia"));
+    assert!(ll.contains("[4 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [4 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue [4 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_comparison_emits_icmp() {
     let src = r#"
 fn main() i32 {
