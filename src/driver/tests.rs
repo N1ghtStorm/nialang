@@ -108,6 +108,62 @@ fn parse_cli_args_rejects_library_mode_without_output() {
 }
 
 #[test]
+fn parse_cli_args_supports_emit_ll_mode_without_output() {
+    let args = crate::driver::pipeline::parse_cli_args(["examples/sample_floats.nia", "--emit-ll"])
+        .expect("parse args");
+    assert_eq!(
+        args.mode,
+        crate::driver::pipeline::BuildMode::EmitLl { out_ll: None }
+    );
+}
+
+#[test]
+fn parse_cli_args_supports_emit_ll_mode_with_output() {
+    let args = crate::driver::pipeline::parse_cli_args([
+        "examples/sample_floats.nia",
+        "--emit-ll",
+        "build/sample_floats.ll",
+    ])
+    .expect("parse args");
+    assert_eq!(
+        args.mode,
+        crate::driver::pipeline::BuildMode::EmitLl {
+            out_ll: Some(std::path::PathBuf::from("build/sample_floats.ll"))
+        }
+    );
+}
+
+#[test]
+fn parse_cli_args_supports_emit_ll_mode_with_dash_o() {
+    let args = crate::driver::pipeline::parse_cli_args([
+        "examples/sample_floats.nia",
+        "--emit-ll",
+        "-o",
+        "build/sample_floats.ll",
+    ])
+    .expect("parse args");
+    assert_eq!(
+        args.mode,
+        crate::driver::pipeline::BuildMode::EmitLl {
+            out_ll: Some(std::path::PathBuf::from("build/sample_floats.ll"))
+        }
+    );
+}
+
+#[test]
+fn parse_cli_args_rejects_emit_ll_with_library_mode() {
+    let err = crate::driver::pipeline::parse_cli_args([
+        "examples/sample_floats.nia",
+        "--emit-ll",
+        "--lib",
+        "-o",
+        "build/libbad.dylib",
+    ])
+    .expect_err("emit ll and lib conflict");
+    assert!(err.contains("--lib and --emit-ll"), "{err}");
+}
+
+#[test]
 fn compile_error_includes_problem_line_for_type_errors() {
     let src = r#"
 fn main() i32 {

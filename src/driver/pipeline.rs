@@ -401,12 +401,14 @@ fn find_function_bounds(src: &str, name: &str) -> Option<(usize, usize)> {
 ///
 /// ## Supported CLI shape
 /// `nialang <file.nia> [-o out.ll]`
+/// `nialang <file.nia> --emit-ll [out.ll]`
 /// `nialang <file.nia> --lib -o libname.{dylib,so,dll}`
 ///
 /// ## Behavior
 /// - Resolves input path robustly for `cargo run` and direct binary usage.
 /// - Compiles `.nia` source into LLVM IR.
-/// - Optionally dumps generated IR to disk when `-o` is provided.
+/// - Optionally emits generated IR to disk and exits.
+/// - Optionally dumps generated IR to disk when `-o` is provided in run mode.
 /// - Invokes `clang` to produce a temporary native executable.
 /// - Runs that executable and returns *its* exit status to caller.
 /// - Removes temporary artifacts (`.ll` and executable) best-effort.
@@ -425,12 +427,23 @@ pub fn run_cli() -> Result<i32, String> {
 
     match cli.mode {
         BuildMode::Run { out_ll } => run_executable_mode(&ll, out_ll),
+        BuildMode::EmitLl { out_ll } => emit_ll_mode(&ll, &in_path, out_ll),
         BuildMode::Lib { out_lib } => {
             build_shared_library(&ll, &out_lib)?;
             eprintln!("built {}", out_lib.display());
             Ok(0)
         }
     }
+}
+
+fn emit_ll_mode(ll: &str, in_path: &Path, out_ll: Option<PathBuf>) -> Result<i32, String> {
+    let out_path = match out_ll {
+        Some(path) => path,
+        None => default_ll_output_path(in_path)?,
+    };
+    write_text_file(&out_path, ll)?;
+    eprintln!("wrote {}", out_path.display());
+    Ok(0)
 }
 
 fn run_executable_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String> {
@@ -529,6 +542,16 @@ fn write_text_file(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| e.to_string())
 }
 
+fn default_ll_output_path(in_path: &Path) -> Result<PathBuf, String> {
+    let stem = in_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("out");
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    Ok(cwd.join(format!("{stem}.ll")))
+}
+
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     let Some(parent) = path.parent() else {
         return Ok(());
@@ -548,6 +571,7 @@ pub(crate) struct CliArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BuildMode {
     Run { out_ll: Option<PathBuf> },
+    EmitLl { out_ll: Option<PathBuf> },
     Lib { out_lib: PathBuf },
 }
 
@@ -556,13 +580,28 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let mut args = args.into_iter().map(Into::into);
+    let mut args = args.into_iter().map(Into::into).peekable();
     let in_path: PathBuf = args.next().ok_or_else(usage)?.into();
     let mut out: Option<PathBuf> = None;
     let mut lib = false;
+    let mut emit_ll = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--lib" => lib = true,
+            "--emit-ll" => {
+                if emit_ll {
+                    return Err("duplicate --emit-ll flag".into());
+                }
+                emit_ll = true;
+                if let Some(next) = args.peek() {
+                    if !next.starts_with('-') {
+                        if out.is_some() {
+                            return Err("duplicate output path".into());
+                        }
+                        out = Some(args.next().expect("peeked arg exists").into());
+                    }
+                }
+            }
             "-o" => {
                 if out.is_some() {
                     return Err("duplicate -o flag".into());
@@ -577,10 +616,16 @@ where
         }
     }
 
+    if lib && emit_ll {
+        return Err("--lib and --emit-ll cannot be used together".into());
+    }
+
     let mode = if lib {
         BuildMode::Lib {
             out_lib: out.ok_or_else(|| "--lib requires -o <library-path>".to_string())?,
         }
+    } else if emit_ll {
+        BuildMode::EmitLl { out_ll: out }
     } else {
         BuildMode::Run { out_ll: out }
     };
@@ -589,8 +634,10 @@ where
 
 fn usage() -> String {
     "usage: nialang <file.nia> [-o out.ll]\n\
+     usage: nialang <file.nia> --emit-ll [out.ll]\n\
      usage: nialang <file.nia> --lib -o libname.{dylib,so,dll}\n\
      Default mode compiles with clang, runs the executable, then exits with its status.\n\
+     Use --emit-ll to write textual LLVM IR and exit. Without a path, writes <input>.ll in the current directory.\n\
      Use --lib to build a shared library instead of running the program."
         .to_string()
 }
