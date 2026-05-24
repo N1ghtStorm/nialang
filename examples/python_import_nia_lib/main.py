@@ -5,7 +5,6 @@ import platform
 import subprocess
 from pathlib import Path
 
-
 def main() -> None:
     lib_path = build_nia_library()
     nia = ctypes.CDLL(str(lib_path))

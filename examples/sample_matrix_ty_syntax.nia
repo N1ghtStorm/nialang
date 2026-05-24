@@ -21,8 +21,6 @@ fn main() i32 {
 
     println(a @ b);
 
-    matrix_drop(a);
-    matrix_drop(b);
 
     let f: f64[] = matrix([
         [1.0, 0.0],
@@ -32,6 +30,9 @@ fn main() i32 {
     println(f);
     println(f.det());
     matrix_drop(f);
+    matrix_drop(a);
+    matrix_drop(b);
+
 
     0
 }
