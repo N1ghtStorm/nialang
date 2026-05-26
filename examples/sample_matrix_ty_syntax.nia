@@ -27,6 +27,12 @@ fn main() i32 {
         [0.0, 1.0],
     ]);
 
+
+    let vec_mul = gpu {
+        a @ b
+    };
+    println(vec_mul);
+
     println(f);
     println(f.det());
     matrix_drop(f);
