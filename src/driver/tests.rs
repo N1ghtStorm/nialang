@@ -151,6 +151,50 @@ fn parse_cli_args_supports_emit_ll_mode_with_dash_o() {
 }
 
 #[test]
+fn parse_cli_args_supports_emit_asm_mode_without_output() {
+    let args =
+        crate::driver::pipeline::parse_cli_args(["examples/sample_floats.nia", "--emit-asm"])
+            .expect("parse args");
+    assert_eq!(
+        args.mode,
+        crate::driver::pipeline::BuildMode::EmitAsm { out_asm: None }
+    );
+}
+
+#[test]
+fn parse_cli_args_supports_emit_asm_mode_with_output() {
+    let args = crate::driver::pipeline::parse_cli_args([
+        "examples/sample_floats.nia",
+        "--emit-asm",
+        "build/sample_floats.s",
+    ])
+    .expect("parse args");
+    assert_eq!(
+        args.mode,
+        crate::driver::pipeline::BuildMode::EmitAsm {
+            out_asm: Some(std::path::PathBuf::from("build/sample_floats.s"))
+        }
+    );
+}
+
+#[test]
+fn parse_cli_args_supports_emit_asm_mode_with_dash_o() {
+    let args = crate::driver::pipeline::parse_cli_args([
+        "examples/sample_floats.nia",
+        "--emit-asm",
+        "-o",
+        "build/sample_floats.s",
+    ])
+    .expect("parse args");
+    assert_eq!(
+        args.mode,
+        crate::driver::pipeline::BuildMode::EmitAsm {
+            out_asm: Some(std::path::PathBuf::from("build/sample_floats.s"))
+        }
+    );
+}
+
+#[test]
 fn parse_cli_args_rejects_emit_ll_with_library_mode() {
     let err = crate::driver::pipeline::parse_cli_args([
         "examples/sample_floats.nia",
@@ -161,6 +205,30 @@ fn parse_cli_args_rejects_emit_ll_with_library_mode() {
     ])
     .expect_err("emit ll and lib conflict");
     assert!(err.contains("--lib and --emit-ll"), "{err}");
+}
+
+#[test]
+fn parse_cli_args_rejects_emit_asm_with_library_mode() {
+    let err = crate::driver::pipeline::parse_cli_args([
+        "examples/sample_floats.nia",
+        "--emit-asm",
+        "--lib",
+        "-o",
+        "build/libbad.dylib",
+    ])
+    .expect_err("emit asm and lib conflict");
+    assert!(err.contains("--lib and --emit-asm"), "{err}");
+}
+
+#[test]
+fn parse_cli_args_rejects_emit_asm_with_emit_ll_mode() {
+    let err = crate::driver::pipeline::parse_cli_args([
+        "examples/sample_floats.nia",
+        "--emit-asm",
+        "--emit-ll",
+    ])
+    .expect_err("emit asm and emit ll conflict");
+    assert!(err.contains("--emit-ll and --emit-asm"), "{err}");
 }
 
 #[test]

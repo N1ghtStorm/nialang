@@ -402,12 +402,14 @@ fn find_function_bounds(src: &str, name: &str) -> Option<(usize, usize)> {
 /// ## Supported CLI shape
 /// `nialang <file.nia> [-o out.ll]`
 /// `nialang <file.nia> --emit-ll [out.ll]`
+/// `nialang <file.nia> --emit-asm [out.s]`
 /// `nialang <file.nia> --lib -o libname.{dylib,so,dll}`
 ///
 /// ## Behavior
 /// - Resolves input path robustly for `cargo run` and direct binary usage.
 /// - Compiles `.nia` source into LLVM IR.
 /// - Optionally emits generated IR to disk and exits.
+/// - Optionally lowers generated IR to native assembly on disk and exits.
 /// - Optionally dumps generated IR to disk when `-o` is provided in run mode.
 /// - Invokes `clang` to produce a temporary native executable.
 /// - Runs that executable and returns *its* exit status to caller.
@@ -428,6 +430,7 @@ pub fn run_cli() -> Result<i32, String> {
     match cli.mode {
         BuildMode::Run { out_ll } => run_executable_mode(&ll, out_ll),
         BuildMode::EmitLl { out_ll } => emit_ll_mode(&ll, &in_path, out_ll),
+        BuildMode::EmitAsm { out_asm } => emit_asm_mode(&ll, &in_path, out_asm),
         BuildMode::Lib { out_lib } => {
             build_shared_library(&ll, &out_lib)?;
             eprintln!("built {}", out_lib.display());
@@ -439,9 +442,46 @@ pub fn run_cli() -> Result<i32, String> {
 fn emit_ll_mode(ll: &str, in_path: &Path, out_ll: Option<PathBuf>) -> Result<i32, String> {
     let out_path = match out_ll {
         Some(path) => path,
-        None => default_ll_output_path(in_path)?,
+        None => default_output_path(in_path, "ll")?,
     };
     write_text_file(&out_path, ll)?;
+    eprintln!("wrote {}", out_path.display());
+    Ok(0)
+}
+
+fn emit_asm_mode(ll: &str, in_path: &Path, out_asm: Option<PathBuf>) -> Result<i32, String> {
+    let out_path = match out_asm {
+        Some(path) => path,
+        None => default_output_path(in_path, "s")?,
+    };
+    ensure_parent_dir(&out_path)?;
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let pid = std::process::id();
+    let tmp_ll = std::env::temp_dir().join(format!("nialang-{pid}-{nonce}-asm.ll"));
+    std::fs::write(&tmp_ll, ll).map_err(|e| e.to_string())?;
+
+    let clang_ok = Command::new("clang")
+        .arg("-S")
+        .arg(&tmp_ll)
+        .arg("-o")
+        .arg(&out_path)
+        .status()
+        .map_err(|e| {
+            format!(
+                "failed to run `clang`: {e}\n\
+                 Install LLVM/clang and ensure `clang` is on PATH."
+            )
+        })?;
+
+    let _ = std::fs::remove_file(&tmp_ll);
+    if !clang_ok.success() {
+        return Err("clang failed to emit assembly from the generated LLVM IR".into());
+    }
+
     eprintln!("wrote {}", out_path.display());
     Ok(0)
 }
@@ -542,14 +582,14 @@ fn write_text_file(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| e.to_string())
 }
 
-fn default_ll_output_path(in_path: &Path) -> Result<PathBuf, String> {
+fn default_output_path(in_path: &Path, extension: &str) -> Result<PathBuf, String> {
     let stem = in_path
         .file_stem()
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .unwrap_or("out");
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    Ok(cwd.join(format!("{stem}.ll")))
+    Ok(cwd.join(format!("{stem}.{extension}")))
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -572,6 +612,7 @@ pub(crate) struct CliArgs {
 pub(crate) enum BuildMode {
     Run { out_ll: Option<PathBuf> },
     EmitLl { out_ll: Option<PathBuf> },
+    EmitAsm { out_asm: Option<PathBuf> },
     Lib { out_lib: PathBuf },
 }
 
@@ -585,6 +626,7 @@ where
     let mut out: Option<PathBuf> = None;
     let mut lib = false;
     let mut emit_ll = false;
+    let mut emit_asm = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--lib" => lib = true,
@@ -593,6 +635,20 @@ where
                     return Err("duplicate --emit-ll flag".into());
                 }
                 emit_ll = true;
+                if let Some(next) = args.peek() {
+                    if !next.starts_with('-') {
+                        if out.is_some() {
+                            return Err("duplicate output path".into());
+                        }
+                        out = Some(args.next().expect("peeked arg exists").into());
+                    }
+                }
+            }
+            "--emit-asm" => {
+                if emit_asm {
+                    return Err("duplicate --emit-asm flag".into());
+                }
+                emit_asm = true;
                 if let Some(next) = args.peek() {
                     if !next.starts_with('-') {
                         if out.is_some() {
@@ -619,6 +675,12 @@ where
     if lib && emit_ll {
         return Err("--lib and --emit-ll cannot be used together".into());
     }
+    if lib && emit_asm {
+        return Err("--lib and --emit-asm cannot be used together".into());
+    }
+    if emit_ll && emit_asm {
+        return Err("--emit-ll and --emit-asm cannot be used together".into());
+    }
 
     let mode = if lib {
         BuildMode::Lib {
@@ -626,6 +688,8 @@ where
         }
     } else if emit_ll {
         BuildMode::EmitLl { out_ll: out }
+    } else if emit_asm {
+        BuildMode::EmitAsm { out_asm: out }
     } else {
         BuildMode::Run { out_ll: out }
     };
@@ -635,9 +699,11 @@ where
 fn usage() -> String {
     "usage: nialang <file.nia> [-o out.ll]\n\
      usage: nialang <file.nia> --emit-ll [out.ll]\n\
+     usage: nialang <file.nia> --emit-asm [out.s]\n\
      usage: nialang <file.nia> --lib -o libname.{dylib,so,dll}\n\
      Default mode compiles with clang, runs the executable, then exits with its status.\n\
      Use --emit-ll to write textual LLVM IR and exit. Without a path, writes <input>.ll in the current directory.\n\
+     Use --emit-asm to write native assembly and exit. Without a path, writes <input>.s in the current directory.\n\
      Use --lib to build a shared library instead of running the program."
         .to_string()
 }
