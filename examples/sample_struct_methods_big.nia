@@ -1,0 +1,221 @@
+// Larger struct and method sample.
+//
+// It demonstrates:
+// - named structs containing other structs,
+// - methods with `&self`,
+// - methods returning new struct values,
+// - nested method calls through fields,
+// - simple boolean methods built from early returns.
+
+struct Point2 {
+    x: i32,
+    y: i32
+}
+
+struct Size2 {
+    w: i32,
+    h: i32
+}
+
+struct Rect {
+    origin: Point2,
+    size: Size2
+}
+
+struct Widget {
+    frame: Rect,
+    padding: i32,
+    weight: i32
+}
+
+fn abs_i32(n: i32) i32 {
+    if n < 0 {
+        return 0 - n
+    }
+    n
+}
+
+impl Point2 {
+    fn add(&self, other: Point2) Point2 {
+        Point2 {
+            x: self.x + other.x,
+            y: self.y + other.y
+        }
+    }
+
+    fn sub(&self, other: Point2) Point2 {
+        Point2 {
+            x: self.x - other.x,
+            y: self.y - other.y
+        }
+    }
+
+    fn scale(&self, k: i32) Point2 {
+        Point2 {
+            x: self.x * k,
+            y: self.y * k
+        }
+    }
+
+    fn dot(&self, other: Point2) i32 {
+        self.x * other.x + self.y * other.y
+    }
+
+    fn manhattan(&self) i32 {
+        abs_i32(self.x) + abs_i32(self.y)
+    }
+}
+
+impl Size2 {
+    fn area(&self) i32 {
+        self.w * self.h
+    }
+
+    fn grow(&self, delta: i32) Size2 {
+        Size2 {
+            w: self.w + delta * 2,
+            h: self.h + delta * 2
+        }
+    }
+
+    fn fits(&self, other: Size2) bool {
+        if self.w < other.w {
+            return false
+        }
+        if self.h < other.h {
+            return false
+        }
+        true
+    }
+}
+
+impl Rect {
+    fn right(&self) i32 {
+        self.origin.x + self.size.w
+    }
+
+    fn bottom(&self) i32 {
+        self.origin.y + self.size.h
+    }
+
+    fn area(&self) i32 {
+        self.size.area()
+    }
+
+    fn translate(&self, delta: Point2) Rect {
+        Rect {
+            origin: self.origin.add(delta),
+            size: self.size
+        }
+    }
+
+    fn inflate(&self, delta: i32) Rect {
+        Rect {
+            origin: self.origin.sub(Point2 { x: delta, y: delta }),
+            size: self.size.grow(delta)
+        }
+    }
+
+    fn contains(&self, p: Point2) bool {
+        if p.x < self.origin.x {
+            return false
+        }
+        if p.y < self.origin.y {
+            return false
+        }
+        if p.x > self.right() {
+            return false
+        }
+        if p.y > self.bottom() {
+            return false
+        }
+        true
+    }
+}
+
+impl Widget {
+    fn inner_rect(&self) Rect {
+        Rect {
+            origin: self.frame.origin.add(Point2 {
+                x: self.padding,
+                y: self.padding
+            }),
+            size: Size2 {
+                w: self.frame.size.w - self.padding * 2,
+                h: self.frame.size.h - self.padding * 2
+            }
+        }
+    }
+
+    fn move_by(&self, delta: Point2) Widget {
+        Widget {
+            frame: self.frame.translate(delta),
+            padding: self.padding,
+            weight: self.weight
+        }
+    }
+
+    fn padded(&self, extra: i32) Widget {
+        Widget {
+            frame: self.frame.inflate(extra),
+            padding: self.padding + extra,
+            weight: self.weight
+        }
+    }
+
+    fn score(&self, cursor: Point2) i32 {
+        let inner = self.inner_rect();
+        if inner.contains(cursor) {
+            return inner.area() + self.weight
+        }
+        self.frame.area() - self.weight
+    }
+}
+
+fn main() i32 {
+    let base = Point2 { x: 10, y: 20 };
+    let velocity = Point2 { x: 3, y: 4 };
+    let moved_point = base.add(velocity.scale(2));
+
+    println("--- points");
+    println(base);
+    println(velocity);
+    println(moved_point);
+    println(base.dot(velocity));
+    println(Point2 { x: 0 - 5, y: 12 }.manhattan());
+
+    let frame = Rect {
+        origin: Point2 { x: 10, y: 10 },
+        size: Size2 { w: 80, h: 40 }
+    };
+    let widget = Widget {
+        frame: frame,
+        padding: 4,
+        weight: 17
+    };
+
+    println("--- rects");
+    println(frame);
+    println(frame.right());
+    println(frame.bottom());
+    println(frame.area());
+    println(Size2 { w: 100, h: 50 }.fits(frame.size));
+
+    let inner = widget.inner_rect();
+    let padded = widget.padded(3);
+    let shifted = widget.move_by(Point2 { x: 7, y: 0 - 3 });
+    let cursor_inside = Point2 { x: 20, y: 22 };
+    let cursor_outside = Point2 { x: 2, y: 99 };
+
+    println("--- widgets");
+    println(widget);
+    println(inner);
+    println(padded);
+    println(shifted);
+    println(inner.contains(cursor_inside));
+    println(inner.contains(cursor_outside));
+    println(widget.score(cursor_inside));
+    println(widget.score(cursor_outside));
+
+    0
+}
