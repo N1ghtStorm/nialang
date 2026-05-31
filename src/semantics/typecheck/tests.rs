@@ -39,6 +39,9 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_array_index_store.nia"),
         include_str!("../../../examples/tests/ok_array_reverse.nia"),
         include_str!("../../../examples/tests/ok_array_len.nia"),
+        include_str!("../../../examples/tests/ok_array_to_vec.nia"),
+        include_str!("../../../examples/tests/ok_vector_to_array.nia"),
+        include_str!("../../../examples/tests/ok_array_matrix_conversions.nia"),
         include_str!("../../../examples/tests/ok_print_array.nia"),
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
@@ -56,6 +59,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
+        include_str!("../../../examples/sample_struct_methods_big.nia"),
         include_str!("../../../examples/sample_matrix_rc.nia"),
         include_str!("../../../examples/sample_matrix_arith.nia"),
         include_str!("../../../examples/sample_matrix_det.nia"),
@@ -212,6 +216,164 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("det method args");
     assert!(err.contains("method `det`: expected 0 args"), "{err}");
+}
+
+#[test]
+fn typecheck_array_to_vec_method_ok() {
+    let src = r#"
+fn main() i32 {
+    let ints: i32<4> = [1, 2, 3, 4].to_vec();
+    let floats: f32<2> = [1.0, 2.0].to_vec();
+    println(ints);
+    println(floats);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_array_to_vec_rejects_non_numeric_elements() {
+    let src = r#"
+fn main() i32 {
+    let xs = [true, false].to_vec();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("non-numeric to_vec");
+    assert!(
+        err.contains("method `to_vec` array elements must be numeric"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_array_to_vec_rejects_args() {
+    let src = r#"
+fn main() i32 {
+    [1, 2, 3].to_vec(1)
+}
+"#;
+    let err = check_all(src).expect_err("to_vec args");
+    assert!(err.contains("method `to_vec`: expected 0 args"), "{err}");
+}
+
+#[test]
+fn typecheck_vector_to_array_method_ok() {
+    let src = r#"
+fn main() i32 {
+    let floats: [f64; 3] = <1.0, 2.0, 3.0>.to_array();
+    let ints: [i32; 4] = <1, 2, 3, 4>.to_array();
+    println(floats);
+    println(ints);
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_vector_to_array_rejects_non_numeric_elements() {
+    let src = r#"
+fn main() i32 {
+    let xs = <true, false>.to_array();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("non-numeric to_array");
+    assert!(
+        err.contains("method `to_array` vector elements must be numeric"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_vector_to_array_rejects_heap_vectors() {
+    let src = r#"
+fn main() i32 {
+    let xs: i32<> = <1, 2, 3>;
+    xs.to_array()
+}
+"#;
+    let err = check_all(src).expect_err("heap to_array");
+    assert!(
+        err.contains("method `to_array` is only supported for fixed-size anonymous vectors"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_vector_to_array_rejects_args() {
+    let src = r#"
+fn main() i32 {
+    <1, 2, 3>.to_array(1)
+}
+"#;
+    let err = check_all(src).expect_err("to_array args");
+    assert!(err.contains("method `to_array`: expected 0 args"), "{err}");
+}
+
+#[test]
+fn typecheck_array_matrix_conversion_methods_ok() {
+    let src = r#"
+fn main() i32 {
+    let rows = [
+        [1, 2, 3],
+        [4, 5, 6],
+    ];
+    let m: i32[] = rows.to_matrix();
+    let back: [[i32; 3]; 2] = m.to_array();
+    matrix_drop(m);
+    back[0][0]
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_array_to_matrix_rejects_flat_array() {
+    let src = r#"
+fn main() i32 {
+    [1, 2, 3].to_matrix()
+}
+"#;
+    let err = check_all(src).expect_err("flat array to_matrix");
+    assert!(
+        err.contains("method `to_matrix` expects an array of arrays"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_array_to_matrix_rejects_non_numeric_cells() {
+    let src = r#"
+fn main() i32 {
+    [[true, false]].to_matrix()
+}
+"#;
+    let err = check_all(src).expect_err("non-numeric to_matrix");
+    assert!(
+        err.contains("method `to_matrix` cells must be numeric"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_matrix_to_array_rejects_unknown_shape() {
+    let src = r#"
+fn f(m: i32[]) i32 {
+    let back = m.to_array();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("unknown matrix shape to_array");
+    assert!(
+        err.contains("method `to_array` needs a Matrix with a known shape"),
+        "{err}"
+    );
 }
 
 #[test]

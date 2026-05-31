@@ -7,7 +7,8 @@ use crate::ast::{
 use crate::nia_std::{
     ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
     MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PRINTLN, REALLOC,
-    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
+    VECTOR_REFCOUNT, VECTOR_SET,
 };
 // MATRIX_TYPE is used only for the reserved-name guard (struct/vector/enum named "Matrix").
 
@@ -1639,6 +1640,117 @@ fn infer_expr(
             name,
             args,
         } => {
+            if name == TO_MATRIX {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "method `{TO_MATRIX}`: expected 0 args, got {}",
+                        args.len()
+                    ));
+                }
+                let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
+                return match recv_ty {
+                    Ty::Array(row_ty, rows) => {
+                        if rows == 0 {
+                            return Err(format!(
+                                "method `{TO_MATRIX}` expects a non-empty array of rows"
+                            ));
+                        }
+                        let Ty::Array(cell_ty, cols) = row_ty.as_ref() else {
+                            return Err(format!(
+                                "method `{TO_MATRIX}` expects an array of arrays, got {row_ty:?}"
+                            ));
+                        };
+                        if *cols == 0 {
+                            return Err(format!("method `{TO_MATRIX}` rows must not be empty"));
+                        }
+                        if !is_numeric_ty(cell_ty) {
+                            return Err(format!(
+                                "method `{TO_MATRIX}` cells must be numeric, got {cell_ty:?}"
+                            ));
+                        }
+                        Ok(Ty::Matrix(cell_ty.clone(), Some((rows, *cols))))
+                    }
+                    other => Err(format!("unknown method `{TO_MATRIX}` for type {other:?}")),
+                };
+            }
+            if name == TO_ARRAY {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "method `{TO_ARRAY}`: expected 0 args, got {}",
+                        args.len()
+                    ));
+                }
+                let receiver_hint = match hint {
+                    Some(Ty::Array(row_ty, rows)) if matches!(row_ty.as_ref(), Ty::Array(_, _)) => {
+                        let Ty::Array(cell_ty, cols) = row_ty.as_ref() else {
+                            unreachable!("guarded above")
+                        };
+                        Some(Ty::Matrix(cell_ty.clone(), Some((*rows, *cols))))
+                    }
+                    Some(Ty::Array(elem_ty, n)) => Some(Ty::AnonVector(elem_ty.clone(), *n)),
+                    _ => None,
+                };
+                let recv_ty = infer_expr(
+                    receiver,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    receiver_hint.as_ref(),
+                )?;
+                return match recv_ty {
+                    Ty::Matrix(elem_ty, Some((rows, cols))) if is_numeric_ty(&elem_ty) => {
+                        Ok(Ty::Array(Box::new(Ty::Array(elem_ty, cols)), rows))
+                    }
+                    Ty::Matrix(elem_ty, Some(_)) => Err(format!(
+                        "method `{TO_ARRAY}` matrix cells must be numeric, got {elem_ty:?}"
+                    )),
+                    Ty::Matrix(_, None) => Err(format!(
+                        "method `{TO_ARRAY}` needs a Matrix with a known shape"
+                    )),
+                    Ty::AnonVector(elem_ty, n) if is_numeric_ty(&elem_ty) => {
+                        Ok(Ty::Array(elem_ty, n))
+                    }
+                    Ty::AnonVector(elem_ty, _) => Err(format!(
+                        "method `{TO_ARRAY}` vector elements must be numeric, got {elem_ty:?}"
+                    )),
+                    Ty::HeapVector(_) => Err(format!(
+                        "method `{TO_ARRAY}` is only supported for fixed-size anonymous vectors"
+                    )),
+                    other => Err(format!("unknown method `{TO_ARRAY}` for type {other:?}")),
+                };
+            }
+            if name == TO_VEC {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "method `{TO_VEC}`: expected 0 args, got {}",
+                        args.len()
+                    ));
+                }
+                let receiver_hint = match hint {
+                    Some(Ty::AnonVector(elem_ty, n)) => Some(Ty::Array(elem_ty.clone(), *n)),
+                    _ => None,
+                };
+                let recv_ty = infer_expr(
+                    receiver,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    receiver_hint.as_ref(),
+                )?;
+                return match recv_ty {
+                    Ty::Array(elem_ty, n) if is_numeric_ty(&elem_ty) => {
+                        Ok(Ty::AnonVector(elem_ty, n))
+                    }
+                    Ty::Array(elem_ty, _) => Err(format!(
+                        "method `{TO_VEC}` array elements must be numeric, got {elem_ty:?}"
+                    )),
+                    other => Err(format!("unknown method `{TO_VEC}` for type {other:?}")),
+                };
+            }
             let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
             let owner_ty = method_receiver_owner_ty(&recv_ty);
             if name == "det" {

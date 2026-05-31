@@ -35,6 +35,12 @@ Build a shared library from exported `extern fn` symbols:
 cargo run -- examples/sample_extern_lib.nia --lib -o build/libnia_sample.dylib
 ```
 
+Emit native assembly for inspection:
+
+```bash
+cargo run -- examples/sample_floats.nia --emit-asm build/sample_floats.s
+```
+
 Run the compiler test suite:
 
 ```bash

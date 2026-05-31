@@ -178,6 +178,24 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_println_anon_vectors_use_typed_brace_format() {
+    let src = r#"
+fn main() i32 {
+    let stack: i32<3> = <1, 2, 3>;
+    let heap: f64<> = <1.0, 4.2, 10.3>;
+    println(stack);
+    println(heap);
+    vector_drop(heap);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("nialang.std.txt.anonvec.open.i32"), "IR:\n{ll}");
+    assert!(ll.contains("nialang.std.txt.anonvec.open.f64"), "IR:\n{ll}");
+    assert!(ll.contains("nialang.std.txt.anonvec.close_ln"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_heap_anon_vector_uses_rc_header_and_len() {
     let src = r#"
 fn main() i32 {
@@ -388,6 +406,37 @@ fn codegen_array_reverse_has_helper_and_swaps() {
 fn codegen_builtin_len_emits_array_length_constant() {
     let ll = emit(include_str!("../../../examples/tests/ok_array_len.nia"));
     assert!(ll.contains("ret i32 3"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_array_to_vec_reuses_array_aggregate_as_anon_vector() {
+    let ll = emit(include_str!("../../../examples/tests/ok_array_to_vec.nia"));
+    assert!(ll.contains("[4 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [4 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue [4 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("mul nsw i32"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_vector_to_array_reuses_anon_vector_aggregate_as_array() {
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_vector_to_array.nia"
+    ));
+    assert!(ll.contains("[3 x double]"), "IR:\n{ll}");
+    assert!(ll.contains("[3 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [3 x double]"), "IR:\n{ll}");
+    assert!(ll.contains("getelementptr inbounds [3 x i32]"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_array_matrix_conversions_copy_between_array_and_matrix_storage() {
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_array_matrix_conversions.nia"
+    ));
+    assert!(ll.contains("call ptr @malloc(i64 24)"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [3 x i32]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [2 x [3 x i32]]"), "IR:\n{ll}");
+    assert!(ll.contains("getelementptr inbounds i32"), "IR:\n{ll}");
 }
 
 #[test]

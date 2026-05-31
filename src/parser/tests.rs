@@ -33,6 +33,11 @@ fn parse_fixture_impl_methods() {
 }
 
 #[test]
+fn parse_sample_struct_methods_big() {
+    parse_ok(include_str!("../../examples/sample_struct_methods_big.nia"));
+}
+
+#[test]
 fn parse_fixture_quant_scope() {
     parse_ok(include_str!("../../examples/tests/ok_quant_scope.nia"));
 }

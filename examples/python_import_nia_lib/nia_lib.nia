@@ -1,0 +1,27 @@
+// This Nia source is built as a shared library by main.py.
+//
+// C header:
+//   #include <stdint.h>
+//   int32_t nia_add(int32_t a, int32_t b);
+//   int32_t nia_double(int32_t x);
+//   int32_t something(void);
+
+extern fn nia_add(a: i32, b: i32) i32 {
+    a + b
+}
+
+extern fn nia_double(x: i32) i32 {
+    nia_add(x, x)
+}
+
+extern fn something() i32 {
+    let a: i32<> = <1, 2, 3>;
+    println("Лалка");
+    println(a);
+    666
+}
+
+extern fn vector_mul(a: &[f64; 4], b: &[f64; 4]) f64 {
+    (*a).to_vec() @ (*b).to_vec()
+}
+
