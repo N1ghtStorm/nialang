@@ -50,6 +50,7 @@ fn compile_fixtures_pipeline() {
         "examples/sample_matrix_arith.nia",
         "examples/sample_matrix_det.nia",
         "examples/sample_matrix_vector.nia",
+        "examples/sample_complex.nia",
         "examples/sample_extern_fn.nia",
         "examples/sample_extern_lib.nia",
     ];

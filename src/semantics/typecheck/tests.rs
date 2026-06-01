@@ -123,6 +123,23 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_complex_std_surface() {
+    let src = r#"
+fn main() f64 {
+    let z: Complex = complex(1.0, 2.0);
+    let w = Complex { re: 3, im: 4 };
+    let sum = complex_add(z, w);
+    let product = complex_mul(sum, cis(PI));
+    let scaled = complex_scale(product, 0.5);
+    let ratio = complex_div(scaled, complex(1.0, -1.0));
+    sin(PI) + cos(0.0) + ratio.re + complex_sub(sum, z).im
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
 fn typecheck_quant_scope_does_not_leak_bindings() {
     let src = r#"
 fn main() i32 {

@@ -129,6 +129,26 @@ vector_drop(shared);
 vector_drop(v);
 ```
 
+### Complex Numbers And Trig
+
+`Complex` is a built-in struct-shaped type with `f64` fields:
+
+```nia
+let z = complex(1.0, 2.0);
+let w = Complex { re: 3.0, im: 4.0 };
+
+let sum = complex_add(z, w);
+let product = complex_mul(sum, cis(PI));
+let scaled = complex_scale(product, 0.5);
+let ratio = complex_div(scaled, complex(1.0, -1.0));
+
+println(ratio);
+println(sin(PI) + cos(0.0));
+```
+
+Available helpers: `complex`, `complex_add`, `complex_sub`, `complex_mul`,
+`complex_scale`, `complex_div`, `sin`, `cos`, `PI`, and `cis`.
+
 ## Matrices
 
 Matrices are built with `matrix([...])`:
@@ -477,6 +497,7 @@ Good places to start:
 | `examples/sample_matrix_vector.nia` | matrix-vector and vector-matrix products |
 | `examples/sample_matrix_vector_large.nia` | larger dense matrix-vector smoke test |
 | `examples/sample_matrix_det.nia` | determinant as `m.det()` |
+| `examples/sample_complex.nia` | complex numbers, trig, and `cis` |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
 | `examples/sample_all.nia` | broad language feature sample |
@@ -490,6 +511,7 @@ Currently available:
 - scalar arithmetic, variables, functions, and control flow
 - arrays, structs, enums, pattern matching, pointers, and heap allocation
 - named and anonymous vectors
+- complex numbers, `sin`, `cos`, `PI`, and `cis`
 - dense matrices
 - vector arithmetic, dot products, outer products
 - matrix arithmetic and matrix multiplication

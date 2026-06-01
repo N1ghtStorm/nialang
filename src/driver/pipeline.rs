@@ -554,17 +554,17 @@ fn run_executable_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String>
     std::fs::write(&tmp_ll, ll).map_err(|e| e.to_string())?;
 
     // Compile generated IR into a native executable via system clang.
-    let clang_ok = Command::new("clang")
-        .arg(&tmp_ll)
-        .arg("-o")
-        .arg(&tmp_exe)
-        .status()
-        .map_err(|e| {
-            format!(
-                "failed to run `clang`: {e}\n\
+    let mut cmd = Command::new("clang");
+    cmd.arg(&tmp_ll).arg("-o").arg(&tmp_exe);
+    if !cfg!(windows) {
+        cmd.arg("-lm");
+    }
+    let clang_ok = cmd.status().map_err(|e| {
+        format!(
+            "failed to run `clang`: {e}\n\
                  Install LLVM/clang and ensure `clang` is on PATH."
-            )
-        })?;
+        )
+    })?;
     if !clang_ok.success() {
         let _ = std::fs::remove_file(&tmp_ll);
         let _ = std::fs::remove_file(&tmp_exe);
@@ -605,17 +605,16 @@ fn build_shared_library(ll: &str, out_lib: &Path) -> Result<(), String> {
             cmd.arg("-fPIC");
         }
     }
-    let clang_ok = cmd
-        .arg(&tmp_ll)
-        .arg("-o")
-        .arg(out_lib)
-        .status()
-        .map_err(|e| {
-            format!(
-                "failed to run `clang`: {e}\n\
+    cmd.arg(&tmp_ll).arg("-o").arg(out_lib);
+    if !cfg!(windows) {
+        cmd.arg("-lm");
+    }
+    let clang_ok = cmd.status().map_err(|e| {
+        format!(
+            "failed to run `clang`: {e}\n\
                  Install LLVM/clang and ensure `clang` is on PATH."
-            )
-        })?;
+        )
+    })?;
 
     let _ = std::fs::remove_file(&tmp_ll);
     if !clang_ok.success() {

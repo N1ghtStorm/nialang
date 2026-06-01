@@ -1,0 +1,10 @@
+fn main() i32 {
+    let z = complex(1.0, 2.0);
+    let w = Complex { re: 3.0, im: 4.0 };
+    let phase = cis(PI);
+    let result = complex_div(complex_mul(complex_add(z, w), phase), complex_scale(w, 2.0));
+
+    println(result);
+    println(sin(result.re) + cos(result.im));
+    0
+}

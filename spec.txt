@@ -38,6 +38,28 @@ i8  u8  i16  u16  i32  i64  u64  i128  u128  isize  usize
 f16  f32  f64
 bool
 string
+Complex
+```
+
+`Complex` is a built-in named-field type equivalent to:
+
+```
+Complex { re: f64, im: f64 }
+```
+
+Complex/math builtins:
+
+```
+complex(re: f64, im: f64) Complex
+complex_add(a: Complex, b: Complex) Complex
+complex_sub(a: Complex, b: Complex) Complex
+complex_mul(a: Complex, b: Complex) Complex
+complex_scale(a: Complex, k: f64) Complex
+complex_div(a: Complex, b: Complex) Complex
+sin(x: f64) f64
+cos(x: f64) f64
+cis(theta: f64) Complex
+PI: f64
 ```
 
 ## Structs

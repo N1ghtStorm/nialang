@@ -30,6 +30,32 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_complex_std_surface() {
+    let ll = emit(
+        r#"
+fn main() f64 {
+    let z = complex(1.0, 2.0);
+    let w = Complex { re: 3.0, im: 4.0 };
+    let q = complex_div(complex_mul(complex_add(z, w), cis(PI)), complex_scale(w, 2.0));
+    println(q);
+    sin(q.re) + cos(q.im)
+}
+"#,
+    );
+    assert!(
+        ll.contains("%struct.Complex = type { double, double }"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("declare double @sin(double)"), "IR:\n{ll}");
+    assert!(ll.contains("declare double @cos(double)"), "IR:\n{ll}");
+    assert!(ll.contains("call double @sin(double"), "IR:\n{ll}");
+    assert!(ll.contains("call double @cos(double"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue %struct.Complex"), "IR:\n{ll}");
+    assert!(ll.contains("extractvalue %struct.Complex"), "IR:\n{ll}");
+    assert!(ll.contains("fdiv double"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_contains_if_branching() {
     let ll = emit(include_str!("../../../examples/tests/ok_if_return.nia"));
     assert!(ll.contains("br i1"));

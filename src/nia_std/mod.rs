@@ -1,5 +1,7 @@
 //! Built-in "std" surface: `println`, `len`, heap helpers, matrix helpers (reserved names).
 
+use crate::ast::{StructDef, Ty};
+
 pub const PRINTLN: &str = "println";
 /// Array length: `len(arr)` → `i32` (compile-time size of `[T; N]`).
 pub const LEN: &str = "len";
@@ -26,6 +28,70 @@ pub const OUTER: &str = "outer";
 pub const TO_ARRAY: &str = "to_array";
 pub const TO_MATRIX: &str = "to_matrix";
 pub const TO_VEC: &str = "to_vec";
+pub const COMPLEX_TYPE: &str = "Complex";
+pub const COMPLEX_NEW: &str = "complex";
+pub const COMPLEX_ADD: &str = "complex_add";
+pub const COMPLEX_SUB: &str = "complex_sub";
+pub const COMPLEX_MUL: &str = "complex_mul";
+pub const COMPLEX_SCALE: &str = "complex_scale";
+pub const COMPLEX_DIV: &str = "complex_div";
+pub const SIN: &str = "sin";
+pub const COS: &str = "cos";
+pub const PI: &str = "PI";
+pub const CIS: &str = "cis";
+
+pub fn complex_ty() -> Ty {
+    Ty::Struct(COMPLEX_TYPE.into())
+}
+
+pub fn builtin_structs() -> Vec<StructDef> {
+    vec![StructDef {
+        name: COMPLEX_TYPE.into(),
+        is_tuple: false,
+        fields: vec![("re".into(), Ty::F64), ("im".into(), Ty::F64)],
+    }]
+}
+
+pub fn is_reserved_type_name(name: &str) -> bool {
+    matches!(name, MATRIX_TYPE | COMPLEX_TYPE)
+}
+
+pub fn is_reserved_fn_name(name: &str) -> bool {
+    matches!(
+        name,
+        PRINTLN
+            | LEN
+            | ALLOC
+            | DEALLOC
+            | REALLOC
+            | MATRIX_NEW
+            | MATRIX_GET
+            | MATRIX_SET
+            | MATRIX_ROWS
+            | MATRIX_COLS
+            | MATRIX_LEN
+            | MATRIX_CLONE
+            | MATRIX_REFCOUNT
+            | MATRIX_DROP
+            | VECTOR_GET
+            | VECTOR_SET
+            | VECTOR_LEN
+            | VECTOR_CLONE
+            | VECTOR_REFCOUNT
+            | VECTOR_DROP
+            | OUTER
+            | COMPLEX_NEW
+            | COMPLEX_ADD
+            | COMPLEX_SUB
+            | COMPLEX_MUL
+            | COMPLEX_SCALE
+            | COMPLEX_DIV
+            | SIN
+            | COS
+            | PI
+            | CIS
+    )
+}
 
 /// LLVM IR prelude used by builtin `println` codegen.
 ///
@@ -88,6 +154,8 @@ declare ptr @malloc(i64)
 declare void @free(ptr)
 declare ptr @realloc(ptr, i64)
 declare void @abort()
+declare double @sin(double)
+declare double @cos(double)
 
 "#
 }

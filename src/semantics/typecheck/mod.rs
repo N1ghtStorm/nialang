@@ -5,12 +5,12 @@ use crate::ast::{
     method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PRINTLN, REALLOC,
+    ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
+    COS, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW,
+    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PI, PRINTLN, REALLOC, SIN,
     TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
     VECTOR_REFCOUNT, VECTOR_SET,
 };
-// MATRIX_TYPE is used only for the reserved-name guard (struct/vector/enum named "Matrix").
 
 /// Canonical function signature table entry used across semantic passes.
 ///
@@ -127,9 +127,12 @@ pub fn collect_sigs(
     String,
 > {
     let mut struct_map: HashMap<String, StructDef> = HashMap::new();
+    for s in crate::nia_std::builtin_structs() {
+        struct_map.insert(s.name.clone(), s);
+    }
     for s in structs {
-        if s.name == MATRIX_TYPE {
-            return Err(format!("type name `{MATRIX_TYPE}` is reserved"));
+        if crate::nia_std::is_reserved_type_name(&s.name) {
+            return Err(format!("type name `{}` is reserved", s.name));
         }
         if struct_map.insert(s.name.clone(), s.clone()).is_some() {
             return Err(format!("duplicate struct {}", s.name));
@@ -137,8 +140,8 @@ pub fn collect_sigs(
     }
     let mut vector_map: HashMap<String, VectorDef> = HashMap::new();
     for v in vectors {
-        if v.name == MATRIX_TYPE {
-            return Err(format!("type name `{MATRIX_TYPE}` is reserved"));
+        if crate::nia_std::is_reserved_type_name(&v.name) {
+            return Err(format!("type name `{}` is reserved", v.name));
         }
         if struct_map.contains_key(&v.name) {
             return Err(format!("duplicate type name {}", v.name));
@@ -149,8 +152,8 @@ pub fn collect_sigs(
     }
     let mut enum_map: HashMap<String, EnumDef> = HashMap::new();
     for e in enums {
-        if e.name == MATRIX_TYPE {
-            return Err(format!("type name `{MATRIX_TYPE}` is reserved"));
+        if crate::nia_std::is_reserved_type_name(&e.name) {
+            return Err(format!("type name `{}` is reserved", e.name));
         }
         if struct_map.contains_key(&e.name) || vector_map.contains_key(&e.name) {
             return Err(format!("duplicate type name {}", e.name));
@@ -193,28 +196,7 @@ pub fn collect_sigs(
 
     let mut fn_sigs: HashMap<String, FnSig> = HashMap::new();
     for f in fns {
-        if f.name == PRINTLN
-            || f.name == LEN
-            || f.name == ALLOC
-            || f.name == DEALLOC
-            || f.name == REALLOC
-            || f.name == MATRIX_NEW
-            || f.name == MATRIX_GET
-            || f.name == MATRIX_SET
-            || f.name == MATRIX_ROWS
-            || f.name == MATRIX_COLS
-            || f.name == MATRIX_LEN
-            || f.name == MATRIX_CLONE
-            || f.name == MATRIX_REFCOUNT
-            || f.name == MATRIX_DROP
-            || f.name == VECTOR_GET
-            || f.name == VECTOR_SET
-            || f.name == VECTOR_LEN
-            || f.name == VECTOR_CLONE
-            || f.name == VECTOR_REFCOUNT
-            || f.name == VECTOR_DROP
-            || f.name == OUTER
-        {
+        if crate::nia_std::is_reserved_fn_name(&f.name) {
             return Err(format!(
                 "function name `{}` is reserved for the standard library",
                 f.name
@@ -1231,6 +1213,7 @@ fn infer_expr(
         Expr::Ident(name) => env
             .get(name)
             .cloned()
+            .or_else(|| (name == PI).then_some(Ty::F64))
             .ok_or_else(|| format!("unknown variable `{name}`")),
         Expr::Neg(inner) => {
             let t = infer_expr(inner, env, structs, enums, vectors, fns, None)?;
@@ -1296,6 +1279,95 @@ fn infer_expr(
                         "`{LEN}` expects an array or heap vector, got {t:?}"
                     )),
                 };
+            }
+            if name == SIN || name == COS {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{name}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                expect_arg_ty(name, args, 0, &Ty::F64, env, structs, enums, vectors, fns)?;
+                return Ok(Ty::F64);
+            }
+            if name == COMPLEX_NEW {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "`{COMPLEX_NEW}` expects exactly 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                expect_arg_ty(name, args, 0, &Ty::F64, env, structs, enums, vectors, fns)?;
+                expect_arg_ty(name, args, 1, &Ty::F64, env, structs, enums, vectors, fns)?;
+                return Ok(crate::nia_std::complex_ty());
+            }
+            if name == COMPLEX_ADD
+                || name == COMPLEX_SUB
+                || name == COMPLEX_MUL
+                || name == COMPLEX_DIV
+            {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "`{name}` expects exactly 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let complex_ty = crate::nia_std::complex_ty();
+                expect_arg_ty(
+                    name,
+                    args,
+                    0,
+                    &complex_ty,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                )?;
+                expect_arg_ty(
+                    name,
+                    args,
+                    1,
+                    &complex_ty,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                )?;
+                return Ok(complex_ty);
+            }
+            if name == COMPLEX_SCALE {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "`{COMPLEX_SCALE}` expects exactly 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let complex_ty = crate::nia_std::complex_ty();
+                expect_arg_ty(
+                    name,
+                    args,
+                    0,
+                    &complex_ty,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                )?;
+                expect_arg_ty(name, args, 1, &Ty::F64, env, structs, enums, vectors, fns)?;
+                return Ok(complex_ty);
+            }
+            if name == CIS {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{CIS}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                expect_arg_ty(name, args, 0, &Ty::F64, env, structs, enums, vectors, fns)?;
+                return Ok(crate::nia_std::complex_ty());
             }
             if name == ALLOC {
                 if args.len() != 1 {
