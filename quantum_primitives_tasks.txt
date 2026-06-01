@@ -1,0 +1,143 @@
+Quantum primitives tasks for NiaLang
+====================================
+
+Goal
+----
+
+Turn `quant { ... }` from a plain scoped block into a real quantum region that
+can lower a minimal Bell-pair program to QIR Base Profile.
+
+Recommended MVP
+---------------
+
+Start with Base Profile only:
+
+    fn main() {
+        quant {
+            let a = qubit();
+            let b = qubit();
+
+            h(a);
+            cx(a, b);
+
+            let ra = mz(a);
+            let rb = mz(b);
+
+            record_tuple(2);
+            record(ra, "a");
+            record(rb, "b");
+        }
+    }
+
+Do not start with Adaptive Profile, `if read_result(...)`, dynamic qubit
+allocation, loops, or computed rotation angles. The first useful milestone is:
+
+    cargo run -- examples/bell.nia --qir
+
+emits real QIR instead of the current fixed QIR stub.
+
+Task list
+---------
+
+1. Add quantum semantic types.
+
+   Add `Ty::Qubit` and `Ty::Result` to `src/ast/mod.rs`.
+
+2. Reserve quantum names.
+
+   In `src/nia_std/mod.rs`, reserve:
+
+   - types: `qubit`, `result`
+   - builtins: `qubit`, `h`, `x`, `cx`, `cnot`, `mz`, `record`, `record_tuple`
+
+3. Normalize source type names.
+
+   In `src/semantics/typecheck/mod.rs`, teach `normalize_ty` that source names
+   `qubit` and `result` map to `Ty::Qubit` and `Ty::Result`.
+
+   The parser already parses unknown type identifiers as `Ty::Struct(name)`, so
+   separate lexer tokens are not required for the first version.
+
+4. Add a quantum context to type checking.
+
+   Currently `Expr::Quant` and `Stmt::Quant` are checked like normal nested
+   blocks. Add context state so the type checker knows whether it is inside
+   `quant`.
+
+   Rules for the MVP:
+
+   - quantum types and builtins are allowed only inside `quant`
+   - `qubit()` returns `Ty::Qubit`
+   - `h(q)`, `x(q)`, `cx(a, b)`, `cnot(a, b)` return `Ty::Unit`
+   - `mz(q)` returns `Ty::Result`
+   - `record(r)` and `record(r, "label")` return `Ty::Unit`
+   - `record_tuple(n)` returns `Ty::Unit`
+
+5. Add minimal qubit resource checks.
+
+   For the first pass, keep this small but explicit:
+
+   - reject copying a qubit with `let b = a`
+   - reject returning a qubit from a `quant` expression/function
+   - reject using a qubit after `mz(q)`
+   - reject measuring the same qubit twice
+
+6. Build a QIR lowering model.
+
+   In `src/backend/qir/mod.rs`, replace the fixed stub with a walker over the
+   validated AST.
+
+   Collect:
+
+   - static qubit ids from `qubit()` calls
+   - gate calls for the `body` block
+   - measurement calls for the `measurements` block
+   - output recording calls for the `output` block
+   - `required_num_qubits`
+   - `required_num_results`
+
+7. Emit QIR v2 Base Profile.
+
+   The generated module should use opaque `ptr`, not old `%Qubit*` /
+   `%Result*` typed pointers.
+
+   Shape:
+
+   - `define i64 @main() #0`
+   - `entry` calls `__quantum__rt__initialize(ptr null)`
+   - `body` emits reversible gates
+   - `measurements` emits `mz`
+   - `output` emits `record*` calls and `ret i64 0`
+   - module flags include `qir_major_version = 2`
+   - entry attributes include `qir_profiles="base_profile"`
+   - entry attributes include `required_num_qubits` and `required_num_results`
+
+8. Add compiler tests.
+
+   Add tests for:
+
+   - parsing and typechecking `qubit()` inside `quant`
+   - rejecting `qubit()` outside `quant`
+   - rejecting `h(1)`
+   - rejecting use-after-`mz`
+   - QIR output containing `__quantum__qis__h__body`
+   - QIR output containing `__quantum__qis__cnot__body`
+   - QIR output containing `__quantum__qis__mz__body`
+   - QIR output with correct `required_num_qubits` and `required_num_results`
+
+9. Add an example.
+
+   Add `examples/bell.nia` with the MVP Bell-pair program.
+
+Later phases
+------------
+
+After the Base Profile MVP works:
+
+1. Add more one-qubit gates: `y`, `z`, `s`, `s_adj`, `t`, `t_adj`.
+2. Add parametric gates: `rx(theta, q)`, `ry(theta, q)`, `rz(theta, q)`.
+3. Add two- and three-qubit gates: `cz`, `swap`, `ccx`.
+4. Add Adaptive Profile support for `read_result(r) -> bool`.
+5. Add `if read_result(r) { ... }` inside `quant`.
+6. Add computed angles only after Adaptive classical-computation support exists.
+7. Add dynamic qubit management only after the static Base Profile path is solid.
