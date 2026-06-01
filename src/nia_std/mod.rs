@@ -24,6 +24,13 @@ pub const VECTOR_LEN: &str = "vector_len";
 pub const VECTOR_CLONE: &str = "vector_clone";
 pub const VECTOR_REFCOUNT: &str = "vector_refcount";
 pub const VECTOR_DROP: &str = "vector_drop";
+pub const LIST_TYPE: &str = "List";
+pub const LIST_NEW: &str = "list_new";
+pub const LIST_WITH_CAPACITY: &str = "list_with_capacity";
+pub const LIST_LEN: &str = "len";
+pub const LIST_CAPACITY: &str = "capacity";
+pub const LIST_PUSH: &str = "push";
+pub const LIST_GET: &str = "get";
 pub const OUTER: &str = "outer";
 pub const TO_ARRAY: &str = "to_array";
 pub const TO_MATRIX: &str = "to_matrix";
@@ -53,7 +60,7 @@ pub fn builtin_structs() -> Vec<StructDef> {
 }
 
 pub fn is_reserved_type_name(name: &str) -> bool {
-    matches!(name, MATRIX_TYPE | COMPLEX_TYPE)
+    matches!(name, MATRIX_TYPE | COMPLEX_TYPE | LIST_TYPE)
 }
 
 pub fn is_reserved_fn_name(name: &str) -> bool {
@@ -79,6 +86,8 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | VECTOR_CLONE
             | VECTOR_REFCOUNT
             | VECTOR_DROP
+            | LIST_NEW
+            | LIST_WITH_CAPACITY
             | OUTER
             | COMPLEX_NEW
             | COMPLEX_ADD

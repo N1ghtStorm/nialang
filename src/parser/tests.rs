@@ -247,6 +247,16 @@ fn parse_fixture_matrix_vector() {
 }
 
 #[test]
+fn parse_fixture_list() {
+    parse_ok(include_str!("../../examples/sample_list.nia"));
+}
+
+#[test]
+fn parse_fixture_dft_list() {
+    parse_ok(include_str!("../../examples/sample_dft_list.nia"));
+}
+
+#[test]
 fn parse_fixture_anon_vector() {
     parse_ok(include_str!("../../examples/sample_anon_vector.nia"));
 }
@@ -286,6 +296,33 @@ fn main(v: f64<>) i32 {
             assert_eq!(ty, &Ty::HeapVector(Box::new(Ty::I32)));
         }
         other => panic!("expected typed let, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_list_type_and_generic_constructors() {
+    let src = r#"
+fn main() i32 {
+    let bytes: List[u8] = list_new[u8]();
+    let zs = list_with_capacity[Complex](10);
+    bytes.push(1);
+    zs.len()
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    match &fns[0].body.stmts[0] {
+        Stmt::Let {
+            ty: Some(ty), init, ..
+        } => {
+            assert_eq!(ty, &Ty::List(Box::new(Ty::U8)));
+            assert!(matches!(
+                init,
+                Expr::GenericCall { name, ty_args, args }
+                    if name == "list_new" && ty_args == &vec![Ty::U8] && args.is_empty()
+            ));
+        }
+        other => panic!("expected typed list let, got {other:?}"),
     }
 }
 

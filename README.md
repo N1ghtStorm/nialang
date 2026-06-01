@@ -129,6 +129,26 @@ vector_drop(shared);
 vector_drop(v);
 ```
 
+### Dynamic Lists
+
+`List[T]` is a growable heap-backed list for values of type `T`.
+Constructors take the element type in brackets:
+
+```nia
+let bytes = list_new[u8]();
+let zs: List[Complex] = list_with_capacity[Complex](2);
+
+bytes.push(10);
+bytes.push(20);
+
+println(bytes.len());
+println(bytes.capacity());
+println(bytes.get(1));
+```
+
+The first list surface is intentionally small: `len`, `capacity`, `push`, and
+`get`. Index syntax and explicit list cleanup are not implemented yet.
+
 ### Complex Numbers And Trig
 
 `Complex` is a built-in struct-shaped type with `f64` fields:
@@ -499,6 +519,8 @@ Good places to start:
 | `examples/sample_matrix_det.nia` | determinant as `m.det()` |
 | `examples/sample_complex.nia` | complex numbers, trig, and `cis` |
 | `examples/sample_dft4.nia` | discrete Fourier transform for a 4-value signal |
+| `examples/sample_list.nia` | dynamic `List[T]` constructors and methods |
+| `examples/sample_dft_list.nia` | list-backed discrete Fourier transform |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
 | `examples/sample_all.nia` | broad language feature sample |
@@ -512,6 +534,7 @@ Currently available:
 - scalar arithmetic, variables, functions, and control flow
 - arrays, structs, enums, pattern matching, pointers, and heap allocation
 - named and anonymous vectors
+- dynamic `List[T]` values with `len`, `capacity`, `push`, and `get`
 - complex numbers, `sin`, `cos`, `PI`, and `cis`
 - dense matrices
 - vector arithmetic, dot products, outer products
@@ -524,6 +547,7 @@ Still intentionally small or unfinished:
 
 - no sparse matrices
 - no eigenvalues, QR, SVD, or advanced decomposition APIs
+- no list index syntax or explicit list cleanup yet
 - explicit matrix lifetime management
 - limited diagnostics compared with production languages
 - experimental syntax and type inference

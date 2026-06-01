@@ -56,6 +56,8 @@ pub enum Ty {
     AnonVector(Box<Ty>, usize),
     /// Reference-counted heap vector with dynamic length, written as `T<>`.
     HeapVector(Box<Ty>),
+    /// Heap-backed growable list, written as `List[T]`.
+    List(Box<Ty>),
     /// Built-in reference-counted heap matrix with one numeric cell type.
     ///
     /// The optional `(rows, cols)` shape is known for matrix literals and derived
@@ -114,6 +116,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::Unit => "unit".into(),
         Ty::AnonVector(elem, n) => format!("anonvec_{}_{}", ty_symbol_fragment(elem), n),
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
+        Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
         Ty::Matrix(_, _) => "Matrix".into(),
     }
 }
@@ -233,6 +236,11 @@ pub enum Expr {
     Ge(Box<Expr>, Box<Expr>),
     Call {
         name: String,
+        args: Vec<Expr>,
+    },
+    GenericCall {
+        name: String,
+        ty_args: Vec<Ty>,
         args: Vec<Expr>,
     },
     MethodCall {

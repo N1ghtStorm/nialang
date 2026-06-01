@@ -52,6 +52,8 @@ fn compile_fixtures_pipeline() {
         "examples/sample_matrix_vector.nia",
         "examples/sample_complex.nia",
         "examples/sample_dft4.nia",
+        "examples/sample_list.nia",
+        "examples/sample_dft_list.nia",
         "examples/sample_extern_fn.nia",
         "examples/sample_extern_lib.nia",
     ];

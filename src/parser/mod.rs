@@ -3,6 +3,7 @@ use crate::ast::{
     Ty, VectorDef, method_symbol,
 };
 use crate::lexer::Token;
+use crate::nia_std::{LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -655,6 +656,12 @@ impl Parser {
                 Token::TyF32 => Ok(Ty::F32),
                 Token::TyF64 => Ok(Ty::F64),
                 Token::TyString => Ok(Ty::String),
+                Token::Ident(n) if n == LIST_TYPE => {
+                    self.expect(&Token::LBracket)?;
+                    let elem = self.parse_ty()?;
+                    self.expect(&Token::RBracket)?;
+                    Ok(Ty::List(Box::new(elem)))
+                }
                 Token::Ident(n) => Ok(Ty::Struct(n)),
                 other => Err(format!("expected type, got {other:?}")),
             }?
@@ -843,6 +850,19 @@ impl Parser {
                     }
                 }
                 Token::LBracket => {
+                    if let Expr::Ident(name) = &e {
+                        if name == LIST_NEW || name == LIST_WITH_CAPACITY {
+                            let name = name.clone();
+                            let ty_args = self.parse_generic_ty_args()?;
+                            let args = self.parse_call_args()?;
+                            e = Expr::GenericCall {
+                                name,
+                                ty_args,
+                                args,
+                            };
+                            continue;
+                        }
+                    }
                     self.bump();
                     let idx = self.parse_expr()?;
                     self.expect(&Token::RBracket)?;
@@ -871,6 +891,25 @@ impl Parser {
         }
         self.expect(&Token::RParen)?;
         Ok(args)
+    }
+
+    fn parse_generic_ty_args(&mut self) -> Result<Vec<Ty>, String> {
+        self.expect(&Token::LBracket)?;
+        let mut ty_args = Vec::new();
+        if !matches!(self.peek(), Token::RBracket) {
+            loop {
+                ty_args.push(self.parse_ty()?);
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                    }
+                    Token::RBracket => break,
+                    _ => return Err(format!("expected , or ], got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::RBracket)?;
+        Ok(ty_args)
     }
 
     fn looks_like_struct_lit_after_ident(&self) -> bool {

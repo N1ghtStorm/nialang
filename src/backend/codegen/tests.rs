@@ -249,6 +249,36 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_list_alloc_len_capacity_and_push() {
+    let src = r#"
+fn main() i32 {
+    let bytes = list_new[u8]();
+    bytes.push(10);
+    bytes.push(20);
+    println(bytes.get(1));
+
+    let zs = list_with_capacity[Complex](2);
+    zs.push(complex(1.0, 0.0));
+    println(zs.get(0));
+
+    bytes.len() + bytes.capacity() + zs.len() + zs.capacity()
+}
+"#;
+    let ll = emit(src);
+    assert!(
+        ll.contains("getelementptr inbounds { ptr, i64, i64 }"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call ptr @malloc(i64 24)"), "IR:\n{ll}");
+    assert!(ll.contains("call ptr @realloc(ptr"), "IR:\n{ll}");
+    assert!(ll.contains("store i8"), "IR:\n{ll}");
+    assert!(ll.contains("store %struct.Complex"), "IR:\n{ll}");
+    assert!(ll.contains("list.get.bounds.ok"), "IR:\n{ll}");
+    assert!(ll.contains("trunc i64"), "IR:\n{ll}");
+    assert!(ll.contains("list.push.grow"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_heap_anon_vector_arithmetic_checks_lengths() {
     let src = r#"
 fn main() i32 {

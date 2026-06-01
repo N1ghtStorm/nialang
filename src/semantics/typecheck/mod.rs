@@ -6,10 +6,10 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
-    COS, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW,
-    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PI, PRINTLN, REALLOC, SIN,
-    TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
-    VECTOR_REFCOUNT, VECTOR_SET,
+    COS, DEALLOC, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
+    MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_REFCOUNT,
+    MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PI, PRINTLN, REALLOC, SIN, TO_ARRAY, TO_MATRIX,
+    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 
 /// Canonical function signature table entry used across semantic passes.
@@ -69,6 +69,9 @@ fn normalize_ty(
             *n,
         )),
         Ty::HeapVector(elem) => Ok(Ty::HeapVector(Box::new(normalize_ty(
+            elem, structs, enums, vectors,
+        )?))),
+        Ty::List(elem) => Ok(Ty::List(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
         Ty::Matrix(elem, shape) => {
@@ -333,6 +336,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::Vector(xn, xt), Ty::Vector(yn, yt)) => xn == yn && types_equal(xt, yt),
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_equal(xt, yt),
         (Ty::HeapVector(x), Ty::HeapVector(y)) => types_equal(x, y),
+        (Ty::List(x), Ty::List(y)) => types_equal(x, y),
         // Vector values are currently represented as struct-shaped aggregates in AST/codegen.
         // Accept name-equivalence across these forms at semantic boundaries.
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
@@ -1185,6 +1189,7 @@ fn infer_expr(
             Some(Ty::Unit) => Err("integer literal cannot satisfy `()`".into()),
             Some(Ty::Ptr(_)) => Err("integer literal cannot satisfy a pointer type".into()),
             Some(Ty::Array(_, _)) => Err("integer literal cannot satisfy array type".into()),
+            Some(Ty::List(_)) => Err("integer literal cannot satisfy list type".into()),
             Some(other) => Err(format!("integer literal cannot satisfy {other:?}")),
         },
         Expr::Float(_) => match hint {
@@ -1197,6 +1202,7 @@ fn infer_expr(
             Some(Ty::Unit) => Err("float literal cannot satisfy `()`".into()),
             Some(Ty::Ptr(_)) => Err("float literal cannot satisfy a pointer type".into()),
             Some(Ty::Array(_, _)) => Err("float literal cannot satisfy array type".into()),
+            Some(Ty::List(_)) => Err("float literal cannot satisfy list type".into()),
             Some(other) if is_integer_ty(other) => Err(format!(
                 "float literal cannot satisfy integer type {other:?}"
             )),
@@ -1368,6 +1374,11 @@ fn infer_expr(
                 }
                 expect_arg_ty(name, args, 0, &Ty::F64, env, structs, enums, vectors, fns)?;
                 return Ok(crate::nia_std::complex_ty());
+            }
+            if name == LIST_NEW || name == LIST_WITH_CAPACITY {
+                return Err(format!(
+                    "`{name}` requires a type argument, e.g. `{name}[u8]()`"
+                ));
             }
             if name == ALLOC {
                 if args.len() != 1 {
@@ -1707,6 +1718,41 @@ fn infer_expr(
                 None => Ty::Unit,
             })
         }
+        Expr::GenericCall {
+            name,
+            ty_args,
+            args,
+        } => {
+            if name != LIST_NEW && name != LIST_WITH_CAPACITY {
+                return Err(format!(
+                    "generic calls are only supported for `{LIST_NEW}` and `{LIST_WITH_CAPACITY}`"
+                ));
+            }
+            if ty_args.len() != 1 {
+                return Err(format!("`{name}` expects exactly 1 type argument"));
+            }
+            let elem_ty = normalize_ty(&ty_args[0], structs, enums, vectors)?;
+            if matches!(elem_ty, Ty::Unit) {
+                return Err(format!("`{name}` cannot create `List[()]`"));
+            }
+            if name == LIST_NEW {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "`{LIST_NEW}` expects exactly 0 arguments, got {}",
+                        args.len()
+                    ));
+                }
+            } else {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{LIST_WITH_CAPACITY}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                expect_arg_ty(name, args, 0, &Ty::I32, env, structs, enums, vectors, fns)?;
+            }
+            Ok(Ty::List(Box::new(elem_ty)))
+        }
         Expr::MethodCall {
             receiver,
             name,
@@ -1824,6 +1870,54 @@ fn infer_expr(
                 };
             }
             let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
+            if let Ty::List(elem_ty) = &recv_ty {
+                let elem_ty = elem_ty.as_ref();
+                if name == LIST_LEN || name == LIST_CAPACITY {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `{name}`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Ty::I32);
+                }
+                if name == LIST_PUSH {
+                    if args.len() != 1 {
+                        return Err(format!(
+                            "method `{LIST_PUSH}`: expected 1 arg, got {}",
+                            args.len()
+                        ));
+                    }
+                    let value_ty =
+                        infer_expr(&args[0], env, structs, enums, vectors, fns, Some(elem_ty))?;
+                    if !types_equal(&value_ty, elem_ty) {
+                        return Err(format!(
+                            "method `{LIST_PUSH}` arg type mismatch: expected {elem_ty:?}, got {value_ty:?}"
+                        ));
+                    }
+                    return Ok(Ty::Unit);
+                }
+                if name == LIST_GET {
+                    if args.len() != 1 {
+                        return Err(format!(
+                            "method `{LIST_GET}`: expected 1 arg, got {}",
+                            args.len()
+                        ));
+                    }
+                    expect_arg_ty(
+                        LIST_GET,
+                        args,
+                        0,
+                        &Ty::I32,
+                        env,
+                        structs,
+                        enums,
+                        vectors,
+                        fns,
+                    )?;
+                    return Ok(elem_ty.clone());
+                }
+            }
             let owner_ty = method_receiver_owner_ty(&recv_ty);
             if name == "det" {
                 if let Ty::Matrix(elem_ty, _) = owner_ty {

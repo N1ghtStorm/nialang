@@ -64,6 +64,8 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/sample_matrix_arith.nia"),
         include_str!("../../../examples/sample_matrix_det.nia"),
         include_str!("../../../examples/sample_matrix_vector.nia"),
+        include_str!("../../../examples/sample_list.nia"),
+        include_str!("../../../examples/sample_dft_list.nia"),
     ];
     for src in ok_files {
         let r = check_all(src);
@@ -137,6 +139,79 @@ fn main() f64 {
 "#;
     let r = check_all(src);
     assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_list_surface() {
+    let src = r#"
+fn main() i32 {
+    let bytes: List[u8] = list_new[u8]();
+    bytes.push(10);
+    bytes.push(20);
+    let first: u8 = bytes.get(0);
+    println(first);
+
+    let zs = list_with_capacity[Complex](2);
+    zs.push(complex(1.0, 0.0));
+    zs.push(cis(PI));
+    let z: Complex = zs.get(1);
+    println(z);
+
+    bytes.len() + bytes.capacity() + zs.len() + zs.capacity()
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_list_rejects_missing_type_arg() {
+    let src = r#"
+fn main() i32 {
+    let xs = list_new();
+    xs.len()
+}
+"#;
+    let err = check_all(src).expect_err("list_new requires a type argument");
+    assert!(err.contains("requires a type argument"), "{err}");
+}
+
+#[test]
+fn typecheck_list_rejects_wrong_push_type() {
+    let src = r#"
+fn main() i32 {
+    let xs = list_new[u8]();
+    xs.push(true);
+    xs.len()
+}
+"#;
+    let err = check_all(src).expect_err("push type mismatch");
+    assert!(err.contains("cannot satisfy"), "{err}");
+}
+
+#[test]
+fn typecheck_list_rejects_wrong_get_index_type() {
+    let src = r#"
+fn main() i32 {
+    let xs = list_new[u8]();
+    xs.get(true)
+}
+"#;
+    let err = check_all(src).expect_err("get index type mismatch");
+    assert!(err.contains("bool literal cannot satisfy I32"), "{err}");
+}
+
+#[test]
+fn typecheck_list_methods_reject_pointer_receivers() {
+    let src = r#"
+fn main() i32 {
+    let xs = list_new[u8]();
+    let p = &xs;
+    p.len()
+}
+"#;
+    let err = check_all(src).expect_err("list methods only accept List[T]");
+    assert!(err.contains("unknown method `len`"), "{err}");
 }
 
 #[test]

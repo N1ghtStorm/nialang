@@ -1,0 +1,53 @@
+// List-based discrete Fourier transform.
+//
+// `dft` works over any `List[Complex]` length. The caller supplies:
+// - `root`: exp(2*pi*i/N)
+// - `scale`: 1/sqrt(N)
+//
+// For the runnable demo below N = 4, so root = cis(PI / 2) and scale = 0.5.
+
+fn complex_pow(base: Complex, exponent: i32) Complex {
+    let out = complex(1.0, 0.0);
+
+    for i in 0..exponent {
+        out = complex_mul(out, base);
+    }
+
+    out
+}
+
+fn dft(signal: List[Complex], root: Complex, scale: f64) List[Complex] {
+    let spectrum = list_with_capacity[Complex](signal.len());
+
+    for y in 0..signal.len() {
+        let sum = complex(0.0, 0.0);
+        let step = complex_pow(root, y);
+        let w = complex(1.0, 0.0);
+
+        for x in 0..signal.len() {
+            let term = complex_mul(signal.get(x), w);
+            sum = complex_add(sum, term);
+            w = complex_mul(w, step);
+        }
+
+        spectrum.push(complex_scale(sum, scale));
+    }
+
+    spectrum
+}
+
+fn main() i32 {
+    let signal = list_with_capacity[Complex](4);
+    signal.push(complex(1.0, 0.0));
+    signal.push(complex(2.0, 0.0));
+    signal.push(complex(3.0, 0.0));
+    signal.push(complex(4.0, 0.0));
+
+    let spectrum = dft(signal, cis(PI / 2.0), 0.5);
+
+    for i in 0..spectrum.len() {
+        println(spectrum.get(i));
+    }
+
+    0
+}

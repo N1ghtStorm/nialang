@@ -1,0 +1,20 @@
+fn main() i32 {
+    let bytes = list_new[u8]();
+    println(bytes.len());
+    println(bytes.capacity());
+
+    bytes.push(10);
+    bytes.push(20);
+    println(bytes.len());
+    println(bytes.capacity());
+    println(bytes.get(1));
+
+    let zs: List[Complex] = list_with_capacity[Complex](2);
+    zs.push(complex(1.0, 0.0));
+    zs.push(cis(PI));
+    println(zs.len());
+    println(zs.capacity());
+    println(zs.get(0));
+
+    0
+}

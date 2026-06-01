@@ -7,10 +7,10 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
-    COS, DEALLOC, LEN, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW,
-    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, OUTER, PI, PRINTLN, REALLOC, SIN, TO_ARRAY,
-    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT,
-    VECTOR_SET,
+    COS, DEALLOC, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
+    MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_REFCOUNT,
+    MATRIX_ROWS, MATRIX_SET, OUTER, PI, PRINTLN, REALLOC, SIN, TO_ARRAY, TO_MATRIX, TO_VEC,
+    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -42,7 +42,7 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
             collect_string_literals_expr(a, out);
             collect_string_literals_expr(b, out);
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { args, .. } | Expr::GenericCall { args, .. } => {
             for a in args {
                 collect_string_literals_expr(a, out);
             }
@@ -278,6 +278,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::Vector(n, inner) => format!("{} {}", n, ty_print_label(inner)),
         Ty::AnonVector(inner, n) => format!("{}<{}>", ty_print_label(inner), n),
         Ty::HeapVector(inner) => format!("{}<>", ty_print_label(inner)),
+        Ty::List(inner) => format!("List[{}]", ty_print_label(inner)),
         Ty::Matrix(inner, _) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
         Ty::Matrix(inner, _) => format!("Matrix<{}>", ty_print_label(inner)),
     }
@@ -453,6 +454,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Vector(n, _) => format!("%struct.{}", sanitize(n)),
         Ty::AnonVector(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
         Ty::HeapVector(_) => "ptr".into(),
+        Ty::List(_) => "ptr".into(),
         Ty::Matrix(_, _) => "ptr".into(),
     }
 }
@@ -982,6 +984,154 @@ impl<'a> Gen<'a> {
         format!("%{cell}")
     }
 
+    fn list_field_ptr(&mut self, list: &str, field: u32) -> String {
+        let out = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {{ ptr, i64, i64 }}, ptr {}, i32 0, i32 {}",
+            out, list, field
+        )
+        .unwrap();
+        format!("%{out}")
+    }
+
+    fn list_load_i64_field(&mut self, list: &str, field: u32) -> String {
+        let ptr = self.list_field_ptr(list, field);
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr {}", out, ptr).unwrap();
+        format!("%{out}")
+    }
+
+    fn list_load_data_ptr(&mut self, list: &str) -> String {
+        let ptr = self.list_field_ptr(list, 0);
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load ptr, ptr {}", out, ptr).unwrap();
+        format!("%{out}")
+    }
+
+    fn list_cell_ptr(&mut self, list: &str, idx: &str, elem_ty: &Ty) -> String {
+        let idx64 = self.fresh();
+        let len = self.list_load_i64_field(list, 1);
+        let non_negative = self.fresh();
+        let below_len = self.fresh();
+        let in_bounds = self.fresh();
+        let ok_lbl = self.fresh_label("list.get.bounds.ok");
+        let abort_lbl = self.fresh_label("list.get.bounds.abort");
+        writeln!(self.out, "  %{} = sext i32 {} to i64", idx64, idx).unwrap();
+        writeln!(self.out, "  %{} = icmp sge i64 %{}, 0", non_negative, idx64).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, {}",
+            below_len, idx64, len
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = and i1 %{}, %{}",
+            in_bounds, non_negative, below_len
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            in_bounds, ok_lbl, abort_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", abort_lbl).unwrap();
+        writeln!(self.out, "  call void @abort()").unwrap();
+        writeln!(self.out, "  unreachable").unwrap();
+        writeln!(self.out, "{}:", ok_lbl).unwrap();
+        let data = self.list_load_data_ptr(list);
+        self.heap_vector_data_cell_ptr(&data, &format!("%{idx64}"), elem_ty)
+    }
+
+    fn emit_list_alloc(&mut self, elem_ty: &Ty, capacity: &str) -> String {
+        let elem_size = self.emit_sizeof_i64(elem_ty);
+        let bytes = self.fresh();
+        let data = self.fresh();
+        let list = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = mul i64 {}, {}",
+            bytes, capacity, elem_size
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 %{})", data, bytes).unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 24)", list).unwrap();
+        let data_ptr = self.list_field_ptr(&format!("%{list}"), 0);
+        let len_ptr = self.list_field_ptr(&format!("%{list}"), 1);
+        let cap_ptr = self.list_field_ptr(&format!("%{list}"), 2);
+        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr {}", len_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", capacity, cap_ptr).unwrap();
+        format!("%{list}")
+    }
+
+    fn emit_list_push_value(&mut self, list: &str, elem_ty: &Ty, value: &str) {
+        let len = self.list_load_i64_field(list, 1);
+        let cap = self.list_load_i64_field(list, 2);
+        let full = self.fresh();
+        let grow_lbl = self.fresh_label("list.push.grow");
+        let insert_lbl = self.fresh_label("list.push.insert");
+        writeln!(self.out, "  %{} = icmp eq i64 {}, {}", full, len, cap).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            full, grow_lbl, insert_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", grow_lbl).unwrap();
+        let cap_is_zero = self.fresh();
+        let doubled = self.fresh();
+        let new_cap = self.fresh();
+        let elem_size = self.emit_sizeof_i64(elem_ty);
+        let bytes = self.fresh();
+        let data = self.list_load_data_ptr(list);
+        let new_data = self.fresh();
+        writeln!(self.out, "  %{} = icmp eq i64 {}, 0", cap_is_zero, cap).unwrap();
+        writeln!(self.out, "  %{} = mul i64 {}, 2", doubled, cap).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = select i1 %{}, i64 4, i64 %{}",
+            new_cap, cap_is_zero, doubled
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = mul i64 %{}, {}",
+            bytes, new_cap, elem_size
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = call ptr @realloc(ptr {}, i64 %{})",
+            new_data, data, bytes
+        )
+        .unwrap();
+        let data_ptr = self.list_field_ptr(list, 0);
+        let cap_ptr = self.list_field_ptr(list, 2);
+        writeln!(self.out, "  store ptr %{}, ptr {}", new_data, data_ptr).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new_cap, cap_ptr).unwrap();
+        writeln!(self.out, "  br label %{}", insert_lbl).unwrap();
+
+        writeln!(self.out, "{}:", insert_lbl).unwrap();
+        let current_data = self.list_load_data_ptr(list);
+        let cell = self.heap_vector_data_cell_ptr(&current_data, &len, elem_ty);
+        writeln!(
+            self.out,
+            "  store {} {}, ptr {}",
+            llvm_ty(elem_ty, self.structs),
+            value,
+            cell
+        )
+        .unwrap();
+        let next_len = self.fresh();
+        let len_ptr = self.list_field_ptr(list, 1);
+        writeln!(self.out, "  %{} = add i64 {}, 1", next_len, len).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", next_len, len_ptr).unwrap();
+    }
+
     fn emit_heap_vector_alloc(&mut self, elem_ty: &Ty, len: &str) -> (String, String) {
         let elem_size = self.emit_sizeof_i64(elem_ty);
         let bytes = self.fresh();
@@ -1277,6 +1427,7 @@ impl<'a> Gen<'a> {
             | Ty::Vector(_, _)
             | Ty::AnonVector(_, _)
             | Ty::HeapVector(_)
+            | Ty::List(_)
             | Ty::Matrix(_, _) => unreachable!("typechecked"),
         }
     }
@@ -4769,6 +4920,7 @@ impl<'a> Gen<'a> {
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
+                    | Ty::List(_)
                     | Ty::Matrix(_, _) => unreachable!("typechecked for range"),
                 }
                 writeln!(self.out, "  br label %{}", header).unwrap();
@@ -4855,6 +5007,7 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Vector(_, _))
                 | Some(Ty::AnonVector(_, _))
                 | Some(Ty::HeapVector(_))
+                | Some(Ty::List(_))
                 | Some(Ty::Enum(_))
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
@@ -4948,6 +5101,7 @@ impl<'a> Gen<'a> {
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
+                    | Ty::List(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -5003,6 +5157,7 @@ impl<'a> Gen<'a> {
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
+                    | Ty::List(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -5058,6 +5213,7 @@ impl<'a> Gen<'a> {
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
+                    | Ty::List(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -5177,6 +5333,7 @@ impl<'a> Gen<'a> {
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
+                    | Ty::List(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -5318,6 +5475,7 @@ impl<'a> Gen<'a> {
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
+                    | Ty::List(_)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -5419,6 +5577,54 @@ impl<'a> Gen<'a> {
                     .unwrap();
                 }
                 (Ty::Bool, format!("%{tmp}"))
+            }
+            Expr::GenericCall {
+                name,
+                ty_args,
+                args,
+            } => {
+                if name == LIST_NEW {
+                    let [elem_ty] = ty_args.as_slice() else {
+                        unreachable!("typechecked list_new type args")
+                    };
+                    debug_assert!(args.is_empty());
+                    return (
+                        Ty::List(Box::new(elem_ty.clone())),
+                        self.emit_list_alloc(elem_ty, "0"),
+                    );
+                }
+                if name == LIST_WITH_CAPACITY {
+                    let [elem_ty] = ty_args.as_slice() else {
+                        unreachable!("typechecked list_with_capacity type args")
+                    };
+                    let (_, cap32) = self.emit_expr(&args[0], locals, Some(&Ty::I32));
+                    let cap64 = self.fresh();
+                    writeln!(self.out, "  %{} = sext i32 {} to i64", cap64, cap32).unwrap();
+                    let cap_non_negative = self.fresh();
+                    let ok_lbl = self.fresh_label("list.capacity.ok");
+                    let abort_lbl = self.fresh_label("list.capacity.abort");
+                    writeln!(
+                        self.out,
+                        "  %{} = icmp sge i64 %{}, 0",
+                        cap_non_negative, cap64
+                    )
+                    .unwrap();
+                    writeln!(
+                        self.out,
+                        "  br i1 %{}, label %{}, label %{}",
+                        cap_non_negative, ok_lbl, abort_lbl
+                    )
+                    .unwrap();
+                    writeln!(self.out, "{}:", abort_lbl).unwrap();
+                    writeln!(self.out, "  call void @abort()").unwrap();
+                    writeln!(self.out, "  unreachable").unwrap();
+                    writeln!(self.out, "{}:", ok_lbl).unwrap();
+                    return (
+                        Ty::List(Box::new(elem_ty.clone())),
+                        self.emit_list_alloc(elem_ty, &format!("%{cap64}")),
+                    );
+                }
+                unreachable!("typechecked generic call")
             }
             Expr::Call { name, args } => {
                 if name == PRINTLN {
@@ -5679,6 +5885,39 @@ impl<'a> Gen<'a> {
                     return (Ty::AnonVector(elem_ty, n), recv_val);
                 }
                 let (recv_ty, recv_val) = self.emit_expr(receiver, locals, None);
+                if let Ty::List(elem_ty) = &recv_ty {
+                    let elem_ty = elem_ty.as_ref();
+                    if name == LIST_LEN || name == LIST_CAPACITY {
+                        debug_assert!(args.is_empty());
+                        let field = if name == LIST_LEN { 1 } else { 2 };
+                        let value64 = self.list_load_i64_field(&recv_val, field);
+                        let out = self.fresh();
+                        writeln!(self.out, "  %{} = trunc i64 {} to i32", out, value64).unwrap();
+                        return (Ty::I32, format!("%{out}"));
+                    }
+                    if name == LIST_PUSH {
+                        debug_assert!(args.len() == 1);
+                        let (value_ty, value) = self.emit_expr(&args[0], locals, Some(elem_ty));
+                        debug_assert!(types_match(&value_ty, elem_ty));
+                        self.emit_list_push_value(&recv_val, elem_ty, &value);
+                        return (Ty::Unit, String::new());
+                    }
+                    if name == LIST_GET {
+                        debug_assert!(args.len() == 1);
+                        let (_, idx) = self.emit_expr(&args[0], locals, Some(&Ty::I32));
+                        let cell = self.list_cell_ptr(&recv_val, &idx, elem_ty);
+                        let out = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = load {}, ptr {}",
+                            out,
+                            llvm_ty(elem_ty, self.structs),
+                            cell
+                        )
+                        .unwrap();
+                        return (elem_ty.clone(), format!("%{out}"));
+                    }
+                }
                 if name == "det" {
                     if let Ty::Matrix(elem_ty, _) = method_receiver_owner_ty(&recv_ty) {
                         debug_assert!(args.is_empty());
@@ -6494,6 +6733,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Vector(xn, xt), Ty::Vector(yn, yt)) => xn == yn && types_match(xt, yt),
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_match(xt, yt),
         (Ty::HeapVector(xt), Ty::HeapVector(yt)) => types_match(xt, yt),
+        (Ty::List(xt), Ty::List(yt)) => types_match(xt, yt),
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_match(x, y),
