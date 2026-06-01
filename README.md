@@ -498,6 +498,7 @@ Good places to start:
 | `examples/sample_matrix_vector_large.nia` | larger dense matrix-vector smoke test |
 | `examples/sample_matrix_det.nia` | determinant as `m.det()` |
 | `examples/sample_complex.nia` | complex numbers, trig, and `cis` |
+| `examples/sample_dft4.nia` | discrete Fourier transform for a 4-value signal |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
 | `examples/sample_all.nia` | broad language feature sample |
