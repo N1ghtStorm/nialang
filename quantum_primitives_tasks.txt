@@ -36,6 +36,19 @@ allocation, loops, or computed rotation angles. The first useful milestone is:
 
 emits real QIR instead of the current fixed QIR stub.
 
+CLI direction
+-------------
+
+The `-q` / `--qir` flag should ultimately mean:
+
+    compile Nia quantum primitives to QIR, then run or emit that QIR
+
+The current implementation can temporarily use qir-runner as a compatibility
+executor for ordinary classical Nia LLVM IR, but that should not become the
+permanent meaning of `-q`. Once real quantum lowering exists, move `-q` to
+`Backend::Qir`. If the classical qir-runner bridge is still useful, give it a
+separate explicit flag.
+
 Task list
 ---------
 

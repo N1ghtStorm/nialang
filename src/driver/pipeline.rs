@@ -1,4 +1,3 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,8 +10,8 @@ use crate::semantics::typecheck::{check_fn, collect_sigs};
 ///
 /// The default backend lowers nialang to classical LLVM IR consumed by `clang`.
 /// `Qir` is currently a **stub** in `crate::backend::qir` that emits a
-/// placeholder QIR-flavored module; it exists so that the `-q` / `--qir`
-/// CLI flag and the dispatch path can be wired up ahead of real lowering.
+/// placeholder QIR-flavored module; it exists so backend dispatch can be wired
+/// up ahead of real lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     Default,
@@ -441,6 +440,9 @@ fn find_function_bounds(src: &str, name: &str) -> Option<(usize, usize)> {
 /// - Compiles `.nia` source into LLVM IR.
 /// - Optionally emits generated IR to disk and exits.
 /// - Optionally lowers generated IR to native assembly on disk and exits.
+/// - Optionally runs generated IR through qir-runner when `-q` is selected.
+///   This is currently a classical-IR compatibility path; once quantum
+///   primitives lower to real QIR, `-q` should select that QIR lowering instead.
 /// - Optionally dumps generated IR to disk when `-o` is provided in run mode.
 /// - Invokes `clang` to produce a temporary native executable.
 /// - Runs that executable and returns *its* exit status to caller.
@@ -459,7 +461,7 @@ pub fn run_cli() -> Result<i32, String> {
     let ll = compile_to_ll_with(&src, cli.backend)?;
 
     match cli.mode {
-        BuildMode::Emit { out_ll } => emit_only_mode(&ll, out_ll),
+        BuildMode::QirRun { out_ll } => run_qir_runner_mode(&ll, out_ll),
         BuildMode::Run { out_ll } => run_executable_mode(&ll, out_ll),
         BuildMode::EmitLl { out_ll } => emit_ll_mode(&ll, &in_path, out_ll),
         BuildMode::EmitAsm { out_asm } => emit_asm_mode(&ll, &in_path, out_asm),
@@ -471,22 +473,105 @@ pub fn run_cli() -> Result<i32, String> {
     }
 }
 
-/// Writes IR to `-o` if provided, otherwise dumps it to stdout. Always exits
-/// `0` on success without invoking `clang` — used by emit-only backends
-/// (currently `-q` / `--qir`).
-fn emit_only_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String> {
-    match out_ll {
-        Some(p) => {
-            write_text_file(&p, ll)?;
-            eprintln!("wrote {}", p.display());
-        }
-        None => {
-            std::io::stdout()
-                .write_all(ll.as_bytes())
-                .map_err(|e| e.to_string())?;
+fn run_qir_runner_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String> {
+    run_qir_runner_mode_impl(ll, out_ll)
+}
+
+#[cfg(feature = "qir-runner")]
+fn run_qir_runner_mode_impl(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String> {
+    let qir_runner_ll = prepare_for_qir_runner(ll)?;
+    if let Some(ref p) = out_ll {
+        write_text_file(p, &qir_runner_ll)?;
+        eprintln!("wrote {}", p.display());
+    }
+
+    let mut stdout = std::io::stdout();
+    runner::run_bytes(qir_runner_ll.as_bytes(), Some("main"), 1, None, &mut stdout)
+        .map_err(|e| format!("qir-runner failed: {e}"))?;
+    Ok(0)
+}
+
+#[cfg(not(feature = "qir-runner"))]
+fn run_qir_runner_mode_impl(_ll: &str, _out_ll: Option<PathBuf>) -> Result<i32, String> {
+    Err(
+        "`-q` requires the optional `qir-runner` feature for now: run with `cargo run --features qir-runner -- <file> -q`"
+            .into(),
+    )
+}
+
+#[cfg(feature = "qir-runner")]
+fn prepare_for_qir_runner(ll: &str) -> Result<String, String> {
+    let ll = ll.replace(
+        "target triple = \"unknown-unknown-unknown\"",
+        &format!("target triple = \"{}\"", qir_runner_host_triple()),
+    );
+    attach_qir_runner_entry_point(&ll)
+}
+
+#[cfg(feature = "qir-runner")]
+fn qir_runner_host_triple() -> &'static str {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "arm64-apple-darwin"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-darwin"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "unknown-unknown-unknown"
+    }
+}
+
+#[cfg(feature = "qir-runner")]
+fn attach_qir_runner_entry_point(ll: &str) -> Result<String, String> {
+    let attr_id = next_llvm_attr_id(ll);
+    let mut saw_main = false;
+    let mut out = String::new();
+
+    for line in ll.lines() {
+        if line.starts_with("define ") && line.contains("@main(") {
+            saw_main = true;
+            if line.contains(" #") {
+                return Err(
+                    "qir-runner mode cannot attach entry_point to a main function that already has LLVM attributes"
+                        .into(),
+                );
+            }
+            let Some(prefix) = line.strip_suffix(" {") else {
+                return Err(format!(
+                    "qir-runner mode could not rewrite main definition: {line}"
+                ));
+            };
+            out.push_str(prefix);
+            out.push_str(&format!(" #{attr_id} {{\n"));
+        } else {
+            out.push_str(line);
+            out.push('\n');
         }
     }
-    Ok(0)
+
+    if !saw_main {
+        return Err("qir-runner mode requires a `main` function".into());
+    }
+
+    out.push('\n');
+    out.push_str(&format!(
+        "attributes #{attr_id} = {{ \"entry_point\" \"qir_profiles\"=\"adaptive_profile\" \"required_num_qubits\"=\"0\" \"required_num_results\"=\"0\" }}\n"
+    ));
+    Ok(out)
+}
+
+#[cfg(feature = "qir-runner")]
+fn next_llvm_attr_id(ll: &str) -> usize {
+    ll.lines()
+        .filter_map(|line| line.strip_prefix("attributes #"))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .filter_map(|n| n.parse::<usize>().ok())
+        .max()
+        .map_or(0, |n| n + 1)
 }
 
 fn emit_ll_mode(ll: &str, in_path: &Path, out_ll: Option<PathBuf>) -> Result<i32, String> {
@@ -514,7 +599,9 @@ fn emit_asm_mode(ll: &str, in_path: &Path, out_asm: Option<PathBuf>) -> Result<i
     let tmp_ll = std::env::temp_dir().join(format!("nialang-{pid}-{nonce}-asm.ll"));
     std::fs::write(&tmp_ll, ll).map_err(|e| e.to_string())?;
 
-    let clang_ok = Command::new("clang")
+    let mut cmd = Command::new("clang");
+    configure_clang_sdk(&mut cmd)?;
+    let clang_ok = cmd
         .arg("-S")
         .arg(&tmp_ll)
         .arg("-o")
@@ -555,8 +642,9 @@ fn run_executable_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String>
 
     // Compile generated IR into a native executable via system clang.
     let mut cmd = Command::new("clang");
+    configure_clang_sdk(&mut cmd)?;
     cmd.arg(&tmp_ll).arg("-o").arg(&tmp_exe);
-    if !cfg!(windows) {
+    if should_link_explicit_libm() {
         cmd.arg("-lm");
     }
     let clang_ok = cmd.status().map_err(|e| {
@@ -597,6 +685,7 @@ fn build_shared_library(ll: &str, out_lib: &Path) -> Result<(), String> {
     std::fs::write(&tmp_ll, ll).map_err(|e| e.to_string())?;
 
     let mut cmd = Command::new("clang");
+    configure_clang_sdk(&mut cmd)?;
     if cfg!(target_os = "macos") {
         cmd.arg("-dynamiclib");
     } else {
@@ -606,7 +695,7 @@ fn build_shared_library(ll: &str, out_lib: &Path) -> Result<(), String> {
         }
     }
     cmd.arg(&tmp_ll).arg("-o").arg(out_lib);
-    if !cfg!(windows) {
+    if should_link_explicit_libm() {
         cmd.arg("-lm");
     }
     let clang_ok = cmd.status().map_err(|e| {
@@ -629,6 +718,34 @@ fn build_shared_library(ll: &str, out_lib: &Path) -> Result<(), String> {
 fn write_text_file(path: &Path, text: &str) -> Result<(), String> {
     ensure_parent_dir(path)?;
     std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+fn should_link_explicit_libm() -> bool {
+    !cfg!(any(windows, target_os = "macos"))
+}
+
+fn configure_clang_sdk(cmd: &mut Command) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    let sdk = Command::new("xcrun")
+        .args(["--sdk", "macosx", "--show-sdk-path"])
+        .output()
+        .map_err(|e| format!("failed to run `xcrun --sdk macosx --show-sdk-path`: {e}"))?;
+    if !sdk.status.success() {
+        let stderr = String::from_utf8_lossy(&sdk.stderr);
+        return Err(format!("failed to resolve macOS SDK with xcrun: {stderr}"));
+    }
+
+    let path = String::from_utf8_lossy(&sdk.stdout).trim().to_string();
+    if path.is_empty() || !Path::new(&path).exists() {
+        return Err(format!("xcrun returned missing macOS SDK path `{path}`"));
+    }
+
+    cmd.env_remove("SDKROOT");
+    cmd.arg("-isysroot").arg(path);
+    Ok(())
 }
 
 fn default_output_path(in_path: &Path, extension: &str) -> Result<PathBuf, String> {
@@ -660,14 +777,25 @@ pub(crate) struct CliArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BuildMode {
-    /// Emit IR only (write to `-o` path if given, otherwise stdout). Does not
-    /// invoke `clang`. Selected automatically when a non-default backend is
-    /// chosen (e.g. `-q`/`--qir`).
-    Emit { out_ll: Option<PathBuf> },
-    Run { out_ll: Option<PathBuf> },
-    EmitLl { out_ll: Option<PathBuf> },
-    EmitAsm { out_asm: Option<PathBuf> },
-    Lib { out_lib: PathBuf },
+    /// Run the generated LLVM IR through qir-runner after applying the small
+    /// compatibility wrapper needed for ordinary Nia programs. This is a
+    /// temporary bridge: long term, `-q` is intended to run quantum-primitive
+    /// QIR generated by `Backend::Qir`.
+    QirRun {
+        out_ll: Option<PathBuf>,
+    },
+    Run {
+        out_ll: Option<PathBuf>,
+    },
+    EmitLl {
+        out_ll: Option<PathBuf>,
+    },
+    EmitAsm {
+        out_asm: Option<PathBuf>,
+    },
+    Lib {
+        out_lib: PathBuf,
+    },
 }
 
 pub(crate) fn parse_cli_args<I, S>(args: I) -> Result<CliArgs, String>
@@ -747,13 +875,16 @@ where
         return Err("--emit-ll and --emit-asm cannot be used together".into());
     }
 
-    let backend = if qir { Backend::Qir } else { Backend::Default };
+    // Transitional behavior: `-q` currently runs ordinary Nia IR in qir-runner.
+    // When quantum lowering is implemented, `-q` should move to `Backend::Qir`
+    // and this compatibility route should either disappear or get its own flag.
+    let backend = Backend::Default;
     let mode = if lib {
         BuildMode::Lib {
             out_lib: out.ok_or_else(|| "--lib requires -o <library-path>".to_string())?,
         }
     } else if qir {
-        BuildMode::Emit { out_ll: out }
+        BuildMode::QirRun { out_ll: out }
     } else if emit_ll {
         BuildMode::EmitLl { out_ll: out }
     } else if emit_asm {
@@ -773,12 +904,12 @@ fn usage() -> String {
      usage: nialang <file.nia> --emit-ll [out.ll]\n\
      usage: nialang <file.nia> --emit-asm [out.s]\n\
      usage: nialang <file.nia> --lib -o libname.{dylib,so,dll}\n\
-     usage: nialang <file.nia> -q [-o out.ll]   (QIR backend, stub; emit-only)\n\
+     usage: nialang <file.nia> -q [-o out.ll]   (run through qir-runner)\n\
      Default mode compiles with clang, runs the executable, then exits with its status.\n\
      Use --emit-ll to write textual LLVM IR and exit. Without a path, writes <input>.ll in the current directory.\n\
      Use --emit-asm to write native assembly and exit. Without a path, writes <input>.s in the current directory.\n\
      Use --lib to build a shared library instead of running the program.\n\
-     Use -q / --qir to emit a placeholder QIR module (no clang/run is invoked)."
+     Use -q / --qir to run via qir-runner; this is a temporary classical-IR bridge until quantum primitive lowering lands."
         .to_string()
 }
 

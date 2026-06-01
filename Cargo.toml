@@ -3,5 +3,8 @@ name = "nialang"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+qir-runner = ["dep:runner"]
+
 [dependencies]
-runner = { git = "https://github.com/qir-alliance/qir-runner", package = "runner", tag = "v0.9.4" }
+runner = { path = "../QIR_REPOS_FOR_AI_CONTEXT/qir-runner/runner", optional = true }
