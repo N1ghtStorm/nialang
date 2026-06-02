@@ -46,6 +46,7 @@ pub const SIN: &str = "sin";
 pub const COS: &str = "cos";
 pub const PI: &str = "PI";
 pub const CIS: &str = "cis";
+pub const QUBIT: &str = "qubit";
 
 pub fn complex_ty() -> Ty {
     Ty::Struct(COMPLEX_TYPE.into())
@@ -60,7 +61,7 @@ pub fn builtin_structs() -> Vec<StructDef> {
 }
 
 pub fn is_reserved_type_name(name: &str) -> bool {
-    matches!(name, MATRIX_TYPE | COMPLEX_TYPE | LIST_TYPE)
+    matches!(name, MATRIX_TYPE | COMPLEX_TYPE | LIST_TYPE | QUBIT)
 }
 
 pub fn is_reserved_fn_name(name: &str) -> bool {
@@ -99,6 +100,7 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | COS
             | PI
             | CIS
+            | QUBIT
     )
 }
 

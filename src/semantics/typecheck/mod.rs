@@ -8,9 +8,12 @@ use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
     COS, DEALLOC, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
     MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_REFCOUNT,
-    MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PI, PRINTLN, REALLOC, SIN, TO_ARRAY, TO_MATRIX,
-    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PI, PRINTLN, QUBIT, REALLOC, SIN, TO_ARRAY,
+    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT,
+    VECTOR_SET,
 };
+
+const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
 
 /// Canonical function signature table entry used across semantic passes.
 ///
@@ -37,7 +40,9 @@ fn normalize_ty(
 ) -> Result<Ty, String> {
     match t {
         Ty::Struct(name) => {
-            if name == MATRIX_TYPE {
+            if name == QUBIT {
+                Ok(Ty::Qubit)
+            } else if name == MATRIX_TYPE {
                 Err(format!(
                     "type `Matrix` is no longer a valid annotation; use `T[]` (e.g. `i32[]`)"
                 ))
@@ -101,6 +106,38 @@ fn enum_variant<'a>(edef: &'a EnumDef, variant: &str) -> Option<&'a EnumVariantF
         .iter()
         .find(|v| v.name == variant)
         .map(|v| &v.fields)
+}
+
+fn is_in_quant_scope(env: &HashMap<String, Ty>) -> bool {
+    env.contains_key(QUANT_SCOPE_MARKER)
+}
+
+fn enter_quant_scope(env: &HashMap<String, Ty>) -> HashMap<String, Ty> {
+    let mut scoped = env.clone();
+    scoped.insert(QUANT_SCOPE_MARKER.into(), Ty::Unit);
+    scoped
+}
+
+fn contains_quantum_ty(t: &Ty) -> bool {
+    match t {
+        Ty::Qubit => true,
+        Ty::Ptr(inner)
+        | Ty::Array(inner, _)
+        | Ty::AnonVector(inner, _)
+        | Ty::HeapVector(inner)
+        | Ty::List(inner)
+        | Ty::Matrix(inner, _) => contains_quantum_ty(inner),
+        _ => false,
+    }
+}
+
+fn reject_quantum_ty(t: &Ty, context: &str) -> Result<(), String> {
+    if contains_quantum_ty(t) {
+        return Err(format!(
+            "{context} cannot use quantum type `{QUBIT}` outside `quant` blocks"
+        ));
+    }
+    Ok(())
 }
 
 /// Builds global symbol tables used by later typechecking passes.
@@ -171,6 +208,7 @@ pub fn collect_sigs(
 
     for v in normalized_vectors.values_mut() {
         v.ty = normalize_ty(&v.ty, &struct_map, &enum_map, &vector_map)?;
+        reject_quantum_ty(&v.ty, &format!("vector `{}` element type", v.name))?;
     }
 
     for e in normalized_enums.values_mut() {
@@ -180,11 +218,19 @@ pub fn collect_sigs(
                 EnumVariantFields::Tuple(ts) => {
                     for t in ts {
                         *t = normalize_ty(t, &struct_map, &enum_map, &vector_map)?;
+                        reject_quantum_ty(
+                            t,
+                            &format!("enum `{}` variant `{}` field", e.name, v.name),
+                        )?;
                     }
                 }
                 EnumVariantFields::Struct(fs) => {
                     for (_, t) in fs {
                         *t = normalize_ty(t, &struct_map, &enum_map, &vector_map)?;
+                        reject_quantum_ty(
+                            t,
+                            &format!("enum `{}` variant `{}` field", e.name, v.name),
+                        )?;
                     }
                 }
             }
@@ -194,6 +240,7 @@ pub fn collect_sigs(
     for s in normalized_structs.values_mut() {
         for (_, t) in &mut s.fields {
             *t = normalize_ty(t, &struct_map, &enum_map, &vector_map)?;
+            reject_quantum_ty(t, &format!("struct `{}` field", s.name))?;
         }
     }
 
@@ -205,21 +252,24 @@ pub fn collect_sigs(
                 f.name
             ));
         }
+        let params = f
+            .params
+            .iter()
+            .map(|(_, t)| normalize_ty(t, &struct_map, &enum_map, &vector_map))
+            .collect::<Result<Vec<_>, _>>()?;
+        for ((pname, _), pty) in f.params.iter().zip(&params) {
+            reject_quantum_ty(pty, &format!("function `{}` parameter `{pname}`", f.name))?;
+        }
+        let ret = match &f.ret {
+            Some(t) => {
+                let ret_ty = normalize_ty(t, &struct_map, &enum_map, &vector_map)?;
+                reject_quantum_ty(&ret_ty, &format!("function `{}` return type", f.name))?;
+                Some(ret_ty)
+            }
+            None => None,
+        };
         if fn_sigs
-            .insert(
-                f.name.clone(),
-                FnSig {
-                    params: f
-                        .params
-                        .iter()
-                        .map(|(_, t)| normalize_ty(t, &struct_map, &enum_map, &vector_map))
-                        .collect::<Result<Vec<_>, _>>()?,
-                    ret: match &f.ret {
-                        Some(t) => Some(normalize_ty(t, &struct_map, &enum_map, &vector_map)?),
-                        None => None,
-                    },
-                },
-            )
+            .insert(f.name.clone(), FnSig { params, ret })
             .is_some()
         {
             return Err(format!("duplicate function {}", f.name));
@@ -330,6 +380,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::F32, Ty::F32)
         | (Ty::F64, Ty::F64)
         | (Ty::String, Ty::String)
+        | (Ty::Qubit, Ty::Qubit)
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_equal(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
@@ -1258,6 +1309,18 @@ fn infer_expr(
         Expr::Gt(l, r) => infer_comparison_bin(l, r, env, structs, enums, vectors, fns, ">", true),
         Expr::Ge(l, r) => infer_comparison_bin(l, r, env, structs, enums, vectors, fns, ">=", true),
         Expr::Call { name, args } => {
+            if name == QUBIT {
+                if args.len() != 0 {
+                    return Err(format!(
+                        "`{QUBIT}` expects exactly 0 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                if !is_in_quant_scope(env) {
+                    return Err(format!("`{QUBIT}()` is only allowed inside `quant` blocks"));
+                }
+                return Ok(Ty::Qubit);
+            }
             if name == PRINTLN {
                 if args.len() != 1 {
                     return Err(format!(
@@ -2171,7 +2234,7 @@ fn infer_expr(
             if block_has_break(body) {
                 return Err("`break` is not allowed inside `quant` expressions".into());
             }
-            let mut body_env = env.clone();
+            let mut body_env = enter_quant_scope(env);
             for st in &body.stmts {
                 check_stmt(
                     st,
@@ -2186,7 +2249,13 @@ fn infer_expr(
                 )?;
             }
             if let Some(tail) = &body.tail {
-                infer_expr(tail, &body_env, structs, enums, vectors, fns, hint)
+                let tail_ty = infer_expr(tail, &body_env, structs, enums, vectors, fns, hint)?;
+                if contains_quantum_ty(&tail_ty) {
+                    return Err(format!(
+                        "`quant` expressions cannot return quantum type `{QUBIT}`"
+                    ));
+                }
+                Ok(tail_ty)
             } else {
                 Ok(Ty::Unit)
             }
@@ -2489,6 +2558,11 @@ fn check_stmt(
                 Some(t) => Some(normalize_ty(t, struct_fields, enums, vectors)?),
                 None => None,
             };
+            if let Some(a) = &ann_norm {
+                if !is_in_quant_scope(env) {
+                    reject_quantum_ty(a, &format!("let `{name}` type annotation"))?;
+                }
+            }
             let t = infer_expr(
                 init,
                 env,
@@ -2502,6 +2576,9 @@ fn check_stmt(
                 return Err(format!(
                     "let {name}: cannot bind a void value (missing return?)"
                 ));
+            }
+            if !is_in_quant_scope(env) {
+                reject_quantum_ty(&t, &format!("let `{name}` initializer"))?;
             }
             if let Some(a_raw) = ann {
                 let a = normalize_ty(a_raw, struct_fields, enums, vectors)?;
@@ -2732,7 +2809,7 @@ fn check_stmt(
             }
         }
         Stmt::Quant { body } => {
-            let mut body_env = env.clone();
+            let mut body_env = enter_quant_scope(env);
             for st in &body.stmts {
                 check_stmt(
                     st,

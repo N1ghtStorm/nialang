@@ -246,6 +246,88 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_qubit_creation_inside_quant() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        let a = qubit();
+        let b: qubit = qubit();
+    }
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_qubit_creation_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    let q = qubit();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("qubit() must be quant-only");
+    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_qubit_creation_inside_gpu() {
+    let src = r#"
+fn main() i32 {
+    gpu {
+        let q = qubit();
+    }
+    0
+}
+"#;
+    let err = check_all(src).expect_err("gpu is not a quantum scope");
+    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_qubit_type_annotation_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    let q: qubit = 0;
+    0
+}
+"#;
+    let err = check_all(src).expect_err("qubit type annotation must be quant-only");
+    assert!(err.contains("cannot use quantum type `qubit`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_qubit_escape_from_quant_expression() {
+    let src = r#"
+fn main() i32 {
+    let q = quant {
+        qubit()
+    };
+    0
+}
+"#;
+    let err = check_all(src).expect_err("qubit must not escape quant expression");
+    assert!(err.contains("cannot return quantum type `qubit`"), "{err}");
+}
+
+#[test]
+fn typecheck_reserves_qubit_function_name() {
+    let src = r#"
+fn qubit() i32 {
+    1
+}
+
+fn main() i32 {
+    qubit()
+}
+"#;
+    let err = check_all(src).expect_err("qubit is a reserved builtin name");
+    assert!(err.contains("function name `qubit` is reserved"), "{err}");
+}
+
+#[test]
 fn typecheck_gpu_scope_and_expression_match_quant_behavior() {
     let src = r#"
 fn main() i32 {

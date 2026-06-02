@@ -270,6 +270,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::F32 => "f32".into(),
         Ty::F64 => "f64".into(),
         Ty::String => "string".into(),
+        Ty::Qubit => "qubit".into(),
         Ty::Array(inner, n) => format!("[{}; {}]", ty_print_label(inner), n),
         Ty::Struct(n) => n.clone(),
         Ty::Enum(n) => n.clone(),
@@ -446,6 +447,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::F32 => "float".into(),
         Ty::F64 => "double".into(),
         Ty::String => "ptr".into(),
+        Ty::Qubit => "ptr".into(),
         Ty::Array(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
         Ty::Struct(n) => format!("%struct.{}", sanitize(n)),
         Ty::Enum(n) => format!("%enum.{}", sanitize(n)),
@@ -1423,6 +1425,7 @@ impl<'a> Gen<'a> {
             Ty::Array(_, _)
             | Ty::Struct(_)
             | Ty::Enum(_)
+            | Ty::Qubit
             | Ty::Unit
             | Ty::Vector(_, _)
             | Ty::AnonVector(_, _)
@@ -4916,6 +4919,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::Qubit
                     | Ty::String
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -5012,6 +5016,7 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
                 | Some(Ty::Bool)
+                | Some(Ty::Qubit)
                 | Some(Ty::String)
                 | Some(Ty::Array(_, _))
                 | Some(Ty::Matrix(_, _)) => {
@@ -5106,6 +5111,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::Qubit
                     | Ty::String
                     | Ty::Matrix(_, _) => {
                         unreachable!("typechecked neg")
@@ -5162,6 +5168,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::Qubit
                     | Ty::String
                     | Ty::Matrix(_, _) => {
                         unreachable!("add on non-numeric")
@@ -5218,6 +5225,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::Qubit
                     | Ty::String
                     | Ty::Matrix(_, _) => {
                         unreachable!("sub on non-numeric")
@@ -5338,6 +5346,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::Qubit
                     | Ty::String
                     | Ty::Matrix(_, _) => {
                         unreachable!("mul on non-numeric")
@@ -5480,6 +5489,7 @@ impl<'a> Gen<'a> {
                     | Ty::Unit
                     | Ty::Ptr(_)
                     | Ty::Bool
+                    | Ty::Qubit
                     | Ty::String
                     | Ty::Matrix(_, _) => {
                         unreachable!("div on non-numeric")
@@ -6727,6 +6737,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::F64, Ty::F64)
         | (Ty::Bool, Ty::Bool)
         | (Ty::String, Ty::String)
+        | (Ty::Qubit, Ty::Qubit)
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_match(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,

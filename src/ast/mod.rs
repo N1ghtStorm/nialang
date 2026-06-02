@@ -15,6 +15,7 @@
 /// - integer primitives (`I8`..`U128`) and `Bool`,
 /// - float primitives (`F16`, `F32`, `F64`, same names as Rust),
 /// - composites (`Array`, `Struct`, `Enum`),
+/// - quantum resources (`Qubit`),
 /// - indirection (`Ptr`),
 /// - effect/absence type (`Unit`).
 ///
@@ -44,6 +45,8 @@ pub enum Ty {
     F64,
     /// UTF-8 text; lowered as null-terminated `ptr` to bytes in LLVM.
     String,
+    /// Quantum bit resource; valid only inside `quant` semantic scopes.
+    Qubit,
     Array(Box<Ty>, usize),
     Struct(String),
     Enum(String),
@@ -110,6 +113,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::F32 => "f32".into(),
         Ty::F64 => "f64".into(),
         Ty::String => "string".into(),
+        Ty::Qubit => "qubit".into(),
         Ty::Array(elem, n) => format!("array_{}_{}", ty_symbol_fragment(elem), n),
         Ty::Struct(n) | Ty::Enum(n) | Ty::Vector(n, _) => n.clone(),
         Ty::Ptr(inner) => format!("ptr_{}", ty_symbol_fragment(inner)),
