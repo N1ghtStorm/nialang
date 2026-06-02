@@ -8,9 +8,9 @@ use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
     COS, DEALLOC, GATE_H, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH,
     LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW,
-    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, OUTER, PI, PRINTLN, QUBIT, REALLOC, SIN,
-    TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
-    VECTOR_REFCOUNT, VECTOR_SET,
+    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, OUTER, PI, PRINTLN, QUBIT,
+    REALLOC, RECORD, RESULT, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
+    VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -42,6 +42,8 @@ fn normalize_ty(
         Ty::Struct(name) => {
             if name == QUBIT {
                 Ok(Ty::Qubit)
+            } else if name == RESULT {
+                Ok(Ty::Result)
             } else if name == MATRIX_TYPE {
                 Err(format!(
                     "type `Matrix` is no longer a valid annotation; use `T[]` (e.g. `i32[]`)"
@@ -120,7 +122,7 @@ fn enter_quant_scope(env: &HashMap<String, Ty>) -> HashMap<String, Ty> {
 
 fn contains_quantum_ty(t: &Ty) -> bool {
     match t {
-        Ty::Qubit => true,
+        Ty::Qubit | Ty::Result => true,
         Ty::Ptr(inner)
         | Ty::Array(inner, _)
         | Ty::AnonVector(inner, _)
@@ -134,7 +136,7 @@ fn contains_quantum_ty(t: &Ty) -> bool {
 fn reject_quantum_ty(t: &Ty, context: &str) -> Result<(), String> {
     if contains_quantum_ty(t) {
         return Err(format!(
-            "{context} cannot use quantum type `{QUBIT}` outside `quant` blocks"
+            "{context} cannot use quantum types outside `quant` blocks"
         ));
     }
     Ok(())
@@ -381,6 +383,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::F64, Ty::F64)
         | (Ty::String, Ty::String)
         | (Ty::Qubit, Ty::Qubit)
+        | (Ty::Result, Ty::Result)
         | (Ty::Unit, Ty::Unit) => true,
         (Ty::Array(ax, an), Ty::Array(bx, bn)) => an == bn && types_equal(ax, bx),
         (Ty::Struct(x), Ty::Struct(y)) => x == y,
@@ -1344,6 +1347,58 @@ fn infer_expr(
                 )?;
                 if !types_equal(&t, &Ty::Qubit) {
                     return Err(format!("`{GATE_H}` expects a qubit argument, got {t:?}"));
+                }
+                return Ok(Ty::Unit);
+            }
+            if name == MEASURE {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{MEASURE}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                if !is_in_quant_scope(env) {
+                    return Err(format!(
+                        "`{MEASURE}(...)` is only allowed inside `quant` blocks"
+                    ));
+                }
+                let t = infer_expr(
+                    &args[0],
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    Some(&Ty::Qubit),
+                )?;
+                if !types_equal(&t, &Ty::Qubit) {
+                    return Err(format!("`{MEASURE}` expects a qubit argument, got {t:?}"));
+                }
+                return Ok(Ty::Result);
+            }
+            if name == RECORD {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{RECORD}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                if !is_in_quant_scope(env) {
+                    return Err(format!(
+                        "`{RECORD}(...)` is only allowed inside `quant` blocks"
+                    ));
+                }
+                let t = infer_expr(
+                    &args[0],
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    Some(&Ty::Result),
+                )?;
+                if !types_equal(&t, &Ty::Result) {
+                    return Err(format!("`{RECORD}` expects a result argument, got {t:?}"));
                 }
                 return Ok(Ty::Unit);
             }

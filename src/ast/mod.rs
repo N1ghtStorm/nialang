@@ -15,7 +15,7 @@
 /// - integer primitives (`I8`..`U128`) and `Bool`,
 /// - float primitives (`F16`, `F32`, `F64`, same names as Rust),
 /// - composites (`Array`, `Struct`, `Enum`),
-/// - quantum resources (`Qubit`),
+/// - quantum resources (`Qubit`, `Result`),
 /// - indirection (`Ptr`),
 /// - effect/absence type (`Unit`).
 ///
@@ -47,6 +47,8 @@ pub enum Ty {
     String,
     /// Quantum bit resource; valid only inside `quant` semantic scopes.
     Qubit,
+    /// Quantum measurement result; valid only inside `quant` semantic scopes.
+    Result,
     Array(Box<Ty>, usize),
     Struct(String),
     Enum(String),
@@ -114,6 +116,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::F64 => "f64".into(),
         Ty::String => "string".into(),
         Ty::Qubit => "qubit".into(),
+        Ty::Result => "result".into(),
         Ty::Array(elem, n) => format!("array_{}_{}", ty_symbol_fragment(elem), n),
         Ty::Struct(n) | Ty::Enum(n) | Ty::Vector(n, _) => n.clone(),
         Ty::Ptr(inner) => format!("ptr_{}", ty_symbol_fragment(inner)),

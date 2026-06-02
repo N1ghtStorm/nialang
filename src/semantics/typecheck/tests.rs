@@ -254,6 +254,10 @@ fn main() i32 {
         let b: qubit = qubit();
         H(a);
         H(b);
+        let ar = M(a);
+        let br: result = M(b);
+        record(ar);
+        record(br);
     }
     0
 }
@@ -286,6 +290,59 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("H expects a qubit");
     assert!(err.contains("cannot satisfy Qubit"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_m_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    M(0);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("M must be quant-only");
+    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_m_non_qubit_argument() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        M(0);
+    }
+    0
+}
+"#;
+    let err = check_all(src).expect_err("M expects a qubit");
+    assert!(err.contains("cannot satisfy Qubit"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_record_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    record(0);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("record must be quant-only");
+    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_record_non_result_argument() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        let q = qubit();
+        record(q);
+    }
+    0
+}
+"#;
+    let err = check_all(src).expect_err("record expects a result");
+    assert!(err.contains("expects a result argument"), "{err}");
 }
 
 #[test]
@@ -323,7 +380,19 @@ fn main() i32 {
 }
 "#;
     let err = check_all(src).expect_err("qubit type annotation must be quant-only");
-    assert!(err.contains("cannot use quantum type `qubit`"), "{err}");
+    assert!(err.contains("cannot use quantum types"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_result_type_annotation_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    let r: result = 0;
+    0
+}
+"#;
+    let err = check_all(src).expect_err("result type annotation must be quant-only");
+    assert!(err.contains("cannot use quantum types"), "{err}");
 }
 
 #[test]
@@ -368,6 +437,36 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("H is a reserved builtin name");
     assert!(err.contains("function name `H` is reserved"), "{err}");
+}
+
+#[test]
+fn typecheck_reserves_m_function_name() {
+    let src = r#"
+fn M() i32 {
+    1
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("M is a reserved builtin name");
+    assert!(err.contains("function name `M` is reserved"), "{err}");
+}
+
+#[test]
+fn typecheck_reserves_record_function_name() {
+    let src = r#"
+fn record() i32 {
+    1
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("record is a reserved builtin name");
+    assert!(err.contains("function name `record` is reserved"), "{err}");
 }
 
 #[test]
