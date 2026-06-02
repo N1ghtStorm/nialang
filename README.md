@@ -41,6 +41,12 @@ Emit native assembly for inspection:
 cargo run -- examples/sample_floats.nia --emit-asm build/sample_floats.s
 ```
 
+Emit and run the QIR quantum sample:
+
+```bash
+cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q
+```
+
 Run the compiler test suite:
 
 ```bash
@@ -424,26 +430,79 @@ fn main() i32 {
 
 ### Scoped Blocks
 
-`quant { ... }` and `gpu { ... }` are reserved syntax for future specialized
-behavior. Today they act like normal block scopes: bindings declared inside do
-not escape, while assignments to outer variables still work.
+`gpu { ... }` is currently a normal scoped block reserved for future specialized
+behavior: bindings declared inside do not escape, while assignments to outer
+variables still work.
 
 ```nia
 fn main() i32 {
     let x = 1;
     let y = 0;
 
-    quant {
+    gpu {
         let local = 41;
         y = x + local;
     }
 
-    gpu {
-        y = y + 1;
-    }
-
     y
 }
+```
+
+## Quantum Computing
+
+NiaLang also has an early QIR backend for small quantum programs. Quantum code is
+written inside `quant { ... }` blocks and can currently use static qubit
+resources, the Hadamard gate, Z-basis measurement, and QIR output recording.
+
+```nia
+fn main() i32 {
+    quant {
+        let q = qubit();
+        H(q);
+        let r: result = q_measure(q);
+        q_record(r);
+    }
+
+    0
+}
+```
+
+The quantum surface is intentionally small:
+
+| Syntax | Meaning |
+| --- | --- |
+| `quant { ... }` | quantum scope; quantum resources cannot escape it |
+| `qubit()` | create a qubit resource inside `quant` |
+| `H(q)` | apply the Hadamard gate to a qubit |
+| `q_measure(q)` | measure a qubit in the Z basis and return `result` |
+| `q_record(r)` | record a measurement result as QIR output |
+
+`qubit` and `result` are quantum-only types. They cannot be returned from a
+`quant` expression or printed with `println`; use `q_record(r)` to expose
+measurement output to the QIR runner.
+
+Run the current sample:
+
+```bash
+cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q
+```
+
+The runner output includes QIR metadata and recorded measurement results:
+
+```text
+START
+METADATA	required_num_qubits	2
+METADATA	required_num_results	2
+OUTPUT	RESULT	0
+OUTPUT	RESULT	1
+END	0
+```
+
+Because `H(q)` creates a superposition before measurement, the recorded result
+can vary between runs. You can also write the generated QIR IR to a file:
+
+```bash
+cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q -o build/qubit_create.ll
 ```
 
 ### Structs, Enums, Match
@@ -523,6 +582,7 @@ Good places to start:
 | `examples/sample_dft_list.nia` | list-backed discrete Fourier transform |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
+| `examples/quantum/qubit_create.nia` | QIR qubits, `H`, measurement, and result recording |
 | `examples/sample_all.nia` | broad language feature sample |
 
 ## Project Status
@@ -542,12 +602,14 @@ Currently available:
 - matrix-vector and vector-matrix multiplication
 - determinant as a `Matrix` method
 - Rust-style `impl` method syntax
+- early QIR quantum blocks with qubits, `H`, measurement, and result recording
 
 Still intentionally small or unfinished:
 
 - no sparse matrices
 - no eigenvalues, QR, SVD, or advanced decomposition APIs
 - no list index syntax or explicit list cleanup yet
+- quantum support is limited to static QIR resources and a small builtin surface
 - explicit matrix lifetime management
 - limited diagnostics compared with production languages
 - experimental syntax and type inference
