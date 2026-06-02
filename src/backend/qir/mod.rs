@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, VectorDef};
+use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, Ty, VectorDef};
 use crate::nia_std::{GATE_H, MEASURE, QUBIT, RECORD};
 use crate::semantics::typecheck::FnSig;
 
@@ -41,7 +41,7 @@ pub fn emit_module(
     _enums: &[EnumDef],
     _vectors: &[VectorDef],
     fns: &[FnDef],
-    _fn_sigs: &HashMap<String, FnSig>,
+    fn_sigs: &HashMap<String, FnSig>,
 ) -> Result<String, String> {
     let main = fns
         .iter()
@@ -49,7 +49,15 @@ pub fn emit_module(
         .ok_or_else(|| "QIR backend requires a `main` function".to_string())?;
 
     let mut plan = QirPlan::default();
-    collect_block(&main.body, false, &mut plan, &mut QuantResources::default())?;
+    collect_block(
+        &main.body,
+        false,
+        &mut plan,
+        &mut QuantResources::default(),
+        fns,
+        fn_sigs,
+        &mut Vec::new(),
+    )?;
     Ok(render_module(&plan))
 }
 
@@ -58,12 +66,15 @@ fn collect_block(
     in_quant: bool,
     plan: &mut QirPlan,
     resources: &mut QuantResources,
+    fns: &[FnDef],
+    fn_sigs: &HashMap<String, FnSig>,
+    call_stack: &mut Vec<String>,
 ) -> Result<(), String> {
     for st in &block.stmts {
-        collect_stmt(st, in_quant, plan, resources)?;
+        collect_stmt(st, in_quant, plan, resources, fns, fn_sigs, call_stack)?;
     }
     if let Some(tail) = &block.tail {
-        collect_expr(tail, in_quant, plan, resources)?;
+        collect_expr(tail, in_quant, plan, resources, fns, fn_sigs, call_stack)?;
     }
     Ok(())
 }
@@ -73,45 +84,62 @@ fn collect_stmt(
     in_quant: bool,
     plan: &mut QirPlan,
     resources: &mut QuantResources,
+    fns: &[FnDef],
+    fn_sigs: &HashMap<String, FnSig>,
+    call_stack: &mut Vec<String>,
 ) -> Result<(), String> {
     match st {
         Stmt::Quant { body } => {
             let mut body_resources = resources.clone();
-            collect_block(body, true, plan, &mut body_resources)
+            collect_block(body, true, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
-        Stmt::Gpu { body } if !in_quant => collect_block(body, false, plan, resources),
+        Stmt::Gpu { body } if !in_quant => {
+            collect_block(body, false, plan, resources, fns, fn_sigs, call_stack)
+        }
         Stmt::Let { name, init, .. } if in_quant => {
-            collect_quant_let(name, init, plan, resources)
+            collect_quant_let(name, init, plan, resources, fns, fn_sigs, call_stack)
         }
-        Stmt::Expr(e) if in_quant => collect_quant_expr(e, plan, resources),
-        Stmt::Let { init, .. } => collect_expr(init, false, plan, resources),
-        Stmt::Expr(e) => collect_expr(e, false, plan, resources),
+        Stmt::Expr(e) if in_quant => collect_quant_expr(e, plan, resources, fns, fn_sigs, call_stack),
+        Stmt::Let { init, .. } => {
+            collect_expr(init, false, plan, resources, fns, fn_sigs, call_stack)
+        }
+        Stmt::Expr(e) => collect_expr(e, false, plan, resources, fns, fn_sigs, call_stack),
         Stmt::Assign { target, value } if !in_quant => {
-            collect_expr(target, false, plan, resources)?;
-            collect_expr(value, false, plan, resources)
+            collect_expr(target, false, plan, resources, fns, fn_sigs, call_stack)?;
+            collect_expr(value, false, plan, resources, fns, fn_sigs, call_stack)
         }
-        Stmt::Return(e) if !in_quant => collect_expr(e, false, plan, resources),
+        Stmt::Return(e) if !in_quant => {
+            collect_expr(e, false, plan, resources, fns, fn_sigs, call_stack)
+        }
         Stmt::If { cond, then_block } if !in_quant => {
-            collect_expr(cond, false, plan, resources)?;
+            collect_expr(cond, false, plan, resources, fns, fn_sigs, call_stack)?;
             let mut then_resources = resources.clone();
-            collect_block(then_block, false, plan, &mut then_resources)
+            collect_block(
+                then_block,
+                false,
+                plan,
+                &mut then_resources,
+                fns,
+                fn_sigs,
+                call_stack,
+            )
         }
         Stmt::While { cond, body } if !in_quant => {
-            collect_expr(cond, false, plan, resources)?;
+            collect_expr(cond, false, plan, resources, fns, fn_sigs, call_stack)?;
             let mut body_resources = resources.clone();
-            collect_block(body, false, plan, &mut body_resources)
+            collect_block(body, false, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
         Stmt::Loop { body } if !in_quant => {
             let mut body_resources = resources.clone();
-            collect_block(body, false, plan, &mut body_resources)
+            collect_block(body, false, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
         Stmt::For {
             start, end, body, ..
         } if !in_quant => {
-            collect_expr(start, false, plan, resources)?;
-            collect_expr(end, false, plan, resources)?;
+            collect_expr(start, false, plan, resources, fns, fn_sigs, call_stack)?;
+            collect_expr(end, false, plan, resources, fns, fn_sigs, call_stack)?;
             let mut body_resources = resources.clone();
-            collect_block(body, false, plan, &mut body_resources)
+            collect_block(body, false, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
         Stmt::Assign { .. }
         | Stmt::Return(_)
@@ -132,19 +160,30 @@ fn collect_expr(
     in_quant: bool,
     plan: &mut QirPlan,
     resources: &mut QuantResources,
+    fns: &[FnDef],
+    fn_sigs: &HashMap<String, FnSig>,
+    call_stack: &mut Vec<String>,
 ) -> Result<(), String> {
     if in_quant {
-        return collect_quant_expr(e, plan, resources);
+        return collect_quant_expr(e, plan, resources, fns, fn_sigs, call_stack);
     }
 
     match e {
         Expr::Quant { body } => {
             let mut body_resources = resources.clone();
-            collect_block(body, true, plan, &mut body_resources)
+            collect_block(
+                body,
+                true,
+                plan,
+                &mut body_resources,
+                fns,
+                fn_sigs,
+                call_stack,
+            )
         }
-        Expr::Gpu { body } => collect_block(body, false, plan, resources),
+        Expr::Gpu { body } => collect_block(body, false, plan, resources, fns, fn_sigs, call_stack),
         Expr::Neg(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) => {
-            collect_expr(inner, false, plan, resources)
+            collect_expr(inner, false, plan, resources, fns, fn_sigs, call_stack)
         }
         Expr::Add(l, r)
         | Expr::Sub(l, r)
@@ -158,19 +197,19 @@ fn collect_expr(
         | Expr::Gt(l, r)
         | Expr::Ge(l, r)
         | Expr::Index(l, r) => {
-            collect_expr(l, false, plan, resources)?;
-            collect_expr(r, false, plan, resources)
+            collect_expr(l, false, plan, resources, fns, fn_sigs, call_stack)?;
+            collect_expr(r, false, plan, resources, fns, fn_sigs, call_stack)
         }
         Expr::Call { args, .. } | Expr::GenericCall { args, .. } => {
             for arg in args {
-                collect_expr(arg, false, plan, resources)?;
+                collect_expr(arg, false, plan, resources, fns, fn_sigs, call_stack)?;
             }
             Ok(())
         }
         Expr::MethodCall { receiver, args, .. } => {
-            collect_expr(receiver, false, plan, resources)?;
+            collect_expr(receiver, false, plan, resources, fns, fn_sigs, call_stack)?;
             for arg in args {
-                collect_expr(arg, false, plan, resources)?;
+                collect_expr(arg, false, plan, resources, fns, fn_sigs, call_stack)?;
             }
             Ok(())
         }
@@ -178,7 +217,7 @@ fn collect_expr(
         | Expr::VectorLit { fields, .. }
         | Expr::EnumStruct { fields, .. } => {
             for (_, expr) in fields {
-                collect_expr(expr, false, plan, resources)?;
+                collect_expr(expr, false, plan, resources, fns, fn_sigs, call_stack)?;
             }
             Ok(())
         }
@@ -186,18 +225,18 @@ fn collect_expr(
         | Expr::ArrayLit(elems)
         | Expr::EnumTuple { args: elems, .. } => {
             for elem in elems {
-                collect_expr(elem, false, plan, resources)?;
+                collect_expr(elem, false, plan, resources, fns, fn_sigs, call_stack)?;
             }
             Ok(())
         }
         Expr::Match { scrutinee, arms } => {
-            collect_expr(scrutinee, false, plan, resources)?;
+            collect_expr(scrutinee, false, plan, resources, fns, fn_sigs, call_stack)?;
             for (_, arm) in arms {
-                collect_expr(arm, false, plan, resources)?;
+                collect_expr(arm, false, plan, resources, fns, fn_sigs, call_stack)?;
             }
             Ok(())
         }
-        Expr::Field(obj, _) => collect_expr(obj, false, plan, resources),
+        Expr::Field(obj, _) => collect_expr(obj, false, plan, resources, fns, fn_sigs, call_stack),
         Expr::Int(_)
         | Expr::Float(_)
         | Expr::Bool(_)
@@ -212,6 +251,9 @@ fn collect_quant_let(
     init: &Expr,
     plan: &mut QirPlan,
     resources: &mut QuantResources,
+    fns: &[FnDef],
+    fn_sigs: &HashMap<String, FnSig>,
+    call_stack: &mut Vec<String>,
 ) -> Result<(), String> {
     match init {
         Expr::Call { name: call, args } if call == QUBIT && args.is_empty() => {
@@ -228,7 +270,13 @@ fn collect_quant_let(
             plan.ops.push(QirOp::Measure { qubit, result });
             Ok(())
         }
-        _ => collect_quant_expr(init, plan, resources),
+        Expr::Call { name: call, .. } if fn_sigs.get(call).is_some_and(|sig| sig.is_quantum) => {
+            Err(
+                "QIR lowering currently does not support binding quantum function return values"
+                    .into(),
+            )
+        }
+        _ => collect_quant_expr(init, plan, resources, fns, fn_sigs, call_stack),
     }
 }
 
@@ -236,6 +284,9 @@ fn collect_quant_expr(
     e: &Expr,
     plan: &mut QirPlan,
     resources: &mut QuantResources,
+    fns: &[FnDef],
+    fn_sigs: &HashMap<String, FnSig>,
+    call_stack: &mut Vec<String>,
 ) -> Result<(), String> {
     match e {
         Expr::Call { name, args } if name == QUBIT && args.is_empty() => {
@@ -252,15 +303,83 @@ fn collect_quant_expr(
             plan.ops.push(QirOp::Record(id));
             Ok(())
         }
+        Expr::Call { name, args } if fn_sigs.get(name).is_some_and(|sig| sig.is_quantum) => {
+            collect_quant_fn_call(name, args, plan, resources, fns, fn_sigs, call_stack)
+        }
         Expr::Quant { body } => {
             let mut body_resources = resources.clone();
-            collect_block(body, true, plan, &mut body_resources)
+            collect_block(body, true, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
         _ => Err(
             "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
+}
+
+fn collect_quant_fn_call(
+    name: &str,
+    args: &[Expr],
+    plan: &mut QirPlan,
+    resources: &mut QuantResources,
+    fns: &[FnDef],
+    fn_sigs: &HashMap<String, FnSig>,
+    call_stack: &mut Vec<String>,
+) -> Result<(), String> {
+    let sig = fn_sigs
+        .get(name)
+        .ok_or_else(|| format!("unknown quantum function `{name}` in QIR lowering"))?;
+    if sig.ret.is_some() {
+        return Err(format!(
+            "QIR lowering currently supports only void quantum function calls, got `{name}` with a return type"
+        ));
+    }
+    if call_stack.iter().any(|n| n == name) {
+        return Err(format!(
+            "recursive quantum function `{name}` cannot be lowered to QIR"
+        ));
+    }
+    let f = fns
+        .iter()
+        .find(|f| f.name == name)
+        .ok_or_else(|| format!("missing quantum function `{name}` in QIR lowering"))?;
+    if args.len() != sig.params.len() {
+        return Err(format!(
+            "quantum function `{name}` argument count mismatch during QIR lowering"
+        ));
+    }
+
+    let mut body_resources = resources.clone();
+    for (((param_name, _), param_ty), arg) in f.params.iter().zip(&sig.params).zip(args) {
+        match param_ty {
+            Ty::Qubit => {
+                let id = qubit_arg_id(arg, resources)?;
+                body_resources.qubits.insert(param_name.clone(), id);
+            }
+            Ty::Result => {
+                let id = result_arg_id(arg, resources)?;
+                body_resources.results.insert(param_name.clone(), id);
+            }
+            other => {
+                return Err(format!(
+                    "QIR lowering currently supports only `qubit` and `result` quantum function parameters, got {other:?}"
+                ));
+            }
+        }
+    }
+
+    call_stack.push(name.to_string());
+    let result = collect_block(
+        &f.body,
+        true,
+        plan,
+        &mut body_resources,
+        fns,
+        fn_sigs,
+        call_stack,
+    );
+    call_stack.pop();
+    result
 }
 
 fn qubit_arg_id(arg: &Expr, resources: &QuantResources) -> Result<usize, String> {
@@ -416,6 +535,58 @@ fn main() i32 {
         let br: result = q_measure(b);
         q_record(ar);
         q_record(br);
+    }
+    0
+}
+"#,
+        );
+        assert!(ir.contains("define void @main() #0"), "IR:\n{ir}");
+        assert!(ir.contains("\"required_num_qubits\"=\"2\""), "IR:\n{ir}");
+        assert!(ir.contains("\"required_num_results\"=\"2\""), "IR:\n{ir}");
+        assert!(
+            ir.contains("call void @__quantum__qis__h__body(ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__h__body(ptr inttoptr (i64 1 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__mz__body(ptr null, ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__mz__body(ptr inttoptr (i64 1 to ptr), ptr inttoptr (i64 1 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__rt__result_record_output(ptr null, ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__rt__result_record_output(ptr inttoptr (i64 1 to ptr), ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(ir.contains("qir_major_version"), "IR:\n{ir}");
+        assert!(ir.contains("dynamic_qubit_management"), "IR:\n{ir}");
+    }
+
+    #[test]
+    fn qir_inlines_quant_fn_calls() {
+        let ir = emit(
+            r#"
+quant fn prepare(q: qubit) {
+    H(q);
+    let r = q_measure(q);
+    q_record(r);
+}
+
+fn main() i32 {
+    quant {
+        let a = qubit();
+        let b: qubit = qubit();
+        prepare(a);
+        prepare(b);
     }
     0
 }

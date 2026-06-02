@@ -267,6 +267,66 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_quant_fn_called_inside_quant() {
+    let src = r#"
+quant fn prepare() {
+    let q = qubit();
+    H(q);
+    let r = q_measure(q);
+    q_record(r);
+}
+
+fn main() i32 {
+    quant {
+        prepare();
+    }
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_quant_fn_call_outside_quant() {
+    let src = r#"
+quant fn prepare() {
+    let q = qubit();
+    H(q);
+}
+
+fn main() i32 {
+    prepare();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("quant fn call must be quant-only");
+    assert!(
+        err.contains("quantum function `prepare` can only be called inside `quant`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_allows_quant_fn_qubit_parameter() {
+    let src = r#"
+quant fn prepare(q: qubit) {
+    H(q);
+}
+
+fn main() i32 {
+    quant {
+        let q = qubit();
+        prepare(q);
+    }
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
 fn typecheck_rejects_h_outside_quant() {
     let src = r#"
 fn main() i32 {

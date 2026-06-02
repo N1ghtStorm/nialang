@@ -1,13 +1,15 @@
+quant fn prepare(q: qubit) {
+    H(q);
+    let r = q_measure(q);
+    q_record(r);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
         let b: qubit = qubit();
-        H(a);
-        H(b);
-        let ar = q_measure(a);
-        let br: result = q_measure(b);
-        q_record(ar);
-        q_record(br);
+        prepare(a);
+        prepare(b);
     }
 
     0

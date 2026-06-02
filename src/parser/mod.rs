@@ -51,6 +51,7 @@ impl Parser {
     /// - `struct ...`
     /// - `impl ...`
     /// - `fn ...`
+    /// - `quant fn ...`
     /// - `extern fn ...`
     ///
     /// Any other token at top level is a hard parse error. This strictness keeps
@@ -77,6 +78,9 @@ impl Parser {
                     fns.extend(self.parse_impl()?);
                 }
                 Token::Fn | Token::Extern => {
+                    fns.push(self.parse_fn()?);
+                }
+                Token::Quant if matches!(self.peek_n(1), Token::Fn) => {
                     fns.push(self.parse_fn()?);
                 }
                 other => return Err(format!("unexpected token at top level: {other:?}")),
@@ -155,6 +159,7 @@ impl Parser {
         Ok(FnDef {
             name,
             is_extern: false,
+            is_quantum: false,
             params,
             ret,
             body,
@@ -384,9 +389,19 @@ impl Parser {
     /// Return type is omitted for `void` functions:
     /// - `fn foo() { ... }` => no explicit return type
     /// - `fn foo() i32 { ... }` => typed return
-    /// - `extern fn foo() i32 { ... }` => parsed marker, same behavior for now
+    /// - `extern fn foo() i32 { ... }` => parsed C ABI export marker
+    /// - `quant fn foo() { ... }` => quantum-only function
     fn parse_fn(&mut self) -> Result<FnDef, String> {
+        let is_quantum = if matches!(self.peek(), Token::Quant) {
+            self.bump();
+            true
+        } else {
+            false
+        };
         let is_extern = if matches!(self.peek(), Token::Extern) {
+            if is_quantum {
+                return Err("`quant extern fn` is not supported".into());
+            }
             self.bump();
             true
         } else {
@@ -420,6 +435,7 @@ impl Parser {
         Ok(FnDef {
             name,
             is_extern,
+            is_quantum,
             params,
             ret,
             body,

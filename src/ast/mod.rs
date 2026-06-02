@@ -88,6 +88,8 @@ pub struct FnDef {
     pub name: String,
     /// Source-level `extern fn` marker for top-level C ABI exports.
     pub is_extern: bool,
+    /// Source-level `quant fn` marker for functions callable only in quantum scopes.
+    pub is_quantum: bool,
     pub params: Vec<(String, Ty)>,
     pub ret: Option<Ty>,
     pub body: Block,

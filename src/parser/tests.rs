@@ -99,6 +99,31 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_quant_fn_marker() {
+    let src = r#"
+quant fn prepare() {
+    let q = qubit();
+    H(q);
+    let r = q_measure(q);
+    q_record(r);
+}
+
+fn main() i32 {
+    quant {
+        prepare();
+    }
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    assert!(fns[0].is_quantum);
+    assert!(!fns[0].is_extern);
+    assert_eq!(fns[0].name, "prepare");
+    assert!(!fns[1].is_quantum);
+}
+
+#[test]
 fn parse_rejects_extern_method_marker() {
     let src = r#"
 struct Counter { value: i32 }

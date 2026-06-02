@@ -9,10 +9,10 @@ entry:
   ; qubit 0: ptr inttoptr (i64 0 to ptr)
   ; qubit 1: ptr inttoptr (i64 1 to ptr)
   call void @__quantum__qis__h__body(ptr null)
-  call void @__quantum__qis__h__body(ptr inttoptr (i64 1 to ptr))
   call void @__quantum__qis__mz__body(ptr null, ptr null)
-  call void @__quantum__qis__mz__body(ptr inttoptr (i64 1 to ptr), ptr inttoptr (i64 1 to ptr))
   call void @__quantum__rt__result_record_output(ptr null, ptr null)
+  call void @__quantum__qis__h__body(ptr inttoptr (i64 1 to ptr))
+  call void @__quantum__qis__mz__body(ptr inttoptr (i64 1 to ptr), ptr inttoptr (i64 1 to ptr))
   call void @__quantum__rt__result_record_output(ptr inttoptr (i64 1 to ptr), ptr null)
   ret void
 }

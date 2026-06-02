@@ -23,6 +23,7 @@ const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
 pub struct FnSig {
     pub params: Vec<Ty>,
     pub ret: Option<Ty>,
+    pub is_quantum: bool,
 }
 
 /// Resolves user-written type syntax into canonical semantic type form.
@@ -254,24 +255,41 @@ pub fn collect_sigs(
                 f.name
             ));
         }
+        if f.is_quantum && f.is_extern {
+            return Err(format!(
+                "function `{}` cannot be both `quant` and `extern`",
+                f.name
+            ));
+        }
         let params = f
             .params
             .iter()
             .map(|(_, t)| normalize_ty(t, &struct_map, &enum_map, &vector_map))
             .collect::<Result<Vec<_>, _>>()?;
-        for ((pname, _), pty) in f.params.iter().zip(&params) {
-            reject_quantum_ty(pty, &format!("function `{}` parameter `{pname}`", f.name))?;
+        if !f.is_quantum {
+            for ((pname, _), pty) in f.params.iter().zip(&params) {
+                reject_quantum_ty(pty, &format!("function `{}` parameter `{pname}`", f.name))?;
+            }
         }
         let ret = match &f.ret {
             Some(t) => {
                 let ret_ty = normalize_ty(t, &struct_map, &enum_map, &vector_map)?;
-                reject_quantum_ty(&ret_ty, &format!("function `{}` return type", f.name))?;
+                if !f.is_quantum {
+                    reject_quantum_ty(&ret_ty, &format!("function `{}` return type", f.name))?;
+                }
                 Some(ret_ty)
             }
             None => None,
         };
         if fn_sigs
-            .insert(f.name.clone(), FnSig { params, ret })
+            .insert(
+                f.name.clone(),
+                FnSig {
+                    params,
+                    ret,
+                    is_quantum: f.is_quantum,
+                },
+            )
             .is_some()
         {
             return Err(format!("duplicate function {}", f.name));
@@ -310,7 +328,11 @@ pub fn check_fn(
     if f.is_extern {
         check_extern_c_abi(f, sig)?;
     }
-    let mut env: HashMap<String, Ty> = HashMap::new();
+    let mut env: HashMap<String, Ty> = if f.is_quantum {
+        enter_quant_scope(&HashMap::new())
+    } else {
+        HashMap::new()
+    };
     for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
         if env.contains_key(pname) {
             return Err(format!(
@@ -1842,6 +1864,11 @@ fn infer_expr(
             let sig = fns
                 .get(name)
                 .ok_or_else(|| format!("unknown function `{name}`"))?;
+            if sig.is_quantum && !is_in_quant_scope(env) {
+                return Err(format!(
+                    "quantum function `{name}` can only be called inside `quant` blocks"
+                ));
+            }
             if args.len() != sig.params.len() {
                 return Err(format!(
                     "call `{name}`: expected {} args, got {}",

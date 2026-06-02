@@ -451,16 +451,21 @@ fn main() i32 {
 ## Quantum Computing
 
 NiaLang also has an early QIR backend for small quantum programs. Quantum code is
-written inside `quant { ... }` blocks and can currently use static qubit
-resources, the Hadamard gate, Z-basis measurement, and QIR output recording.
+written inside `quant { ... }` blocks or `quant fn` functions, and can currently
+use static qubit resources, the Hadamard gate, Z-basis measurement, and QIR
+output recording.
 
 ```nia
+quant fn prepare(q: qubit) {
+    H(q);
+    let r: result = q_measure(q);
+    q_record(r);
+}
+
 fn main() i32 {
     quant {
         let q = qubit();
-        H(q);
-        let r: result = q_measure(q);
-        q_record(r);
+        prepare(q);
     }
 
     0
@@ -472,6 +477,7 @@ The quantum surface is intentionally small:
 | Syntax | Meaning |
 | --- | --- |
 | `quant { ... }` | quantum scope; quantum resources cannot escape it |
+| `quant fn Name(...) { ... }` | quantum function; callable only from `quant` scopes |
 | `qubit()` | create a qubit resource inside `quant` |
 | `H(q)` | apply the Hadamard gate to a qubit |
 | `q_measure(q)` | measure a qubit in the Z basis and return `result` |
@@ -479,7 +485,13 @@ The quantum surface is intentionally small:
 
 `qubit` and `result` are quantum-only types. They cannot be returned from a
 `quant` expression or printed with `println`; use `q_record(r)` to expose
-measurement output to the QIR runner.
+measurement output to the QIR runner. `quant fn` bodies are checked as quantum
+scopes, so they can create qubits directly. Calls to `quant fn` are rejected
+outside `quant { ... }`.
+
+The current QIR lowering inlines void `quant fn` calls. Parameters of type
+`qubit` and `result` are supported in that path; returning values from quantum
+functions is reserved for future work.
 
 Run the current sample:
 
@@ -602,14 +614,15 @@ Currently available:
 - matrix-vector and vector-matrix multiplication
 - determinant as a `Matrix` method
 - Rust-style `impl` method syntax
-- early QIR quantum blocks with qubits, `H`, measurement, and result recording
+- early QIR quantum blocks/functions with qubits, `H`, measurement, and result recording
 
 Still intentionally small or unfinished:
 
 - no sparse matrices
 - no eigenvalues, QR, SVD, or advanced decomposition APIs
 - no list index syntax or explicit list cleanup yet
-- quantum support is limited to static QIR resources and a small builtin surface
+- quantum support is limited to static QIR resources, inline void `quant fn`
+  calls, and a small builtin surface
 - explicit matrix lifetime management
 - limited diagnostics compared with production languages
 - experimental syntax and type inference

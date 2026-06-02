@@ -68,6 +68,14 @@ pub fn compile_to_ll_with(src: &str, backend: Backend) -> Result<String, String>
         check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs)
             .map_err(|e| format_diagnostic(src, "type error", Some(&f.name), &e))?;
     }
+    if backend == Backend::Default && fns.iter().any(|f| f.is_quantum) {
+        return Err(format_diagnostic(
+            src,
+            "backend error",
+            None,
+            "quantum functions require the QIR backend; pass `-q`",
+        ));
+    }
     Ok(match backend {
         Backend::Default => codegen::emit_module(&structs, &enums, &vectors, &fns, &fn_sigs),
         Backend::Qir => qir::emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)?,
@@ -396,10 +404,12 @@ fn first_non_ws_column(line: &str) -> Option<usize> {
 
 fn find_function_bounds(src: &str, name: &str) -> Option<(usize, usize)> {
     let needle = format!("fn {name}");
+    let quant_needle = format!("quant fn {name}");
     let lines: Vec<&str> = src.lines().collect();
-    let start_idx = lines
-        .iter()
-        .position(|line| line.trim_start().starts_with(&needle))?;
+    let start_idx = lines.iter().position(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with(&needle) || trimmed.starts_with(&quant_needle)
+    })?;
     let mut depth = 0isize;
     let mut saw_body = false;
 

@@ -204,6 +204,29 @@ fn compile_to_ll_with_qir_runs_frontend_validation() {
 }
 
 #[test]
+fn compile_to_ll_rejects_quant_fn_without_qir_backend() {
+    let src = r#"
+quant fn prepare() {
+    let q = qubit();
+    H(q);
+}
+
+fn main() i32 {
+    quant {
+        prepare();
+    }
+    0
+}
+"#;
+    let err =
+        crate::driver::pipeline::compile_to_ll(src).expect_err("quant fn requires qir backend");
+    assert!(
+        err.contains("quantum functions require the QIR backend"),
+        "{err}"
+    );
+}
+
+#[test]
 fn parse_cli_args_supports_emit_ll_mode_with_dash_o() {
     let args = crate::driver::pipeline::parse_cli_args([
         "examples/sample_floats.nia",
