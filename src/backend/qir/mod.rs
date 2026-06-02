@@ -1,7 +1,7 @@
 //! QIR (Quantum Intermediate Representation) backend.
 //!
 //! Current lowering is intentionally small: it recognizes `qubit()` calls inside
-//! `quant { ... }`, assigns them static resource ids, lowers `gate_h(q)` to the
+//! `quant { ... }`, assigns them static resource ids, lowers `H(q)` to the
 //! QIS Hadamard intrinsic, and emits a Base Profile QIR entry point with the
 //! matching `required_num_qubits` attribute. Measurements and result recording
 //! are follow-up work.
@@ -110,7 +110,7 @@ fn collect_stmt(
         | Stmt::Break
         | Stmt::For { .. }
         | Stmt::Gpu { .. } => Err(
-            "QIR lowering currently supports only `let name = qubit();` and `gate_h(name);` inside `quant` blocks"
+            "QIR lowering currently supports only `let name = qubit();` and `H(name);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -233,7 +233,7 @@ fn collect_quant_expr(
             collect_block(body, true, plan, &mut body_qubits)
         }
         _ => Err(
-            "QIR lowering currently supports only `let name = qubit();` and `gate_h(name);` inside `quant` blocks"
+            "QIR lowering currently supports only `let name = qubit();` and `H(name);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -337,8 +337,8 @@ fn main() i32 {
     quant {
         let a = qubit();
         let b: qubit = qubit();
-        gate_h(a);
-        gate_h(b);
+        H(a);
+        H(b);
     }
     0
 }
@@ -375,6 +375,6 @@ fn main() i32 {
         let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns).unwrap();
         let err = emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
             .expect_err("unsupported quantum body");
-        assert!(err.contains("gate_h(name)"), "{err}");
+        assert!(err.contains("H(name)"), "{err}");
     }
 }
