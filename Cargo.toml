@@ -7,4 +7,4 @@ edition = "2024"
 qir-runner = ["dep:runner"]
 
 [dependencies]
-runner = { path = "../QIR_REPOS_FOR_AI_CONTEXT/qir-runner/runner", optional = true }
+runner = { git = "https://github.com/N1ghtStorm/qir-runner", branch = "main", optional = true }
