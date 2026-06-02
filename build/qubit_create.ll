@@ -8,8 +8,12 @@ define void @main() #0 {
 entry:
   ; qubit 0: ptr inttoptr (i64 0 to ptr)
   ; qubit 1: ptr inttoptr (i64 1 to ptr)
+  call void @__quantum__qis__h__body(ptr null)
+  call void @__quantum__qis__h__body(ptr inttoptr (i64 1 to ptr))
   ret void
 }
+
+declare void @__quantum__qis__h__body(ptr)
 
 attributes #0 = { "entry_point" "output_labeling_schema" "qir_profiles"="base_profile" "required_num_qubits"="2" "required_num_results"="0" }
 

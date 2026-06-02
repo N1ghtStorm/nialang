@@ -1,20 +1,26 @@
 //! QIR (Quantum Intermediate Representation) backend.
 //!
 //! Current lowering is intentionally small: it recognizes `qubit()` calls inside
-//! `quant { ... }`, assigns them static resource ids, and emits a Base Profile
-//! QIR entry point with the matching `required_num_qubits` attribute. Gates,
-//! measurements, and result recording are follow-up work.
+//! `quant { ... }`, assigns them static resource ids, lowers `gate_h(q)` to the
+//! QIS Hadamard intrinsic, and emits a Base Profile QIR entry point with the
+//! matching `required_num_qubits` attribute. Measurements and result recording
+//! are follow-up work.
 
 use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, VectorDef};
-use crate::nia_std::QUBIT;
+use crate::nia_std::{GATE_H, QUBIT};
 use crate::semantics::typecheck::FnSig;
 
 #[derive(Default)]
 struct QirPlan {
     qubits: usize,
+    ops: Vec<QirOp>,
+}
+
+enum QirOp {
+    GateH(usize),
 }
 
 /// Emits a QIR module for the validated AST.
@@ -34,48 +40,67 @@ pub fn emit_module(
         .ok_or_else(|| "QIR backend requires a `main` function".to_string())?;
 
     let mut plan = QirPlan::default();
-    collect_block(&main.body, false, &mut plan)?;
+    collect_block(&main.body, false, &mut plan, &mut HashMap::new())?;
     Ok(render_module(&plan))
 }
 
-fn collect_block(block: &Block, in_quant: bool, plan: &mut QirPlan) -> Result<(), String> {
+fn collect_block(
+    block: &Block,
+    in_quant: bool,
+    plan: &mut QirPlan,
+    qubits: &mut HashMap<String, usize>,
+) -> Result<(), String> {
     for st in &block.stmts {
-        collect_stmt(st, in_quant, plan)?;
+        collect_stmt(st, in_quant, plan, qubits)?;
     }
     if let Some(tail) = &block.tail {
-        collect_expr(tail, in_quant, plan)?;
+        collect_expr(tail, in_quant, plan, qubits)?;
     }
     Ok(())
 }
 
-fn collect_stmt(st: &Stmt, in_quant: bool, plan: &mut QirPlan) -> Result<(), String> {
+fn collect_stmt(
+    st: &Stmt,
+    in_quant: bool,
+    plan: &mut QirPlan,
+    qubits: &mut HashMap<String, usize>,
+) -> Result<(), String> {
     match st {
-        Stmt::Quant { body } => collect_block(body, true, plan),
-        Stmt::Gpu { body } if !in_quant => collect_block(body, false, plan),
-        Stmt::Let { init, .. } if in_quant => collect_quant_expr(init, plan),
-        Stmt::Expr(e) if in_quant => collect_quant_expr(e, plan),
-        Stmt::Let { init, .. } => collect_expr(init, false, plan),
-        Stmt::Expr(e) => collect_expr(e, false, plan),
-        Stmt::Assign { target, value } if !in_quant => {
-            collect_expr(target, false, plan)?;
-            collect_expr(value, false, plan)
+        Stmt::Quant { body } => {
+            let mut body_qubits = qubits.clone();
+            collect_block(body, true, plan, &mut body_qubits)
         }
-        Stmt::Return(e) if !in_quant => collect_expr(e, false, plan),
+        Stmt::Gpu { body } if !in_quant => collect_block(body, false, plan, qubits),
+        Stmt::Let { name, init, .. } if in_quant => collect_quant_let(name, init, plan, qubits),
+        Stmt::Expr(e) if in_quant => collect_quant_expr(e, plan, qubits),
+        Stmt::Let { init, .. } => collect_expr(init, false, plan, qubits),
+        Stmt::Expr(e) => collect_expr(e, false, plan, qubits),
+        Stmt::Assign { target, value } if !in_quant => {
+            collect_expr(target, false, plan, qubits)?;
+            collect_expr(value, false, plan, qubits)
+        }
+        Stmt::Return(e) if !in_quant => collect_expr(e, false, plan, qubits),
         Stmt::If { cond, then_block } if !in_quant => {
-            collect_expr(cond, false, plan)?;
-            collect_block(then_block, false, plan)
+            collect_expr(cond, false, plan, qubits)?;
+            let mut then_qubits = qubits.clone();
+            collect_block(then_block, false, plan, &mut then_qubits)
         }
         Stmt::While { cond, body } if !in_quant => {
-            collect_expr(cond, false, plan)?;
-            collect_block(body, false, plan)
+            collect_expr(cond, false, plan, qubits)?;
+            let mut body_qubits = qubits.clone();
+            collect_block(body, false, plan, &mut body_qubits)
         }
-        Stmt::Loop { body } if !in_quant => collect_block(body, false, plan),
+        Stmt::Loop { body } if !in_quant => {
+            let mut body_qubits = qubits.clone();
+            collect_block(body, false, plan, &mut body_qubits)
+        }
         Stmt::For {
             start, end, body, ..
         } if !in_quant => {
-            collect_expr(start, false, plan)?;
-            collect_expr(end, false, plan)?;
-            collect_block(body, false, plan)
+            collect_expr(start, false, plan, qubits)?;
+            collect_expr(end, false, plan, qubits)?;
+            let mut body_qubits = qubits.clone();
+            collect_block(body, false, plan, &mut body_qubits)
         }
         Stmt::Assign { .. }
         | Stmt::Return(_)
@@ -85,22 +110,30 @@ fn collect_stmt(st: &Stmt, in_quant: bool, plan: &mut QirPlan) -> Result<(), Str
         | Stmt::Break
         | Stmt::For { .. }
         | Stmt::Gpu { .. } => Err(
-            "QIR lowering currently supports only `let name = qubit();` inside `quant` blocks"
+            "QIR lowering currently supports only `let name = qubit();` and `gate_h(name);` inside `quant` blocks"
                 .into(),
         ),
     }
 }
 
-fn collect_expr(e: &Expr, in_quant: bool, plan: &mut QirPlan) -> Result<(), String> {
+fn collect_expr(
+    e: &Expr,
+    in_quant: bool,
+    plan: &mut QirPlan,
+    qubits: &mut HashMap<String, usize>,
+) -> Result<(), String> {
     if in_quant {
-        return collect_quant_expr(e, plan);
+        return collect_quant_expr(e, plan, qubits);
     }
 
     match e {
-        Expr::Quant { body } => collect_block(body, true, plan),
-        Expr::Gpu { body } => collect_block(body, false, plan),
+        Expr::Quant { body } => {
+            let mut body_qubits = qubits.clone();
+            collect_block(body, true, plan, &mut body_qubits)
+        }
+        Expr::Gpu { body } => collect_block(body, false, plan, qubits),
         Expr::Neg(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) => {
-            collect_expr(inner, false, plan)
+            collect_expr(inner, false, plan, qubits)
         }
         Expr::Add(l, r)
         | Expr::Sub(l, r)
@@ -114,19 +147,19 @@ fn collect_expr(e: &Expr, in_quant: bool, plan: &mut QirPlan) -> Result<(), Stri
         | Expr::Gt(l, r)
         | Expr::Ge(l, r)
         | Expr::Index(l, r) => {
-            collect_expr(l, false, plan)?;
-            collect_expr(r, false, plan)
+            collect_expr(l, false, plan, qubits)?;
+            collect_expr(r, false, plan, qubits)
         }
         Expr::Call { args, .. } | Expr::GenericCall { args, .. } => {
             for arg in args {
-                collect_expr(arg, false, plan)?;
+                collect_expr(arg, false, plan, qubits)?;
             }
             Ok(())
         }
         Expr::MethodCall { receiver, args, .. } => {
-            collect_expr(receiver, false, plan)?;
+            collect_expr(receiver, false, plan, qubits)?;
             for arg in args {
-                collect_expr(arg, false, plan)?;
+                collect_expr(arg, false, plan, qubits)?;
             }
             Ok(())
         }
@@ -134,7 +167,7 @@ fn collect_expr(e: &Expr, in_quant: bool, plan: &mut QirPlan) -> Result<(), Stri
         | Expr::VectorLit { fields, .. }
         | Expr::EnumStruct { fields, .. } => {
             for (_, expr) in fields {
-                collect_expr(expr, false, plan)?;
+                collect_expr(expr, false, plan, qubits)?;
             }
             Ok(())
         }
@@ -142,18 +175,18 @@ fn collect_expr(e: &Expr, in_quant: bool, plan: &mut QirPlan) -> Result<(), Stri
         | Expr::ArrayLit(elems)
         | Expr::EnumTuple { args: elems, .. } => {
             for elem in elems {
-                collect_expr(elem, false, plan)?;
+                collect_expr(elem, false, plan, qubits)?;
             }
             Ok(())
         }
         Expr::Match { scrutinee, arms } => {
-            collect_expr(scrutinee, false, plan)?;
+            collect_expr(scrutinee, false, plan, qubits)?;
             for (_, arm) in arms {
-                collect_expr(arm, false, plan)?;
+                collect_expr(arm, false, plan, qubits)?;
             }
             Ok(())
         }
-        Expr::Field(obj, _) => collect_expr(obj, false, plan),
+        Expr::Field(obj, _) => collect_expr(obj, false, plan, qubits),
         Expr::Int(_)
         | Expr::Float(_)
         | Expr::Bool(_)
@@ -163,18 +196,57 @@ fn collect_expr(e: &Expr, in_quant: bool, plan: &mut QirPlan) -> Result<(), Stri
     }
 }
 
-fn collect_quant_expr(e: &Expr, plan: &mut QirPlan) -> Result<(), String> {
+fn collect_quant_let(
+    name: &str,
+    init: &Expr,
+    plan: &mut QirPlan,
+    qubits: &mut HashMap<String, usize>,
+) -> Result<(), String> {
+    match init {
+        Expr::Call { name: call, args } if call == QUBIT && args.is_empty() => {
+            let id = plan.qubits;
+            plan.qubits += 1;
+            qubits.insert(name.to_string(), id);
+            Ok(())
+        }
+        _ => collect_quant_expr(init, plan, qubits),
+    }
+}
+
+fn collect_quant_expr(
+    e: &Expr,
+    plan: &mut QirPlan,
+    qubits: &HashMap<String, usize>,
+) -> Result<(), String> {
     match e {
         Expr::Call { name, args } if name == QUBIT && args.is_empty() => {
             plan.qubits += 1;
             Ok(())
         }
-        Expr::Quant { body } => collect_block(body, true, plan),
+        Expr::Call { name, args } if name == GATE_H && args.len() == 1 => {
+            let id = qubit_arg_id(&args[0], qubits)?;
+            plan.ops.push(QirOp::GateH(id));
+            Ok(())
+        }
+        Expr::Quant { body } => {
+            let mut body_qubits = qubits.clone();
+            collect_block(body, true, plan, &mut body_qubits)
+        }
         _ => Err(
-            "QIR lowering currently supports only `let name = qubit();` inside `quant` blocks"
+            "QIR lowering currently supports only `let name = qubit();` and `gate_h(name);` inside `quant` blocks"
                 .into(),
         ),
     }
+}
+
+fn qubit_arg_id(arg: &Expr, qubits: &HashMap<String, usize>) -> Result<usize, String> {
+    let Expr::Ident(name) = arg else {
+        return Err("QIR lowering currently supports only variable qubit arguments".into());
+    };
+    qubits
+        .get(name)
+        .copied()
+        .ok_or_else(|| format!("unknown qubit `{name}` in QIR lowering"))
 }
 
 fn render_module(plan: &QirPlan) -> String {
@@ -194,8 +266,22 @@ fn render_module(plan: &QirPlan) -> String {
     for id in 0..plan.qubits {
         writeln!(out, "  ; qubit {id}: ptr inttoptr (i64 {id} to ptr)").unwrap();
     }
+    for op in &plan.ops {
+        match op {
+            QirOp::GateH(id) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__qis__h__body({})",
+                    qir_qubit_value(*id)
+                )
+                .unwrap();
+            }
+        }
+    }
     writeln!(out, "  ret void").unwrap();
     writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "declare void @__quantum__qis__h__body(ptr)").unwrap();
     writeln!(out).unwrap();
     writeln!(
         out,
@@ -223,6 +309,14 @@ fn render_module(plan: &QirPlan) -> String {
     out
 }
 
+fn qir_qubit_value(id: usize) -> String {
+    if id == 0 {
+        "ptr null".into()
+    } else {
+        format!("ptr inttoptr (i64 {id} to ptr)")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +337,8 @@ fn main() i32 {
     quant {
         let a = qubit();
         let b: qubit = qubit();
+        gate_h(a);
+        gate_h(b);
     }
     0
 }
@@ -250,6 +346,14 @@ fn main() i32 {
         );
         assert!(ir.contains("define void @main() #0"), "IR:\n{ir}");
         assert!(ir.contains("\"required_num_qubits\"=\"2\""), "IR:\n{ir}");
+        assert!(
+            ir.contains("call void @__quantum__qis__h__body(ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__h__body(ptr inttoptr (i64 1 to ptr))"),
+            "IR:\n{ir}"
+        );
         assert!(ir.contains("qir_major_version"), "IR:\n{ir}");
         assert!(ir.contains("dynamic_qubit_management"), "IR:\n{ir}");
     }
@@ -271,6 +375,6 @@ fn main() i32 {
         let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns).unwrap();
         let err = emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
             .expect_err("unsupported quantum body");
-        assert!(err.contains("only `let name = qubit();`"), "{err}");
+        assert!(err.contains("gate_h(name)"), "{err}");
     }
 }

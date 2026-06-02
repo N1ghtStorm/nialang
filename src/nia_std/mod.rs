@@ -47,6 +47,7 @@ pub const COS: &str = "cos";
 pub const PI: &str = "PI";
 pub const CIS: &str = "cis";
 pub const QUBIT: &str = "qubit";
+pub const GATE_H: &str = "gate_h";
 
 pub fn complex_ty() -> Ty {
     Ty::Struct(COMPLEX_TYPE.into())
@@ -101,6 +102,7 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | PI
             | CIS
             | QUBIT
+            | GATE_H
     )
 }
 

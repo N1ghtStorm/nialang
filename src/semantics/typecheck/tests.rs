@@ -252,12 +252,40 @@ fn main() i32 {
     quant {
         let a = qubit();
         let b: qubit = qubit();
+        gate_h(a);
+        gate_h(b);
     }
     0
 }
 "#;
     let r = check_all(src);
     assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_gate_h_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    gate_h(0);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("gate_h must be quant-only");
+    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_gate_h_non_qubit_argument() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        gate_h(0);
+    }
+    0
+}
+"#;
+    let err = check_all(src).expect_err("gate_h expects a qubit");
+    assert!(err.contains("cannot satisfy Qubit"), "{err}");
 }
 
 #[test]
@@ -325,6 +353,21 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("qubit is a reserved builtin name");
     assert!(err.contains("function name `qubit` is reserved"), "{err}");
+}
+
+#[test]
+fn typecheck_reserves_gate_h_function_name() {
+    let src = r#"
+fn gate_h() i32 {
+    1
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("gate_h is a reserved builtin name");
+    assert!(err.contains("function name `gate_h` is reserved"), "{err}");
 }
 
 #[test]

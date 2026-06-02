@@ -2,6 +2,8 @@ fn main() i32 {
     quant {
         let a = qubit();
         let b: qubit = qubit();
+        gate_h(a);
+        gate_h(b);
     }
 
     0
