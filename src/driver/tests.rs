@@ -117,7 +117,7 @@ fn parse_cli_args_supports_qir_flag_short_and_long() {
     for flag in ["-q", "--qir"] {
         let args = crate::driver::pipeline::parse_cli_args(["examples/tests/ok_minimal.nia", flag])
             .expect("parse args");
-        assert_eq!(args.backend, crate::driver::pipeline::Backend::Default);
+        assert_eq!(args.backend, crate::driver::pipeline::Backend::Qir);
         assert_eq!(
             args.mode,
             crate::driver::pipeline::BuildMode::QirRun { out_ll: None }
@@ -134,7 +134,7 @@ fn parse_cli_args_qir_run_with_output_path() {
         "build/out.ll",
     ])
     .expect("parse args");
-    assert_eq!(args.backend, crate::driver::pipeline::Backend::Default);
+    assert_eq!(args.backend, crate::driver::pipeline::Backend::Qir);
     assert_eq!(
         args.mode,
         crate::driver::pipeline::BuildMode::QirRun {
@@ -183,14 +183,15 @@ fn parse_cli_args_rejects_qir_with_lib() {
 }
 
 #[test]
-fn compile_to_ll_with_qir_emits_qir_stub() {
+fn compile_to_ll_with_qir_emits_qir_module() {
     let src = "fn main() i32 { 0 }\n";
     let ir =
         crate::driver::pipeline::compile_to_ll_with(src, crate::driver::pipeline::Backend::Qir)
-            .expect("qir stub");
+            .expect("qir module");
     assert!(ir.contains("QIR backend"), "{ir}");
-    assert!(ir.contains("define void @Main()"), "{ir}");
+    assert!(ir.contains("define void @main() #0"), "{ir}");
     assert!(ir.contains("qir_major_version"), "{ir}");
+    assert!(ir.contains("\"required_num_qubits\"=\"0\""), "{ir}");
 }
 
 #[test]
