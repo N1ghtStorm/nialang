@@ -1,31 +1,14 @@
-// fn main() i32 {
-//     quant {
-//         let a = qubit();
-//         let b: qubit = qubit();
-//         H(a);
-//         H(b);
-//         let ar = M(a);
-//         let br: result = M(b);
-//         record(ar);
-//         record(br);
-//     }
-
-//     0
-// }
 fn main() i32 {
-    let b = quant {
+    quant {
         let a = qubit();
         let b: qubit = qubit();
         H(a);
         H(b);
-        let ar = M(a);
-        let br: result = M(b);
-        record(ar);
-        record(br);
-        br
-    };
-
-    println(b);
+        let ar = q_measure(a);
+        let br: result = q_measure(b);
+        q_record(ar);
+        q_record(br);
+    }
 
     0
 }

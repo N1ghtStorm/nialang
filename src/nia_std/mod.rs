@@ -49,8 +49,8 @@ pub const CIS: &str = "cis";
 pub const QUBIT: &str = "qubit";
 pub const RESULT: &str = "result";
 pub const GATE_H: &str = "H";
-pub const MEASURE: &str = "M";
-pub const RECORD: &str = "record";
+pub const MEASURE: &str = "q_measure";
+pub const RECORD: &str = "q_record";
 
 pub fn complex_ty() -> Ty {
     Ty::Struct(COMPLEX_TYPE.into())

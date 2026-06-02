@@ -2,8 +2,8 @@
 //!
 //! Current lowering is intentionally small: it recognizes `qubit()` calls inside
 //! `quant { ... }`, assigns them static resource ids, lowers `H(q)` to the
-//! QIS Hadamard intrinsic, lowers `M(q)` to Z-basis measurement, lowers
-//! `record(r)` to QIR output recording, and emits a Base Profile QIR entry
+//! QIS Hadamard intrinsic, lowers `q_measure(q)` to Z-basis measurement, lowers
+//! `q_record(r)` to QIR output recording, and emits a Base Profile QIR entry
 //! point with matching resource attributes.
 
 use std::collections::HashMap;
@@ -121,7 +121,7 @@ fn collect_stmt(
         | Stmt::Break
         | Stmt::For { .. }
         | Stmt::Gpu { .. } => Err(
-            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `let r = M(q);`, and `record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -257,7 +257,7 @@ fn collect_quant_expr(
             collect_block(body, true, plan, &mut body_resources)
         }
         _ => Err(
-            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `let r = M(q);`, and `record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -412,10 +412,10 @@ fn main() i32 {
         let b: qubit = qubit();
         H(a);
         H(b);
-        let ar = M(a);
-        let br: result = M(b);
-        record(ar);
-        record(br);
+        let ar = q_measure(a);
+        let br: result = q_measure(b);
+        q_record(ar);
+        q_record(br);
     }
     0
 }
@@ -469,7 +469,7 @@ fn main() i32 {
         let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns).unwrap();
         let err = emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
             .expect_err("unsupported quantum body");
-        assert!(err.contains("`let r = M(q);`"), "{err}");
-        assert!(err.contains("`record(r);`"), "{err}");
+        assert!(err.contains("`let r = q_measure(q);`"), "{err}");
+        assert!(err.contains("`q_record(r);`"), "{err}");
     }
 }
