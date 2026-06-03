@@ -253,7 +253,7 @@ fn main() i32 {
         let a = qubit();
         let b: qubit = qubit();
         H(a);
-        H(b);
+        CNOT(a, b);
         let ar = q_measure(a);
         let br: result = q_measure(b);
         q_record(ar);
@@ -350,6 +350,74 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("H expects a qubit");
     assert!(err.contains("cannot satisfy Qubit"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_x_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    X(0);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("X must be quant-only");
+    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_x_non_qubit_argument() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        X(0);
+    }
+    0
+}
+"#;
+    let err = check_all(src).expect_err("X expects a qubit");
+    assert!(err.contains("cannot satisfy Qubit"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_cnot_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    CNOT(0, 1);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("CNOT must be quant-only");
+    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_cnot_non_qubit_argument() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        let q = qubit();
+        CNOT(q, 0);
+    }
+    0
+}
+"#;
+    let err = check_all(src).expect_err("CNOT expects qubits");
+    assert!(err.contains("cannot satisfy Qubit"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_cnot_wrong_arity() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        let q = qubit();
+        CNOT(q);
+    }
+    0
+}
+"#;
+    let err = check_all(src).expect_err("CNOT expects two arguments");
+    assert!(err.contains("expects exactly 2 arguments"), "{err}");
 }
 
 #[test]
@@ -497,6 +565,36 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("H is a reserved builtin name");
     assert!(err.contains("function name `H` is reserved"), "{err}");
+}
+
+#[test]
+fn typecheck_reserves_x_function_name() {
+    let src = r#"
+fn X() i32 {
+    1
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("X is a reserved builtin name");
+    assert!(err.contains("function name `X` is reserved"), "{err}");
+}
+
+#[test]
+fn typecheck_reserves_cnot_function_name() {
+    let src = r#"
+fn CNOT() i32 {
+    1
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("CNOT is a reserved builtin name");
+    assert!(err.contains("function name `CNOT` is reserved"), "{err}");
 }
 
 #[test]

@@ -452,20 +452,24 @@ fn main() i32 {
 
 NiaLang also has an early QIR backend for small quantum programs. Quantum code is
 written inside `quant { ... }` blocks or `quant fn` functions, and can currently
-use static qubit resources, the Hadamard gate, Z-basis measurement, and QIR
-output recording.
+use static qubit resources, one- and two-qubit gates, Z-basis measurement, and
+QIR output recording.
 
 ```nia
-quant fn prepare(q: qubit) {
-    H(q);
-    let r: result = q_measure(q);
-    q_record(r);
+quant fn bell(control: qubit, target: qubit) {
+    H(control);
+    CNOT(control, target);
 }
 
 fn main() i32 {
     quant {
-        let q = qubit();
-        prepare(q);
+        let a = qubit();
+        let b = qubit();
+        bell(a, b);
+        let ar = q_measure(a);
+        let br = q_measure(b);
+        q_record(ar);
+        q_record(br);
     }
 
     0
@@ -480,6 +484,8 @@ The quantum surface is intentionally small:
 | `quant fn Name(...) { ... }` | quantum function; callable only from `quant` scopes |
 | `qubit()` | create a qubit resource inside `quant` |
 | `H(q)` | apply the Hadamard gate to a qubit |
+| `X(q)` | apply the Pauli-X gate; flips `|0>` and `|1>` |
+| `CNOT(c, t)` | controlled-X: flips target `t` when control `c` is `|1>` |
 | `q_measure(q)` | measure a qubit in the Z basis and return `result` |
 | `q_record(r)` | record a measurement result as QIR output |
 
@@ -510,8 +516,9 @@ OUTPUT	RESULT	1
 END	0
 ```
 
-Because `H(q)` creates a superposition before measurement, the recorded result
-can vary between runs. You can also write the generated QIR IR to a file:
+Because `H(q)` creates a superposition and `CNOT(c, t)` entangles the two
+qubits, the recorded results can vary between runs but should be correlated for
+the Bell-pair sample. You can also write the generated QIR IR to a file:
 
 ```bash
 cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q -o build/qubit_create.ll
@@ -594,7 +601,7 @@ Good places to start:
 | `examples/sample_dft_list.nia` | list-backed discrete Fourier transform |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
-| `examples/quantum/qubit_create.nia` | QIR qubits, `H`, measurement, and result recording |
+| `examples/quantum/qubit_create.nia` | QIR qubits, `H`, `X`, `CNOT`, measurement, and result recording |
 | `examples/sample_all.nia` | broad language feature sample |
 
 ## Project Status
@@ -614,7 +621,7 @@ Currently available:
 - matrix-vector and vector-matrix multiplication
 - determinant as a `Matrix` method
 - Rust-style `impl` method syntax
-- early QIR quantum blocks/functions with qubits, `H`, measurement, and result recording
+- early QIR quantum blocks/functions with qubits, `H`, `X`, `CNOT`, measurement, and result recording
 
 Still intentionally small or unfinished:
 

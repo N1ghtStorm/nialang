@@ -1,16 +1,16 @@
 //! QIR (Quantum Intermediate Representation) backend.
 //!
 //! Current lowering is intentionally small: it recognizes `qubit()` calls inside
-//! `quant { ... }`, assigns them static resource ids, lowers `H(q)` to the
-//! QIS Hadamard intrinsic, lowers `q_measure(q)` to Z-basis measurement, lowers
-//! `q_record(r)` to QIR output recording, and emits a Base Profile QIR entry
-//! point with matching resource attributes.
+//! `quant { ... }`, assigns them static resource ids, lowers `H(q)`, `X(q)`,
+//! and `CNOT(c, t)` to QIS gate intrinsics, lowers `q_measure(q)` to Z-basis
+//! measurement, lowers `q_record(r)` to QIR output recording, and emits a Base
+//! Profile QIR entry point with matching resource attributes.
 
 use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, Ty, VectorDef};
-use crate::nia_std::{GATE_H, MEASURE, QUBIT, RECORD};
+use crate::nia_std::{GATE_CNOT, GATE_H, GATE_X, MEASURE, QUBIT, RECORD};
 use crate::semantics::typecheck::FnSig;
 
 #[derive(Default)]
@@ -22,6 +22,8 @@ struct QirPlan {
 
 enum QirOp {
     GateH(usize),
+    GateX(usize),
+    GateCnot { control: usize, target: usize },
     Measure { qubit: usize, result: usize },
     Record(usize),
 }
@@ -149,7 +151,7 @@ fn collect_stmt(
         | Stmt::Break
         | Stmt::For { .. }
         | Stmt::Gpu { .. } => Err(
-            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `X(q);`, `CNOT(c, t);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -298,6 +300,17 @@ fn collect_quant_expr(
             plan.ops.push(QirOp::GateH(id));
             Ok(())
         }
+        Expr::Call { name, args } if name == GATE_X && args.len() == 1 => {
+            let id = qubit_arg_id(&args[0], resources)?;
+            plan.ops.push(QirOp::GateX(id));
+            Ok(())
+        }
+        Expr::Call { name, args } if name == GATE_CNOT && args.len() == 2 => {
+            let control = qubit_arg_id(&args[0], resources)?;
+            let target = qubit_arg_id(&args[1], resources)?;
+            plan.ops.push(QirOp::GateCnot { control, target });
+            Ok(())
+        }
         Expr::Call { name, args } if name == RECORD && args.len() == 1 => {
             let id = result_arg_id(&args[0], resources)?;
             plan.ops.push(QirOp::Record(id));
@@ -311,7 +324,7 @@ fn collect_quant_expr(
             collect_block(body, true, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
         _ => Err(
-            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `X(q);`, `CNOT(c, t);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -436,6 +449,23 @@ fn render_module(plan: &QirPlan) -> String {
                 )
                 .unwrap();
             }
+            QirOp::GateX(id) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__qis__x__body({})",
+                    qir_qubit_value(*id)
+                )
+                .unwrap();
+            }
+            QirOp::GateCnot { control, target } => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__qis__cnot__body({}, {})",
+                    qir_qubit_value(*control),
+                    qir_qubit_value(*target)
+                )
+                .unwrap();
+            }
             QirOp::Measure { qubit, result } => {
                 writeln!(
                     out,
@@ -459,6 +489,8 @@ fn render_module(plan: &QirPlan) -> String {
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "declare void @__quantum__qis__h__body(ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__x__body(ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__cnot__body(ptr, ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__mz__body(ptr, ptr) #1").unwrap();
     writeln!(
         out,
@@ -530,7 +562,7 @@ fn main() i32 {
         let a = qubit();
         let b: qubit = qubit();
         H(a);
-        H(b);
+        CNOT(a, b);
         let ar = q_measure(a);
         let br: result = q_measure(b);
         q_record(ar);
@@ -548,7 +580,9 @@ fn main() i32 {
             "IR:\n{ir}"
         );
         assert!(
-            ir.contains("call void @__quantum__qis__h__body(ptr inttoptr (i64 1 to ptr))"),
+            ir.contains(
+                "call void @__quantum__qis__cnot__body(ptr null, ptr inttoptr (i64 1 to ptr))"
+            ),
             "IR:\n{ir}"
         );
         assert!(

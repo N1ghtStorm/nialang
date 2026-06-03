@@ -49,6 +49,8 @@ pub const CIS: &str = "cis";
 pub const QUBIT: &str = "qubit";
 pub const RESULT: &str = "result";
 pub const GATE_H: &str = "H";
+pub const GATE_X: &str = "X";
+pub const GATE_CNOT: &str = "CNOT";
 pub const MEASURE: &str = "q_measure";
 pub const RECORD: &str = "q_record";
 
@@ -110,6 +112,8 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | QUBIT
             | RESULT
             | GATE_H
+            | GATE_X
+            | GATE_CNOT
             | MEASURE
             | RECORD
     )

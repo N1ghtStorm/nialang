@@ -1,15 +1,17 @@
-quant fn prepare(q: qubit) {
-    H(q);
-    let r = q_measure(q);
-    q_record(r);
+quant fn bell(control: qubit, target: qubit) {
+    H(control);
+    CNOT(control, target);
 }
 
 fn main() i32 {
     quant {
         let a = qubit();
         let b: qubit = qubit();
-        prepare(a);
-        prepare(b);
+        bell(a, b);
+        let ar = q_measure(a);
+        let br = q_measure(b);
+        q_record(ar);
+        q_record(br);
     }
 
     0
