@@ -461,15 +461,23 @@ quant fn bell(control: qubit, target: qubit) {
     CNOT(control, target);
 }
 
+quant fn flip(q: qubit) {
+    X(q);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
         let b = qubit();
+        let x = qubit();
         bell(a, b);
+        flip(x);
         let ar = q_measure(a);
         let br = q_measure(b);
+        let xr = q_measure(x);
         q_record(ar);
         q_record(br);
+        q_record(xr);
     }
 
     0
@@ -509,16 +517,18 @@ The runner output includes QIR metadata and recorded measurement results:
 
 ```text
 START
-METADATA	required_num_qubits	2
-METADATA	required_num_results	2
+METADATA	required_num_qubits	3
+METADATA	required_num_results	3
 OUTPUT	RESULT	0
+OUTPUT	RESULT	1
 OUTPUT	RESULT	1
 END	0
 ```
 
 Because `H(q)` creates a superposition and `CNOT(c, t)` entangles the two
 qubits, the recorded results can vary between runs but should be correlated for
-the Bell-pair sample. You can also write the generated QIR IR to a file:
+the Bell-pair sample. The separate `flip(x)` path demonstrates `X(q)`, so its
+recorded result should be `1`. You can also write the generated QIR IR to a file:
 
 ```bash
 cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q -o build/qubit_create.ll

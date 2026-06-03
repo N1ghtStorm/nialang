@@ -3,15 +3,23 @@ quant fn bell(control: qubit, target: qubit) {
     CNOT(control, target);
 }
 
+quant fn flip(q: qubit) {
+    X(q);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
         let b: qubit = qubit();
+        let x = qubit();
         bell(a, b);
+        flip(x);
         let ar = q_measure(a);
         let br = q_measure(b);
+        let xr = q_measure(x);
         q_record(ar);
         q_record(br);
+        q_record(xr);
     }
 
     0
