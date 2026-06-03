@@ -50,6 +50,10 @@ pub const QUBIT: &str = "qubit";
 pub const RESULT: &str = "result";
 pub const GATE_H: &str = "H";
 pub const GATE_X: &str = "X";
+pub const GATE_Y: &str = "Y";
+pub const GATE_Z: &str = "Z";
+pub const GATE_S: &str = "S";
+pub const GATE_T: &str = "T";
 pub const GATE_CNOT: &str = "CNOT";
 pub const MEASURE: &str = "q_measure";
 pub const RECORD: &str = "q_record";
@@ -113,6 +117,10 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | RESULT
             | GATE_H
             | GATE_X
+            | GATE_Y
+            | GATE_Z
+            | GATE_S
+            | GATE_T
             | GATE_CNOT
             | MEASURE
             | RECORD

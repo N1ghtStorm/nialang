@@ -465,19 +465,39 @@ quant fn flip(q: qubit) {
     X(q);
 }
 
+quant fn phase_like(y: qubit, z: qubit, s: qubit, t: qubit) {
+    Y(y);
+    Z(z);
+    S(s);
+    T(t);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
         let b = qubit();
         let x = qubit();
+        let y = qubit();
+        let z = qubit();
+        let s = qubit();
+        let t = qubit();
         bell(a, b);
         flip(x);
+        phase_like(y, z, s, t);
         let ar = q_measure(a);
         let br = q_measure(b);
         let xr = q_measure(x);
+        let yr = q_measure(y);
+        let zr = q_measure(z);
+        let sr = q_measure(s);
+        let tr = q_measure(t);
         q_record(ar);
         q_record(br);
         q_record(xr);
+        q_record(yr);
+        q_record(zr);
+        q_record(sr);
+        q_record(tr);
     }
 
     0
@@ -493,6 +513,10 @@ The quantum surface is intentionally small:
 | `qubit()` | create a qubit resource inside `quant` |
 | `H(q)` | apply the Hadamard gate to a qubit |
 | `X(q)` | apply the Pauli-X gate; flips `|0>` and `|1>` |
+| `Y(q)` | apply the Pauli-Y gate; bit flip with phase |
+| `Z(q)` | apply the Pauli-Z gate; phase flip on `|1>` |
+| `S(q)` | apply the phase gate, a `pi/2` Z-axis phase rotation |
+| `T(q)` | apply the T gate, a `pi/4` Z-axis phase rotation |
 | `CNOT(c, t)` | controlled-X: flips target `t` when control `c` is `|1>` |
 | `q_measure(q)` | measure a qubit in the Z basis and return `result` |
 | `q_record(r)` | record a measurement result as QIR output |
@@ -517,11 +541,15 @@ The runner output includes QIR metadata and recorded measurement results:
 
 ```text
 START
-METADATA	required_num_qubits	3
-METADATA	required_num_results	3
+METADATA	required_num_qubits	7
+METADATA	required_num_results	7
+OUTPUT	RESULT	0
 OUTPUT	RESULT	0
 OUTPUT	RESULT	1
 OUTPUT	RESULT	1
+OUTPUT	RESULT	0
+OUTPUT	RESULT	0
+OUTPUT	RESULT	0
 END	0
 ```
 
@@ -611,7 +639,7 @@ Good places to start:
 | `examples/sample_dft_list.nia` | list-backed discrete Fourier transform |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
-| `examples/quantum/qubit_create.nia` | QIR qubits, `H`, `X`, `CNOT`, measurement, and result recording |
+| `examples/quantum/qubit_create.nia` | QIR qubits, basic gates, measurement, and result recording |
 | `examples/sample_all.nia` | broad language feature sample |
 
 ## Project Status
@@ -631,7 +659,7 @@ Currently available:
 - matrix-vector and vector-matrix multiplication
 - determinant as a `Matrix` method
 - Rust-style `impl` method syntax
-- early QIR quantum blocks/functions with qubits, `H`, `X`, `CNOT`, measurement, and result recording
+- early QIR quantum blocks/functions with qubits, basic gates, measurement, and result recording
 
 Still intentionally small or unfinished:
 

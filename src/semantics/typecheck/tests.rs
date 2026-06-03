@@ -379,6 +379,40 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_rejects_new_single_qubit_gates_outside_quant() {
+    for gate in ["Y", "Z", "S", "T"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    {gate}(0);
+    0
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("single-qubit gate must be quant-only");
+        assert!(err.contains("only allowed inside `quant`"), "{gate}: {err}");
+    }
+}
+
+#[test]
+fn typecheck_rejects_new_single_qubit_gates_non_qubit_argument() {
+    for gate in ["Y", "Z", "S", "T"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    quant {{
+        {gate}(0);
+    }}
+    0
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("single-qubit gate expects a qubit");
+        assert!(err.contains("cannot satisfy Qubit"), "{gate}: {err}");
+    }
+}
+
+#[test]
 fn typecheck_rejects_cnot_outside_quant() {
     let src = r#"
 fn main() i32 {
@@ -580,6 +614,28 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("X is a reserved builtin name");
     assert!(err.contains("function name `X` is reserved"), "{err}");
+}
+
+#[test]
+fn typecheck_reserves_new_single_qubit_gate_function_names() {
+    for gate in ["Y", "Z", "S", "T"] {
+        let src = format!(
+            r#"
+fn {gate}() i32 {{
+    1
+}}
+
+fn main() i32 {{
+    0
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("single-qubit gate is a reserved builtin name");
+        assert!(
+            err.contains(&format!("function name `{gate}` is reserved")),
+            "{gate}: {err}"
+        );
+    }
 }
 
 #[test]

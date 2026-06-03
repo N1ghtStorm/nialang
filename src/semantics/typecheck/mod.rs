@@ -6,11 +6,12 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
-    COS, DEALLOC, GATE_CNOT, GATE_H, GATE_X, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW,
-    LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, OUTER, PI, PRINTLN,
-    QUBIT, REALLOC, RECORD, RESULT, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
-    VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    COS, DEALLOC, GATE_CNOT, GATE_H, GATE_S, GATE_T, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY,
+    LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS,
+    MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET,
+    MATRIX_TYPE, MEASURE, OUTER, PI, PRINTLN, QUBIT, REALLOC, RECORD, RESULT, SIN, TO_ARRAY,
+    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT,
+    VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -119,6 +120,10 @@ fn enter_quant_scope(env: &HashMap<String, Ty>) -> HashMap<String, Ty> {
     let mut scoped = env.clone();
     scoped.insert(QUANT_SCOPE_MARKER.into(), Ty::Unit);
     scoped
+}
+
+fn is_single_qubit_gate(name: &str) -> bool {
+    matches!(name, GATE_H | GATE_X | GATE_Y | GATE_Z | GATE_S | GATE_T)
 }
 
 fn contains_quantum_ty(t: &Ty) -> bool {
@@ -1346,7 +1351,7 @@ fn infer_expr(
                 }
                 return Ok(Ty::Qubit);
             }
-            if name == GATE_H || name == GATE_X {
+            if is_single_qubit_gate(name) {
                 if args.len() != 1 {
                     return Err(format!(
                         "`{name}` expects exactly 1 argument, got {}",

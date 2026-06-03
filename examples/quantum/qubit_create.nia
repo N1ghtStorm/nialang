@@ -7,19 +7,39 @@ quant fn flip(q: qubit) {
     X(q);
 }
 
+quant fn phase_like(y: qubit, z: qubit, s: qubit, t: qubit) {
+    Y(y);
+    Z(z);
+    S(s);
+    T(t);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
         let b: qubit = qubit();
         let x = qubit();
+        let y = qubit();
+        let z = qubit();
+        let s = qubit();
+        let t = qubit();
         bell(a, b);
         flip(x);
+        phase_like(y, z, s, t);
         let ar = q_measure(a);
         let br = q_measure(b);
         let xr = q_measure(x);
+        let yr = q_measure(y);
+        let zr = q_measure(z);
+        let sr = q_measure(s);
+        let tr = q_measure(t);
         q_record(ar);
         q_record(br);
         q_record(xr);
+        q_record(yr);
+        q_record(zr);
+        q_record(sr);
+        q_record(tr);
     }
 
     0

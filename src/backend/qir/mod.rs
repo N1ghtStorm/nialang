@@ -1,16 +1,18 @@
 //! QIR (Quantum Intermediate Representation) backend.
 //!
 //! Current lowering is intentionally small: it recognizes `qubit()` calls inside
-//! `quant { ... }`, assigns them static resource ids, lowers `H(q)`, `X(q)`,
-//! and `CNOT(c, t)` to QIS gate intrinsics, lowers `q_measure(q)` to Z-basis
-//! measurement, lowers `q_record(r)` to QIR output recording, and emits a Base
-//! Profile QIR entry point with matching resource attributes.
+//! `quant { ... }`, assigns them static resource ids, lowers supported quantum
+//! gates to QIS intrinsics, lowers `q_measure(q)` to Z-basis measurement,
+//! lowers `q_record(r)` to QIR output recording, and emits a Base Profile QIR
+//! entry point with matching resource attributes.
 
 use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, Ty, VectorDef};
-use crate::nia_std::{GATE_CNOT, GATE_H, GATE_X, MEASURE, QUBIT, RECORD};
+use crate::nia_std::{
+    GATE_CNOT, GATE_H, GATE_S, GATE_T, GATE_X, GATE_Y, GATE_Z, MEASURE, QUBIT, RECORD,
+};
 use crate::semantics::typecheck::FnSig;
 
 #[derive(Default)]
@@ -23,6 +25,10 @@ struct QirPlan {
 enum QirOp {
     GateH(usize),
     GateX(usize),
+    GateY(usize),
+    GateZ(usize),
+    GateS(usize),
+    GateT(usize),
     GateCnot { control: usize, target: usize },
     Measure { qubit: usize, result: usize },
     Record(usize),
@@ -151,7 +157,7 @@ fn collect_stmt(
         | Stmt::Break
         | Stmt::For { .. }
         | Stmt::Gpu { .. } => Err(
-            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `X(q);`, `CNOT(c, t);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, one-qubit gates, `CNOT(c, t);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -305,6 +311,26 @@ fn collect_quant_expr(
             plan.ops.push(QirOp::GateX(id));
             Ok(())
         }
+        Expr::Call { name, args } if name == GATE_Y && args.len() == 1 => {
+            let id = qubit_arg_id(&args[0], resources)?;
+            plan.ops.push(QirOp::GateY(id));
+            Ok(())
+        }
+        Expr::Call { name, args } if name == GATE_Z && args.len() == 1 => {
+            let id = qubit_arg_id(&args[0], resources)?;
+            plan.ops.push(QirOp::GateZ(id));
+            Ok(())
+        }
+        Expr::Call { name, args } if name == GATE_S && args.len() == 1 => {
+            let id = qubit_arg_id(&args[0], resources)?;
+            plan.ops.push(QirOp::GateS(id));
+            Ok(())
+        }
+        Expr::Call { name, args } if name == GATE_T && args.len() == 1 => {
+            let id = qubit_arg_id(&args[0], resources)?;
+            plan.ops.push(QirOp::GateT(id));
+            Ok(())
+        }
         Expr::Call { name, args } if name == GATE_CNOT && args.len() == 2 => {
             let control = qubit_arg_id(&args[0], resources)?;
             let target = qubit_arg_id(&args[1], resources)?;
@@ -324,7 +350,7 @@ fn collect_quant_expr(
             collect_block(body, true, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
         _ => Err(
-            "QIR lowering currently supports only `let q = qubit();`, `H(q);`, `X(q);`, `CNOT(c, t);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, one-qubit gates, `CNOT(c, t);`, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -457,6 +483,38 @@ fn render_module(plan: &QirPlan) -> String {
                 )
                 .unwrap();
             }
+            QirOp::GateY(id) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__qis__y__body({})",
+                    qir_qubit_value(*id)
+                )
+                .unwrap();
+            }
+            QirOp::GateZ(id) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__qis__z__body({})",
+                    qir_qubit_value(*id)
+                )
+                .unwrap();
+            }
+            QirOp::GateS(id) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__qis__s__body({})",
+                    qir_qubit_value(*id)
+                )
+                .unwrap();
+            }
+            QirOp::GateT(id) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__qis__t__body({})",
+                    qir_qubit_value(*id)
+                )
+                .unwrap();
+            }
             QirOp::GateCnot { control, target } => {
                 writeln!(
                     out,
@@ -490,6 +548,10 @@ fn render_module(plan: &QirPlan) -> String {
     writeln!(out).unwrap();
     writeln!(out, "declare void @__quantum__qis__h__body(ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__x__body(ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__y__body(ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__z__body(ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__s__body(ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__t__body(ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__cnot__body(ptr, ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__mz__body(ptr, ptr) #1").unwrap();
     writeln!(
@@ -655,6 +717,43 @@ fn main() i32 {
         );
         assert!(ir.contains("qir_major_version"), "IR:\n{ir}");
         assert!(ir.contains("dynamic_qubit_management"), "IR:\n{ir}");
+    }
+
+    #[test]
+    fn qir_lowers_single_qubit_phase_gates() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let y = qubit();
+        let z = qubit();
+        let s = qubit();
+        let t = qubit();
+        Y(y);
+        Z(z);
+        S(s);
+        T(t);
+    }
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__y__body(ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__z__body(ptr inttoptr (i64 1 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__s__body(ptr inttoptr (i64 2 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__t__body(ptr inttoptr (i64 3 to ptr))"),
+            "IR:\n{ir}"
+        );
     }
 
     #[test]
