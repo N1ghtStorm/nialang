@@ -480,6 +480,13 @@ quant fn swap_pair(left: qubit, right: qubit) {
     SWAP(left, right);
 }
 
+quant fn rotate_like(rx: qubit, ry: qubit, rz: qubit, r1: qubit) {
+    Rx(PI / 2.0, rx);
+    Ry(PI / 4.0, ry);
+    Rz(PI / 8.0, rz);
+    R1(PI, r1);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
@@ -493,6 +500,7 @@ fn main() i32 {
         controlled_phase(a, b);
         flip(x);
         phase_like(y, z, s, t);
+        rotate_like(y, z, s, t);
         swap_pair(s, t);
         let ar = q_measure(a);
         let br = q_measure(b);
@@ -530,6 +538,10 @@ The quantum surface is intentionally small:
 | `CNOT(c, t)` | controlled-X: flips target `t` when control `c` is `|1>` |
 | `CZ(c, t)` | controlled-Z: applies a phase flip to `t` when control `c` is `|1>` |
 | `SWAP(a, b)` | swap the quantum states of two qubits |
+| `Rx(theta, q)` | rotate a qubit around the X axis by a constant `f64` angle |
+| `Ry(theta, q)` | rotate a qubit around the Y axis by a constant `f64` angle |
+| `Rz(theta, q)` | rotate a qubit around the Z axis by a constant `f64` angle |
+| `R1(theta, q)` | apply a constant phase rotation |
 | `q_measure(q)` | measure a qubit in the Z basis and return `result` |
 | `q_record(r)` | record a measurement result as QIR output |
 
@@ -541,7 +553,8 @@ outside `quant { ... }`.
 
 The current QIR lowering inlines void `quant fn` calls. Parameters of type
 `qubit` and `result` are supported in that path; returning values from quantum
-functions is reserved for future work.
+functions is reserved for future work. Rotation gates currently lower constant
+angles such as `PI`, `PI / 2.0`, or `0.125 + 0.125`.
 
 Run the current sample:
 
@@ -568,8 +581,9 @@ END	0
 Because `H(q)` creates a superposition and `CNOT(c, t)` entangles the two
 qubits, the recorded results can vary between runs but should be correlated for
 the Bell-pair sample. The separate `flip(x)` path demonstrates `X(q)`, so its
-recorded result should be `1`; the same sample also lowers `CZ(c, t)` and
-`SWAP(a, b)`. You can also write the generated QIR IR to a file:
+recorded result should be `1`; the same sample also lowers `CZ(c, t)`,
+`SWAP(a, b)`, and constant-angle rotations. You can also write the generated QIR
+IR to a file:
 
 ```bash
 cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q -o build/qubit_create.ll

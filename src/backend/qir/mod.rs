@@ -11,8 +11,8 @@ use std::fmt::Write;
 
 use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, Ty, VectorDef};
 use crate::nia_std::{
-    GATE_CNOT, GATE_CZ, GATE_H, GATE_S, GATE_SWAP, GATE_T, GATE_X, GATE_Y, GATE_Z, MEASURE, QUBIT,
-    RECORD,
+    GATE_CNOT, GATE_CZ, GATE_H, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SWAP, GATE_T,
+    GATE_X, GATE_Y, GATE_Z, MEASURE, PI, QUBIT, RECORD,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -30,11 +30,36 @@ enum QirOp {
     GateZ(usize),
     GateS(usize),
     GateT(usize),
-    GateCnot { control: usize, target: usize },
-    GateCz { control: usize, target: usize },
-    GateSwap { left: usize, right: usize },
-    Measure { qubit: usize, result: usize },
+    GateCnot {
+        control: usize,
+        target: usize,
+    },
+    GateCz {
+        control: usize,
+        target: usize,
+    },
+    GateSwap {
+        left: usize,
+        right: usize,
+    },
+    GateRotation {
+        gate: QirRotation,
+        theta: f64,
+        qubit: usize,
+    },
+    Measure {
+        qubit: usize,
+        result: usize,
+    },
     Record(usize),
+}
+
+#[derive(Clone, Copy)]
+enum QirRotation {
+    Rx,
+    Ry,
+    Rz,
+    R1,
 }
 
 #[derive(Clone, Default)]
@@ -352,6 +377,22 @@ fn collect_quant_expr(
             plan.ops.push(QirOp::GateSwap { left, right });
             Ok(())
         }
+        Expr::Call { name, args }
+            if (name == GATE_RX || name == GATE_RY || name == GATE_RZ || name == GATE_R1)
+                && args.len() == 2 =>
+        {
+            let theta = const_f64_arg(&args[0])?;
+            let qubit = qubit_arg_id(&args[1], resources)?;
+            let gate = match name.as_str() {
+                GATE_RX => QirRotation::Rx,
+                GATE_RY => QirRotation::Ry,
+                GATE_RZ => QirRotation::Rz,
+                GATE_R1 => QirRotation::R1,
+                _ => unreachable!(),
+            };
+            plan.ops.push(QirOp::GateRotation { gate, theta, qubit });
+            Ok(())
+        }
         Expr::Call { name, args } if name == RECORD && args.len() == 1 => {
             let id = result_arg_id(&args[0], resources)?;
             plan.ops.push(QirOp::Record(id));
@@ -557,6 +598,16 @@ fn render_module(plan: &QirPlan) -> String {
                 )
                 .unwrap();
             }
+            QirOp::GateRotation { gate, theta, qubit } => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__qis__{}__body(double {}, {})",
+                    qir_rotation_intrinsic(*gate),
+                    qir_float_value(*theta),
+                    qir_qubit_value(*qubit)
+                )
+                .unwrap();
+            }
             QirOp::Measure { qubit, result } => {
                 writeln!(
                     out,
@@ -588,6 +639,9 @@ fn render_module(plan: &QirPlan) -> String {
     writeln!(out, "declare void @__quantum__qis__cnot__body(ptr, ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__cz__body(ptr, ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__swap__body(ptr, ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__rx__body(double, ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__ry__body(double, ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__qis__rz__body(double, ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__mz__body(ptr, ptr) #1").unwrap();
     writeln!(
         out,
@@ -635,6 +689,44 @@ fn qir_result_value(id: usize) -> String {
         "ptr null".into()
     } else {
         format!("ptr inttoptr (i64 {id} to ptr)")
+    }
+}
+
+fn qir_rotation_intrinsic(gate: QirRotation) -> &'static str {
+    match gate {
+        QirRotation::Rx => "rx",
+        QirRotation::Ry => "ry",
+        QirRotation::Rz => "rz",
+        // R1(theta) = diag(1, e^(i theta)); Rz(theta) is equivalent up to a
+        // global phase, and the current qir-runner links `rz` but not `r1`.
+        QirRotation::R1 => "rz",
+    }
+}
+
+fn qir_float_value(v: f64) -> String {
+    format!("{v:.17e}")
+}
+
+fn const_f64_arg(arg: &Expr) -> Result<f64, String> {
+    let value = const_f64_expr(arg)?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err("QIR lowering requires finite rotation angles".into())
+    }
+}
+
+fn const_f64_expr(expr: &Expr) -> Result<f64, String> {
+    match expr {
+        Expr::Float(v) => Ok(*v),
+        Expr::Int(v) => Ok(*v as f64),
+        Expr::Ident(name) if name == PI => Ok(std::f64::consts::PI),
+        Expr::Neg(inner) => Ok(-const_f64_expr(inner)?),
+        Expr::Add(left, right) => Ok(const_f64_expr(left)? + const_f64_expr(right)?),
+        Expr::Sub(left, right) => Ok(const_f64_expr(left)? - const_f64_expr(right)?),
+        Expr::Mul(left, right) => Ok(const_f64_expr(left)? * const_f64_expr(right)?),
+        Expr::Div(left, right) => Ok(const_f64_expr(left)? / const_f64_expr(right)?),
+        _ => Err("QIR lowering currently supports only constant f64 rotation angles".into()),
     }
 }
 
@@ -815,6 +907,45 @@ fn main() i32 {
         );
         assert!(
             ir.contains("call void @__quantum__qis__swap__body(ptr inttoptr (i64 1 to ptr), ptr inttoptr (i64 2 to ptr))"),
+            "IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn qir_lowers_rotation_gates() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let a = qubit();
+        let b = qubit();
+        let c = qubit();
+        let d = qubit();
+        Rx(1.0, a);
+        Ry(PI / 2.0, b);
+        Rz(-0.25, c);
+        R1(0.125 + 0.125, d);
+    }
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains(
+                "call void @__quantum__qis__rx__body(double 1.00000000000000000e0, ptr null)"
+            ),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__ry__body(double 1.57079632679489656e0, ptr inttoptr (i64 1 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__rz__body(double -2.50000000000000000e-1, ptr inttoptr (i64 2 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__rz__body(double 2.50000000000000000e-1, ptr inttoptr (i64 3 to ptr))"),
             "IR:\n{ir}"
         );
     }
