@@ -6,13 +6,14 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
-    COS, DEALLOC, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CS, GATE_CSWAP, GATE_CT, GATE_CY,
-    GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP,
-    GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW,
-    LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, OUTER, PI, PRINTLN,
-    QUBIT, REALLOC, RECORD, RESULT, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
-    VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    COS, DEALLOC, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ,
+    GATE_CS, GATE_CSWAP, GATE_CT, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY,
+    GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN,
+    LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
+    MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS,
+    MATRIX_SET, MATRIX_TYPE, MEASURE, OUTER, PI, PRINTLN, QUBIT, REALLOC, RECORD, RESULT, SIN,
+    TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
+    VECTOR_REFCOUNT, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -143,6 +144,10 @@ fn is_three_qubit_gate(name: &str) -> bool {
 
 fn is_rotation_gate(name: &str) -> bool {
     matches!(name, GATE_RX | GATE_RY | GATE_RZ | GATE_R1)
+}
+
+fn is_controlled_rotation_gate(name: &str) -> bool {
+    matches!(name, GATE_CRX | GATE_CRY | GATE_CRZ | GATE_CR1)
 }
 
 fn contains_quantum_ty(t: &Ty) -> bool {
@@ -1474,6 +1479,36 @@ fn infer_expr(
                     return Err(format!(
                         "`{name}` argument 2 expects a qubit, got {qubit:?}"
                     ));
+                }
+                return Ok(Ty::Unit);
+            }
+            if is_controlled_rotation_gate(name) {
+                if args.len() != 3 {
+                    return Err(format!(
+                        "`{name}` expects exactly 3 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                if !is_in_quant_scope(env) {
+                    return Err(format!(
+                        "`{name}(...)` is only allowed inside `quant` blocks"
+                    ));
+                }
+                let theta =
+                    infer_expr(&args[0], env, structs, enums, vectors, fns, Some(&Ty::F64))?;
+                if !types_equal(&theta, &Ty::F64) {
+                    return Err(format!(
+                        "`{name}` argument 1 expects an f64 angle, got {theta:?}"
+                    ));
+                }
+                for (idx, arg) in args.iter().enumerate().skip(1) {
+                    let t = infer_expr(arg, env, structs, enums, vectors, fns, Some(&Ty::Qubit))?;
+                    if !types_equal(&t, &Ty::Qubit) {
+                        return Err(format!(
+                            "`{name}` argument {} expects a qubit, got {t:?}",
+                            idx + 1
+                        ));
+                    }
                 }
                 return Ok(Ty::Unit);
             }

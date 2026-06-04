@@ -506,6 +506,13 @@ quant fn three_qubit_like(control_a: qubit, control_b: qubit, target: qubit) {
     CSWAP(control_a, control_b, target);
 }
 
+quant fn controlled_rotations(control: qubit, x: qubit, y: qubit, z: qubit, p: qubit) {
+    CRx(PI / 2.0, control, x);
+    CRy(PI / 4.0, control, y);
+    CRz(PI / 8.0, control, z);
+    CR1(PI, control, p);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
@@ -523,6 +530,7 @@ fn main() i32 {
         identity_and_adjoint(x, s, t);
         controlled_more(a, y, z, s, t);
         three_qubit_like(a, b, x);
+        controlled_rotations(a, x, y, z, t);
         swap_pair(s, t);
         let ar = q_measure(a);
         let br = q_measure(b);
@@ -574,6 +582,10 @@ The quantum surface is intentionally small:
 | `Ry(theta, q)` | rotate a qubit around the Y axis by a constant `f64` angle |
 | `Rz(theta, q)` | rotate a qubit around the Z axis by a constant `f64` angle |
 | `R1(theta, q)` | apply a constant phase rotation |
+| `CRx(theta, c, t)` | controlled X-axis rotation by a constant `f64` angle |
+| `CRy(theta, c, t)` | controlled Y-axis rotation by a constant `f64` angle |
+| `CRz(theta, c, t)` | controlled Z-axis rotation by a constant `f64` angle |
+| `CR1(theta, c, t)` | controlled phase rotation by a constant `f64` angle |
 | `q_measure(q)` | measure a qubit in the Z basis and return `result` |
 | `q_record(r)` | record a measurement result as QIR output |
 
@@ -585,9 +597,10 @@ outside `quant { ... }`.
 
 The current QIR lowering inlines void `quant fn` calls. Parameters of type
 `qubit` and `result` are supported in that path; returning values from quantum
-functions is reserved for future work. Rotation gates currently lower constant
-angles such as `PI`, `PI / 2.0`, or `0.125 + 0.125`. Some gates lower through
-equivalent base QIR operations so they run on the current QIR runner.
+functions is reserved for future work. Rotation and controlled-rotation gates
+currently lower constant angles such as `PI`, `PI / 2.0`, or `0.125 + 0.125`.
+Some gates lower through equivalent base QIR operations so they run on the
+current QIR runner.
 
 Run the current sample:
 
@@ -604,7 +617,7 @@ METADATA	output_labeling_schema
 METADATA	qir_profiles	base_profile
 METADATA	required_num_qubits	7
 METADATA	required_num_results	7
-OUTPUT	RESULT	1
+OUTPUT	RESULT	0
 OUTPUT	RESULT	0
 OUTPUT	RESULT	1
 OUTPUT	RESULT	0
@@ -617,8 +630,8 @@ END	0
 Because `H(q)` creates a superposition and `CNOT(c, t)` entangles the two
 qubits, the recorded results can vary between runs. The same sample also lowers
 `CZ(c, t)`, `SWAP(a, b)`, adjoint phase gates, controlled gates, three-qubit
-gates, and constant-angle rotations. You can also write the generated QIR IR to
-a file:
+gates, constant-angle rotations, and controlled rotations. You can also write
+the generated QIR IR to a file:
 
 ```bash
 cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q -o build/qubit_create.ll

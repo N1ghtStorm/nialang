@@ -11,9 +11,10 @@ use std::fmt::Write;
 
 use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, Ty, VectorDef};
 use crate::nia_std::{
-    GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CS, GATE_CSWAP, GATE_CT, GATE_CY, GATE_CZ,
-    GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T,
-    GATE_TDG, GATE_X, GATE_Y, GATE_Z, MEASURE, PI, QUBIT, RECORD,
+    GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS,
+    GATE_CSWAP, GATE_CT, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ,
+    GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, MEASURE, PI, QUBIT,
+    RECORD,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -62,6 +63,12 @@ enum QirOp {
         theta: f64,
         qubit: usize,
     },
+    GateControlledRotation {
+        gate: QirControlledRotation,
+        theta: f64,
+        control: usize,
+        target: usize,
+    },
     Measure {
         qubit: usize,
         result: usize,
@@ -90,6 +97,14 @@ enum QirRotation {
     Ry,
     Rz,
     R1,
+}
+
+#[derive(Clone, Copy)]
+enum QirControlledRotation {
+    Crx,
+    Cry,
+    Crz,
+    Cr1,
 }
 
 #[derive(Clone, Default)]
@@ -478,6 +493,28 @@ fn collect_quant_expr(
             plan.ops.push(QirOp::GateRotation { gate, theta, qubit });
             Ok(())
         }
+        Expr::Call { name, args }
+            if (name == GATE_CRX || name == GATE_CRY || name == GATE_CRZ || name == GATE_CR1)
+                && args.len() == 3 =>
+        {
+            let theta = const_f64_arg(&args[0])?;
+            let control = qubit_arg_id(&args[1], resources)?;
+            let target = qubit_arg_id(&args[2], resources)?;
+            let gate = match name.as_str() {
+                GATE_CRX => QirControlledRotation::Crx,
+                GATE_CRY => QirControlledRotation::Cry,
+                GATE_CRZ => QirControlledRotation::Crz,
+                GATE_CR1 => QirControlledRotation::Cr1,
+                _ => unreachable!(),
+            };
+            plan.ops.push(QirOp::GateControlledRotation {
+                gate,
+                theta,
+                control,
+                target,
+            });
+            Ok(())
+        }
         Expr::Call { name, args } if name == RECORD && args.len() == 1 => {
             let id = result_arg_id(&args[0], resources)?;
             plan.ops.push(QirOp::Record(id));
@@ -710,6 +747,14 @@ fn render_module(plan: &QirPlan) -> String {
             QirOp::GateRotation { gate, theta, qubit } => {
                 render_rotation_call(&mut out, *gate, *theta, *qubit);
             }
+            QirOp::GateControlledRotation {
+                gate,
+                theta,
+                control,
+                target,
+            } => {
+                render_controlled_rotation(&mut out, *gate, *theta, *control, *target);
+            }
             QirOp::Measure { qubit, result } => {
                 writeln!(
                     out,
@@ -862,6 +907,45 @@ fn render_controlled_phase(out: &mut String, theta: f64, control: usize, target:
     render_rotation_call(out, QirRotation::Rz, -half_theta, target);
     render_two_qubit_call(out, "cnot", control, target);
     render_rotation_call(out, QirRotation::Rz, half_theta, control);
+}
+
+fn render_controlled_rotation(
+    out: &mut String,
+    gate: QirControlledRotation,
+    theta: f64,
+    control: usize,
+    target: usize,
+) {
+    match gate {
+        QirControlledRotation::Crx => {
+            render_one_qubit_call(out, "h", target);
+            render_controlled_axis_rotation(out, QirRotation::Rz, theta, control, target);
+            render_one_qubit_call(out, "h", target);
+        }
+        QirControlledRotation::Cry => {
+            render_controlled_axis_rotation(out, QirRotation::Ry, theta, control, target);
+        }
+        QirControlledRotation::Crz => {
+            render_controlled_axis_rotation(out, QirRotation::Rz, theta, control, target);
+        }
+        QirControlledRotation::Cr1 => {
+            render_controlled_phase(out, theta, control, target);
+        }
+    }
+}
+
+fn render_controlled_axis_rotation(
+    out: &mut String,
+    gate: QirRotation,
+    theta: f64,
+    control: usize,
+    target: usize,
+) {
+    let half_theta = theta / 2.0;
+    render_rotation_call(out, gate, half_theta, target);
+    render_two_qubit_call(out, "cnot", control, target);
+    render_rotation_call(out, gate, -half_theta, target);
+    render_two_qubit_call(out, "cnot", control, target);
 }
 
 fn render_three_qubit_gate(
@@ -1268,6 +1352,58 @@ fn main() i32 {
             ir.contains("call void @__quantum__qis__rz__body(double 2.50000000000000000e-1, ptr inttoptr (i64 3 to ptr))"),
             "IR:\n{ir}"
         );
+    }
+
+    #[test]
+    fn qir_lowers_controlled_rotation_gates() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let c = qubit();
+        let x = qubit();
+        let y = qubit();
+        let z = qubit();
+        let p = qubit();
+        CRx(PI / 2.0, c, x);
+        CRy(PI / 4.0, c, y);
+        CRz(PI / 8.0, c, z);
+        CR1(PI, c, p);
+    }
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__h__body(ptr inttoptr (i64 1 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__rz__body(double 7.85398163397448279e-1, ptr inttoptr (i64 1 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__ry__body(double 3.92699081698724139e-1, ptr inttoptr (i64 2 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__rz__body(double 1.96349540849362070e-1, ptr inttoptr (i64 3 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__rz__body(double 1.57079632679489656e0, ptr inttoptr (i64 4 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains(
+                "call void @__quantum__qis__cnot__body(ptr null, ptr inttoptr (i64 4 to ptr))"
+            ),
+            "IR:\n{ir}"
+        );
+        assert!(!ir.contains("__quantum__qis__crx__body"), "IR:\n{ir}");
+        assert!(!ir.contains("__quantum__qis__cry__body"), "IR:\n{ir}");
+        assert!(!ir.contains("__quantum__qis__crz__body"), "IR:\n{ir}");
+        assert!(!ir.contains("__quantum__qis__cr1__body"), "IR:\n{ir}");
     }
 
     #[test]
