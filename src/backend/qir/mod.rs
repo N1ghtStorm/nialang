@@ -18,6 +18,8 @@ use crate::nia_std::{
 };
 use crate::semantics::typecheck::FnSig;
 
+const MAX_QUANT_FOR_UNROLL: i128 = 10_000;
+
 #[derive(Default)]
 struct QirPlan {
     qubits: usize,
@@ -113,6 +115,7 @@ enum QirControlledRotation {
 struct QuantResources {
     qubits: HashMap<String, usize>,
     results: HashMap<String, usize>,
+    const_ints: HashMap<String, i128>,
 }
 
 /// Emits a QIR module for the validated AST.
@@ -183,6 +186,14 @@ fn collect_stmt(
             collect_quant_let(name, init, plan, resources, fns, fn_sigs, call_stack)
         }
         Stmt::Expr(e) if in_quant => collect_quant_expr(e, plan, resources, fns, fn_sigs, call_stack),
+        Stmt::For {
+            var,
+            start,
+            end,
+            body,
+        } if in_quant => {
+            collect_quant_for(var, start, end, body, plan, resources, fns, fn_sigs, call_stack)
+        }
         Stmt::Let { init, .. } => {
             collect_expr(init, false, plan, resources, fns, fn_sigs, call_stack)
         }
@@ -232,10 +243,45 @@ fn collect_stmt(
         | Stmt::Break
         | Stmt::For { .. }
         | Stmt::Gpu { .. } => Err(
-            "QIR lowering currently supports only `let q = qubit();`, one- and two-qubit gates, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, static `for` loops, quantum gates, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
+}
+
+fn collect_quant_for(
+    var: &str,
+    start: &Expr,
+    end: &Expr,
+    body: &Block,
+    plan: &mut QirPlan,
+    resources: &mut QuantResources,
+    fns: &[FnDef],
+    fn_sigs: &HashMap<String, FnSig>,
+    call_stack: &mut Vec<String>,
+) -> Result<(), String> {
+    let start = const_i128_expr(start, resources)?;
+    let end = const_i128_expr(end, resources)?;
+    let len = end.saturating_sub(start);
+    if len > MAX_QUANT_FOR_UNROLL {
+        return Err(format!(
+            "QIR lowering refuses to unroll `for` loop with {len} iteration(s); limit is {MAX_QUANT_FOR_UNROLL}"
+        ));
+    }
+    for value in start..end {
+        let mut body_resources = resources.clone();
+        body_resources.const_ints.insert(var.to_string(), value);
+        collect_block(
+            body,
+            true,
+            plan,
+            &mut body_resources,
+            fns,
+            fn_sigs,
+            call_stack,
+        )?;
+    }
+    Ok(())
 }
 
 fn collect_expr(
@@ -537,7 +583,7 @@ fn collect_quant_expr(
             collect_block(body, true, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
         _ => Err(
-            "QIR lowering currently supports only `let q = qubit();`, one- and two-qubit gates, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, static `for` loops, quantum gates, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -1041,6 +1087,40 @@ fn const_f64_expr(expr: &Expr) -> Result<f64, String> {
     }
 }
 
+fn const_i128_expr(expr: &Expr, resources: &QuantResources) -> Result<i128, String> {
+    match expr {
+        Expr::Int(v) => Ok(*v),
+        Expr::Ident(name) => resources.const_ints.get(name).copied().ok_or_else(|| {
+            format!(
+                "QIR lowering currently supports only static integer `for` ranges, got `{name}`"
+            )
+        }),
+        Expr::Neg(inner) => Ok(-const_i128_expr(inner, resources)?),
+        Expr::Add(left, right) => const_i128_expr(left, resources)?
+            .checked_add(const_i128_expr(right, resources)?)
+            .ok_or_else(|| "integer overflow in static QIR `for` range".to_string()),
+        Expr::Sub(left, right) => const_i128_expr(left, resources)?
+            .checked_sub(const_i128_expr(right, resources)?)
+            .ok_or_else(|| "integer overflow in static QIR `for` range".to_string()),
+        Expr::Mul(left, right) => const_i128_expr(left, resources)?
+            .checked_mul(const_i128_expr(right, resources)?)
+            .ok_or_else(|| "integer overflow in static QIR `for` range".to_string()),
+        Expr::Div(left, right) => {
+            let rhs = const_i128_expr(right, resources)?;
+            if rhs == 0 {
+                return Err("division by zero in static QIR `for` range".into());
+            }
+            const_i128_expr(left, resources)?
+                .checked_div(rhs)
+                .ok_or_else(|| "integer overflow in static QIR `for` range".to_string())
+        }
+        _ => Err(
+            "QIR lowering currently supports only static integer expressions in `for` ranges"
+                .into(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1051,6 +1131,12 @@ mod tests {
         let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().unwrap();
         let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns).unwrap();
         emit_module(&structs, &enums, &vectors, &fns, &fn_sigs).unwrap()
+    }
+
+    fn emit_err(src: &str) -> String {
+        let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().unwrap();
+        let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns).unwrap();
+        emit_module(&structs, &enums, &vectors, &fns, &fn_sigs).expect_err("QIR emit error")
     }
 
     #[test]
@@ -1103,6 +1189,73 @@ fn main() i32 {
         );
         assert!(ir.contains("qir_major_version"), "IR:\n{ir}");
         assert!(ir.contains("dynamic_qubit_management"), "IR:\n{ir}");
+    }
+
+    #[test]
+    fn qir_unrolls_static_quant_for_loops() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let q = qubit();
+        for i in 0..3 {
+            H(q);
+        }
+    }
+    0
+}
+"#,
+        );
+        assert_eq!(
+            ir.matches("call void @__quantum__qis__h__body(ptr null)")
+                .count(),
+            3,
+            "IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn qir_unrolls_nested_static_quant_for_loops() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let q = qubit();
+        for i in 0..3 {
+            for j in i..3 {
+                H(q);
+            }
+        }
+    }
+    0
+}
+"#,
+        );
+        assert_eq!(
+            ir.matches("call void @__quantum__qis__h__body(ptr null)")
+                .count(),
+            6,
+            "IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn qir_rejects_dynamic_quant_for_ranges() {
+        let err = emit_err(
+            r#"
+fn main() i32 {
+    let n = 3;
+    quant {
+        let q = qubit();
+        for i in 0..n {
+            H(q);
+        }
+    }
+    0
+}
+"#,
+        );
+        assert!(err.contains("static integer `for` ranges"), "{err}");
     }
 
     #[test]

@@ -3,6 +3,12 @@ quant fn bell(control: qubit, target: qubit) {
     CNOT(control, target);
 }
 
+quant fn echo_h(q: qubit) {
+    for i in 0..2 {
+        H(q);
+    }
+}
+
 quant fn flip(q: qubit) {
     X(q);
 }
@@ -67,6 +73,7 @@ fn main() i32 {
         let s = qubit();
         let t = qubit();
         bell(a, b);
+        echo_h(a);
         controlled_phase(a, b);
         flip(x);
         phase_like(y, z, s, t);

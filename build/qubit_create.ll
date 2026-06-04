@@ -15,6 +15,8 @@ entry:
   ; qubit 6: ptr inttoptr (i64 6 to ptr)
   call void @__quantum__qis__h__body(ptr null)
   call void @__quantum__qis__cnot__body(ptr null, ptr inttoptr (i64 1 to ptr))
+  call void @__quantum__qis__h__body(ptr null)
+  call void @__quantum__qis__h__body(ptr null)
   call void @__quantum__qis__cz__body(ptr null, ptr inttoptr (i64 1 to ptr))
   call void @__quantum__qis__x__body(ptr inttoptr (i64 2 to ptr))
   call void @__quantum__qis__y__body(ptr inttoptr (i64 3 to ptr))

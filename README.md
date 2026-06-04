@@ -461,6 +461,12 @@ quant fn bell(control: qubit, target: qubit) {
     CNOT(control, target);
 }
 
+quant fn echo_h(q: qubit) {
+    for i in 0..2 {
+        H(q);
+    }
+}
+
 quant fn flip(q: qubit) {
     X(q);
 }
@@ -525,6 +531,7 @@ fn main() i32 {
         let s = qubit();
         let t = qubit();
         bell(a, b);
+        echo_h(a);
         controlled_phase(a, b);
         flip(x);
         phase_like(y, z, s, t);
@@ -560,6 +567,7 @@ The quantum surface is intentionally small:
 | --- | --- |
 | `quant { ... }` | quantum scope; quantum resources cannot escape it |
 | `quant fn Name(...) { ... }` | quantum function; callable only from `quant` scopes |
+| `for i in A..B { ... }` | static quantum loop; QIR lowering unrolls compile-time integer ranges |
 | `qubit()` | create a qubit resource inside `quant` |
 | `I(q)` | identity gate; leaves a qubit unchanged |
 | `H(q)` | apply the Hadamard gate to a qubit |
@@ -603,8 +611,9 @@ The current QIR lowering inlines void `quant fn` calls. Parameters of type
 `qubit` and `result` are supported in that path; returning values from quantum
 functions is reserved for future work. Rotation and controlled-rotation gates
 currently lower constant angles such as `PI`, `PI / 2.0`, or `0.125 + 0.125`.
-Some gates lower through equivalent base QIR operations so they run on the
-current QIR runner.
+Static `for` loops in quantum scopes are unrolled during QIR lowering. Some
+gates lower through equivalent base QIR operations so they run on the current
+QIR runner.
 
 Run the current sample:
 
@@ -623,7 +632,7 @@ METADATA	required_num_qubits	7
 METADATA	required_num_results	7
 OUTPUT	RESULT	1
 OUTPUT	RESULT	0
-OUTPUT	RESULT	0
+OUTPUT	RESULT	1
 OUTPUT	RESULT	1
 OUTPUT	RESULT	1
 OUTPUT	RESULT	0
