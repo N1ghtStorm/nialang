@@ -1,0 +1,7 @@
+fn main() i32 {
+    quant {
+        let qs: [qubit; 2] = [qubit(), qubit()];
+        H(qs[0]);
+    }
+    0
+}
