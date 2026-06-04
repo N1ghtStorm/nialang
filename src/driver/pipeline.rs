@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::backend::{codegen, qir};
+use crate::ast::{Block, Expr, FnDef, Stmt};
+use crate::backend::codegen;
 use crate::frontend::parser::{Parser, tokenize};
 use crate::semantics::typecheck::{check_fn, collect_sigs};
 
@@ -68,18 +69,98 @@ pub fn compile_to_ll_with(src: &str, backend: Backend) -> Result<String, String>
         check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs)
             .map_err(|e| format_diagnostic(src, "type error", Some(&f.name), &e))?;
     }
-    if backend == Backend::Default && fns.iter().any(|f| f.is_quantum) {
+    let has_quantum = fns.iter().any(fn_contains_quantum);
+    if backend == Backend::Default && has_quantum {
         return Err(format_diagnostic(
             src,
             "backend error",
             None,
-            "quantum functions require the QIR backend; pass `-q`",
+            "quantum syntax requires the QIR backend; pass `-q`",
         ));
     }
     Ok(match backend {
         Backend::Default => codegen::emit_module(&structs, &enums, &vectors, &fns, &fn_sigs),
-        Backend::Qir => qir::emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)?,
+        Backend::Qir => {
+            codegen::emit_module_for_qir_runner(&structs, &enums, &vectors, &fns, &fn_sigs)
+        }
     })
+}
+
+fn fn_contains_quantum(f: &FnDef) -> bool {
+    f.is_quantum || block_contains_quantum(&f.body)
+}
+
+fn block_contains_quantum(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_contains_quantum)
+        || block.tail.as_ref().is_some_and(expr_contains_quantum)
+}
+
+fn stmt_contains_quantum(st: &Stmt) -> bool {
+    match st {
+        Stmt::Let { init, .. } | Stmt::Expr(init) | Stmt::Return(init) => {
+            expr_contains_quantum(init)
+        }
+        Stmt::Assign { target, value } => {
+            expr_contains_quantum(target) || expr_contains_quantum(value)
+        }
+        Stmt::If { cond, then_block } => {
+            expr_contains_quantum(cond) || block_contains_quantum(then_block)
+        }
+        Stmt::While { cond, body } => expr_contains_quantum(cond) || block_contains_quantum(body),
+        Stmt::Loop { body } | Stmt::Gpu { body } => block_contains_quantum(body),
+        Stmt::For {
+            start, end, body, ..
+        } => {
+            expr_contains_quantum(start)
+                || expr_contains_quantum(end)
+                || block_contains_quantum(body)
+        }
+        Stmt::Quant { .. } => true,
+        Stmt::Break => false,
+    }
+}
+
+fn expr_contains_quantum(e: &Expr) -> bool {
+    match e {
+        Expr::Quant { .. } => true,
+        Expr::Neg(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) | Expr::Field(inner, _) => {
+            expr_contains_quantum(inner)
+        }
+        Expr::Add(l, r)
+        | Expr::Sub(l, r)
+        | Expr::Mul(l, r)
+        | Expr::VecDot(l, r)
+        | Expr::Div(l, r)
+        | Expr::Eq(l, r)
+        | Expr::Ne(l, r)
+        | Expr::Lt(l, r)
+        | Expr::Le(l, r)
+        | Expr::Gt(l, r)
+        | Expr::Ge(l, r)
+        | Expr::Index(l, r) => expr_contains_quantum(l) || expr_contains_quantum(r),
+        Expr::Call { args, .. } | Expr::GenericCall { args, .. } => {
+            args.iter().any(expr_contains_quantum)
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_contains_quantum(receiver) || args.iter().any(expr_contains_quantum)
+        }
+        Expr::StructLit { fields, .. }
+        | Expr::VectorLit { fields, .. }
+        | Expr::EnumStruct { fields, .. } => fields.iter().any(|(_, e)| expr_contains_quantum(e)),
+        Expr::AnonVectorLit(elems)
+        | Expr::ArrayLit(elems)
+        | Expr::EnumTuple { args: elems, .. } => elems.iter().any(expr_contains_quantum),
+        Expr::Match { scrutinee, arms } => {
+            expr_contains_quantum(scrutinee) || arms.iter().any(|(_, e)| expr_contains_quantum(e))
+        }
+        Expr::Gpu { body } => block_contains_quantum(body),
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Ident(_)
+        | Expr::EnumVariant { .. } => false,
+    }
 }
 
 fn format_diagnostic(src: &str, kind: &str, function: Option<&str>, message: &str) -> String {

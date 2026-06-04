@@ -1,0 +1,21 @@
+fn main() i32 {
+    let n = 3;
+    for i in 0..n {
+        println(i);
+    }
+
+    quant {
+        let q = qubit();
+        if n == 3 {
+            X(q);
+        }
+
+        let r = q_measure(q);
+        let b = q_read(r);
+        q_record(r);
+        q_record(b);
+    }
+
+    println("done");
+    0
+}

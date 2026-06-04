@@ -9,8 +9,6 @@ fn main() i32 {
         q_record(r);
         q_record(b);
     }
-
-    //println(boo);
-
+    println("shit!");
     0
 }
