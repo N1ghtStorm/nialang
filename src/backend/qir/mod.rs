@@ -3,8 +3,8 @@
 //! Current lowering is intentionally small: it recognizes `qubit()` calls inside
 //! `quant { ... }`, assigns them static resource ids, lowers supported quantum
 //! gates to QIS intrinsics, lowers `q_measure(q)` to Z-basis measurement,
-//! lowers `q_record(r)` to QIR output recording, and emits a Base Profile QIR
-//! entry point with matching resource attributes.
+//! lowers `q_read(r)` to result reads, lowers `q_record(...)` to QIR output
+//! recording, and emits a QIR entry point with matching resource attributes.
 
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -14,7 +14,7 @@ use crate::nia_std::{
     GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS,
     GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX,
     GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z,
-    MEASURE, PI, QUBIT, RECORD,
+    MEASURE, PI, QUBIT, READ, RECORD,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -24,6 +24,7 @@ const MAX_QUANT_FOR_UNROLL: i128 = 10_000;
 struct QirPlan {
     qubits: usize,
     results: usize,
+    bools: usize,
     ops: Vec<QirOp>,
 }
 
@@ -75,7 +76,12 @@ enum QirOp {
         qubit: usize,
         result: usize,
     },
-    Record(usize),
+    ReadResult {
+        result: usize,
+        bool_id: usize,
+    },
+    RecordResult(usize),
+    RecordBool(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -116,6 +122,7 @@ struct QuantResources {
     qubits: HashMap<String, usize>,
     qubit_arrays: HashMap<String, Vec<usize>>,
     results: HashMap<String, usize>,
+    bools: HashMap<String, usize>,
     const_ints: HashMap<String, i128>,
 }
 
@@ -249,7 +256,7 @@ fn collect_stmt(
         | Stmt::Break
         | Stmt::For { .. }
         | Stmt::Gpu { .. } => Err(
-            "QIR lowering currently supports only `let q = qubit();`, static `for` loops, quantum gates, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, static `for` loops, quantum gates, `let r = q_measure(q);`, `let b = q_read(r);`, and `q_record(...)` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -411,6 +418,14 @@ fn collect_quant_let(
             plan.results += 1;
             resources.results.insert(name.to_string(), result);
             plan.ops.push(QirOp::Measure { qubit, result });
+            Ok(())
+        }
+        Expr::Call { name: call, args } if call == READ && args.len() == 1 => {
+            let result = result_arg_id(&args[0], resources)?;
+            let bool_id = plan.bools;
+            plan.bools += 1;
+            resources.bools.insert(name.to_string(), bool_id);
+            plan.ops.push(QirOp::ReadResult { result, bool_id });
             Ok(())
         }
         Expr::Call { name: call, .. } if fn_sigs.get(call).is_some_and(|sig| sig.is_quantum) => {
@@ -619,8 +634,12 @@ fn collect_quant_expr(
             Ok(())
         }
         Expr::Call { name, args } if name == RECORD && args.len() == 1 => {
-            let id = result_arg_id(&args[0], resources)?;
-            plan.ops.push(QirOp::Record(id));
+            if let Ok(id) = result_arg_id(&args[0], resources) {
+                plan.ops.push(QirOp::RecordResult(id));
+            } else {
+                let id = bool_arg_id(&args[0], resources)?;
+                plan.ops.push(QirOp::RecordBool(id));
+            }
             Ok(())
         }
         Expr::Call { name, args } if fn_sigs.get(name).is_some_and(|sig| sig.is_quantum) => {
@@ -631,7 +650,7 @@ fn collect_quant_expr(
             collect_block(body, true, plan, &mut body_resources, fns, fn_sigs, call_stack)
         }
         _ => Err(
-            "QIR lowering currently supports only `let q = qubit();`, static `for` loops, quantum gates, `let r = q_measure(q);`, and `q_record(r);` inside `quant` blocks"
+            "QIR lowering currently supports only `let q = qubit();`, static `for` loops, quantum gates, `let r = q_measure(q);`, `let b = q_read(r);`, and `q_record(...)` inside `quant` blocks"
                 .into(),
         ),
     }
@@ -771,6 +790,17 @@ fn result_arg_id(arg: &Expr, resources: &QuantResources) -> Result<usize, String
         .get(name)
         .copied()
         .ok_or_else(|| format!("unknown result `{name}` in QIR lowering"))
+}
+
+fn bool_arg_id(arg: &Expr, resources: &QuantResources) -> Result<usize, String> {
+    let Expr::Ident(name) = arg else {
+        return Err("QIR lowering currently supports only variable bool arguments".into());
+    };
+    resources
+        .bools
+        .get(name)
+        .copied()
+        .ok_or_else(|| format!("unknown bool `{name}` in QIR lowering"))
 }
 
 fn render_module(plan: &QirPlan) -> String {
@@ -916,11 +946,28 @@ fn render_module(plan: &QirPlan) -> String {
                 )
                 .unwrap();
             }
-            QirOp::Record(id) => {
+            QirOp::ReadResult { result, bool_id } => {
+                writeln!(
+                    out,
+                    "  %qread{} = call i1 @__quantum__rt__read_result({})",
+                    bool_id,
+                    qir_result_value(*result)
+                )
+                .unwrap();
+            }
+            QirOp::RecordResult(id) => {
                 writeln!(
                     out,
                     "  call void @__quantum__rt__result_record_output({}, ptr null)",
                     qir_result_value(*id)
+                )
+                .unwrap();
+            }
+            QirOp::RecordBool(id) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__rt__bool_record_output({}, ptr null)",
+                    qir_bool_value(*id)
                 )
                 .unwrap();
             }
@@ -942,16 +989,31 @@ fn render_module(plan: &QirPlan) -> String {
     writeln!(out, "declare void @__quantum__qis__ry__body(double, ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__rz__body(double, ptr)").unwrap();
     writeln!(out, "declare void @__quantum__qis__mz__body(ptr, ptr) #1").unwrap();
+    writeln!(out, "declare i1 @__quantum__rt__read_result(ptr)").unwrap();
     writeln!(
         out,
         "declare void @__quantum__rt__result_record_output(ptr, ptr)"
     )
     .unwrap();
-    writeln!(out).unwrap();
     writeln!(
         out,
-        "attributes #0 = {{ \"entry_point\" \"output_labeling_schema\" \"qir_profiles\"=\"base_profile\" \"required_num_qubits\"=\"{}\" \"required_num_results\"=\"{}\" }}",
-        plan.qubits, plan.results
+        "declare void @__quantum__rt__bool_record_output(i1, ptr)"
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+    let profile = if plan
+        .ops
+        .iter()
+        .any(|op| matches!(op, QirOp::ReadResult { .. }))
+    {
+        "adaptive_profile"
+    } else {
+        "base_profile"
+    };
+    writeln!(
+        out,
+        "attributes #0 = {{ \"entry_point\" \"output_labeling_schema\" \"qir_profiles\"=\"{}\" \"required_num_qubits\"=\"{}\" \"required_num_results\"=\"{}\" }}",
+        profile, plan.qubits, plan.results
     )
     .unwrap();
     writeln!(out, "attributes #1 = {{ \"irreversible\" }}").unwrap();
@@ -989,6 +1051,10 @@ fn qir_result_value(id: usize) -> String {
     } else {
         format!("ptr inttoptr (i64 {id} to ptr)")
     }
+}
+
+fn qir_bool_value(id: usize) -> String {
+    format!("i1 %qread{id}")
 }
 
 fn render_one_qubit_call(out: &mut String, intrinsic: &str, qubit: usize) {
@@ -1703,7 +1769,43 @@ fn main() i32 {
         let err = emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
             .expect_err("unsupported quantum body");
         assert!(err.contains("`let r = q_measure(q);`"), "{err}");
-        assert!(err.contains("`q_record(r);`"), "{err}");
+        assert!(err.contains("`let b = q_read(r);`"), "{err}");
+        assert!(err.contains("`q_record(...)`"), "{err}");
+    }
+
+    #[test]
+    fn qir_lowers_q_read_and_bool_record() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let q = qubit();
+        X(q);
+        let r = q_measure(q);
+        let b: bool = q_read(r);
+        q_record(r);
+        q_record(b);
+    }
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains("\"qir_profiles\"=\"adaptive_profile\""),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("%qread0 = call i1 @__quantum__rt__read_result(ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__rt__bool_record_output(i1 %qread0, ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("declare i1 @__quantum__rt__read_result(ptr)"),
+            "IR:\n{ir}"
+        );
     }
 
     #[test]

@@ -11,9 +11,9 @@ use crate::nia_std::{
     GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y,
     GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
     MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_REFCOUNT,
-    MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, OUTER, PI, PRINTLN, QUBIT, REALLOC, RECORD,
-    RESULT, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
-    VECTOR_REFCOUNT, VECTOR_SET,
+    MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
+    RECORD, RESULT, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET,
+    VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -1558,6 +1558,26 @@ fn infer_expr(
                         "`{RECORD}(...)` is only allowed inside `quant` blocks"
                     ));
                 }
+                let t = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !types_equal(&t, &Ty::Result) && !types_equal(&t, &Ty::Bool) {
+                    return Err(format!(
+                        "`{RECORD}` expects a result or bool argument, got {t:?}"
+                    ));
+                }
+                return Ok(Ty::Unit);
+            }
+            if name == READ {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{READ}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                if !is_in_quant_scope(env) {
+                    return Err(format!(
+                        "`{READ}(...)` is only allowed inside `quant` blocks"
+                    ));
+                }
                 let t = infer_expr(
                     &args[0],
                     env,
@@ -1568,9 +1588,9 @@ fn infer_expr(
                     Some(&Ty::Result),
                 )?;
                 if !types_equal(&t, &Ty::Result) {
-                    return Err(format!("`{RECORD}` expects a result argument, got {t:?}"));
+                    return Err(format!("`{READ}` expects a result argument, got {t:?}"));
                 }
-                return Ok(Ty::Unit);
+                return Ok(Ty::Bool);
             }
             if name == PRINTLN {
                 if args.len() != 1 {

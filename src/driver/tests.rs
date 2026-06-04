@@ -212,6 +212,17 @@ fn compile_iqft4_example_to_qir() {
 }
 
 #[test]
+fn compile_qubit_read_example_to_qir() {
+    let ir = compile_fixture_qir_ok("examples/quantum/qubit_read.nia");
+    assert!(ir.contains("\"qir_profiles\"=\"adaptive_profile\""), "{ir}");
+    assert!(ir.contains("call i1 @__quantum__rt__read_result"), "{ir}");
+    assert!(
+        ir.contains("call void @__quantum__rt__bool_record_output(i1 %qread0, ptr null)"),
+        "{ir}"
+    );
+}
+
+#[test]
 fn compile_to_ll_with_qir_emits_qir_module() {
     let src = "fn main() i32 { 0 }\n";
     let ir =

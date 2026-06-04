@@ -1,0 +1,16 @@
+fn main() i32 {
+    quant {
+        let q = qubit();
+        X(q);
+
+        let r = q_measure(q);
+        let b: bool = q_read(r);
+
+        q_record(r);
+        q_record(b);
+    }
+
+    //println(boo);
+
+    0
+}

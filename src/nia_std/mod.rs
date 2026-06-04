@@ -78,6 +78,7 @@ pub const GATE_CRY: &str = "CRy";
 pub const GATE_CRZ: &str = "CRz";
 pub const GATE_CR1: &str = "CR1";
 pub const MEASURE: &str = "q_measure";
+pub const READ: &str = "q_read";
 pub const RECORD: &str = "q_record";
 
 pub fn complex_ty() -> Ty {
@@ -167,6 +168,7 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | GATE_CRZ
             | GATE_CR1
             | MEASURE
+            | READ
             | RECORD
     )
 }

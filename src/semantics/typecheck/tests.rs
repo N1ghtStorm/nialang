@@ -267,6 +267,23 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_q_read_result_as_bool_inside_quant() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        let q = qubit();
+        let r = q_measure(q);
+        let b: bool = q_read(r);
+        q_record(b);
+    }
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
 fn typecheck_allows_quant_fn_called_inside_quant() {
     let src = r#"
 quant fn prepare() {
@@ -716,8 +733,34 @@ fn main() i32 {
     0
 }
 "#;
-    let err = check_all(src).expect_err("q_record expects a result");
-    assert!(err.contains("expects a result argument"), "{err}");
+    let err = check_all(src).expect_err("q_record expects a result or bool");
+    assert!(err.contains("expects a result or bool argument"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_q_read_outside_quant() {
+    let src = r#"
+fn main() i32 {
+    q_read(false);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("q_read must be quant-only");
+    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_q_read_non_result_argument() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        q_read(false);
+    }
+    0
+}
+"#;
+    let err = check_all(src).expect_err("q_read expects a result");
+    assert!(err.contains("cannot satisfy Result"), "{err}");
 }
 
 #[test]
@@ -1024,6 +1067,21 @@ fn main() i32 {
         err.contains("function name `q_record` is reserved"),
         "{err}"
     );
+}
+
+#[test]
+fn typecheck_reserves_q_read_function_name() {
+    let src = r#"
+fn q_read() i32 {
+    1
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("q_read is a reserved builtin name");
+    assert!(err.contains("function name `q_read` is reserved"), "{err}");
 }
 
 #[test]

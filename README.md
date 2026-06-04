@@ -599,13 +599,15 @@ The quantum surface is intentionally small:
 | `CRz(theta, c, t)` | controlled Z-axis rotation by a constant `f64` angle |
 | `CR1(theta, c, t)` | controlled phase rotation by a constant `f64` angle |
 | `q_measure(q)` | measure a qubit in the Z basis and return `result` |
-| `q_record(r)` | record a measurement result as QIR output |
+| `q_read(r)` | read a `result` as a classical `bool` in QIR |
+| `q_record(x)` | record a `result` or `bool` as QIR output |
 
 `qubit` and `result` are quantum-only types. They cannot be returned from a
-`quant` expression or printed with `println`; use `q_record(r)` to expose
-measurement output to the QIR runner. `quant fn` bodies are checked as quantum
-scopes, so they can create qubits directly. Calls to `quant fn` are rejected
-outside `quant { ... }`.
+`quant` expression or printed with `println`; use `q_record(r)` to expose raw
+measurement output to the QIR runner, or `q_read(r)` to turn a measurement
+result into a classical `bool` before recording it. `quant fn` bodies are
+checked as quantum scopes, so they can create qubits directly. Calls to
+`quant fn` are rejected outside `quant { ... }`.
 
 The current QIR lowering inlines void `quant fn` calls. Parameters of type
 `qubit` and `result` are supported in that path; returning values from quantum
@@ -728,6 +730,7 @@ Good places to start:
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
 | `examples/quantum/qubit_create.nia` | QIR qubits, basic one- and two-qubit gates, measurement, and result recording |
+| `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |
 | `examples/quantum/qft4.nia` | 4-qubit quantum Fourier transform over a qubit register |
 | `examples/quantum/iqft4.nia` | inverse 4-qubit QFT, composed with QFT as a round-trip check |
 | `examples/sample_all.nia` | broad language feature sample |
