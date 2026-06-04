@@ -42,6 +42,12 @@ quant fn controlled_more(control: qubit, h: qubit, y: qubit, s: qubit, t: qubit)
     CT(control, t);
 }
 
+quant fn three_qubit_like(control_a: qubit, control_b: qubit, target: qubit) {
+    CCNOT(control_a, control_b, target);
+    CCZ(control_a, control_b, target);
+    CSWAP(control_a, control_b, target);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
@@ -58,6 +64,7 @@ fn main() i32 {
         rotate_like(y, z, s, t);
         identity_and_adjoint(x, s, t);
         controlled_more(a, y, z, s, t);
+        three_qubit_like(a, b, x);
         swap_pair(s, t);
         let ar = q_measure(a);
         let br = q_measure(b);

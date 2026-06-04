@@ -467,6 +467,60 @@ fn main() i32 {{
 }
 
 #[test]
+fn typecheck_rejects_three_qubit_gates_outside_quant() {
+    for gate in ["CCNOT", "CCZ", "CSWAP"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    {gate}(0, 1, 2);
+    0
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("three-qubit gate must be quant-only");
+        assert!(err.contains("only allowed inside `quant`"), "{gate}: {err}");
+    }
+}
+
+#[test]
+fn typecheck_rejects_three_qubit_gates_non_qubit_argument() {
+    for gate in ["CCNOT", "CCZ", "CSWAP"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    quant {{
+        let q = qubit();
+        {gate}(q, q, 0);
+    }}
+    0
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("three-qubit gate expects qubits");
+        assert!(err.contains("cannot satisfy Qubit"), "{gate}: {err}");
+    }
+}
+
+#[test]
+fn typecheck_rejects_three_qubit_gates_wrong_arity() {
+    for gate in ["CCNOT", "CCZ", "CSWAP"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    quant {{
+        let q = qubit();
+        {gate}(q, q);
+    }}
+    0
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("three-qubit gate expects three arguments");
+        assert!(err.contains("expects exactly 3 arguments"), "{gate}: {err}");
+    }
+}
+
+#[test]
 fn typecheck_rejects_rotation_gates_outside_quant() {
     for gate in ["Rx", "Ry", "Rz", "R1"] {
         let src = format!(
@@ -738,6 +792,28 @@ fn main() i32 {{
 "#
         );
         let err = check_all(&src).expect_err("two-qubit gate is a reserved builtin name");
+        assert!(
+            err.contains(&format!("function name `{gate}` is reserved")),
+            "{gate}: {err}"
+        );
+    }
+}
+
+#[test]
+fn typecheck_reserves_three_qubit_gate_function_names() {
+    for gate in ["CCNOT", "CCZ", "CSWAP"] {
+        let src = format!(
+            r#"
+fn {gate}() i32 {{
+    1
+}}
+
+fn main() i32 {{
+    0
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("three-qubit gate is a reserved builtin name");
         assert!(
             err.contains(&format!("function name `{gate}` is reserved")),
             "{gate}: {err}"

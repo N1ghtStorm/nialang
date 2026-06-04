@@ -11,9 +11,9 @@ use std::fmt::Write;
 
 use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, Ty, VectorDef};
 use crate::nia_std::{
-    GATE_CH, GATE_CNOT, GATE_CS, GATE_CT, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX,
-    GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z,
-    MEASURE, PI, QUBIT, RECORD,
+    GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CS, GATE_CSWAP, GATE_CT, GATE_CY, GATE_CZ,
+    GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T,
+    GATE_TDG, GATE_X, GATE_Y, GATE_Z, MEASURE, PI, QUBIT, RECORD,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -51,6 +51,12 @@ enum QirOp {
         control: usize,
         target: usize,
     },
+    GateThree {
+        gate: QirThree,
+        first: usize,
+        second: usize,
+        third: usize,
+    },
     GateRotation {
         gate: QirRotation,
         theta: f64,
@@ -69,6 +75,13 @@ enum QirControlled {
     Cy,
     Cs,
     Ct,
+}
+
+#[derive(Clone, Copy)]
+enum QirThree {
+    Ccnot,
+    Ccz,
+    Cswap,
 }
 
 #[derive(Clone, Copy)]
@@ -430,6 +443,26 @@ fn collect_quant_expr(
             Ok(())
         }
         Expr::Call { name, args }
+            if (name == GATE_CCNOT || name == GATE_CCZ || name == GATE_CSWAP) && args.len() == 3 =>
+        {
+            let first = qubit_arg_id(&args[0], resources)?;
+            let second = qubit_arg_id(&args[1], resources)?;
+            let third = qubit_arg_id(&args[2], resources)?;
+            let gate = match name.as_str() {
+                GATE_CCNOT => QirThree::Ccnot,
+                GATE_CCZ => QirThree::Ccz,
+                GATE_CSWAP => QirThree::Cswap,
+                _ => unreachable!(),
+            };
+            plan.ops.push(QirOp::GateThree {
+                gate,
+                first,
+                second,
+                third,
+            });
+            Ok(())
+        }
+        Expr::Call { name, args }
             if (name == GATE_RX || name == GATE_RY || name == GATE_RZ || name == GATE_R1)
                 && args.len() == 2 =>
         {
@@ -666,6 +699,14 @@ fn render_module(plan: &QirPlan) -> String {
             } => {
                 render_controlled_gate(&mut out, *gate, *control, *target);
             }
+            QirOp::GateThree {
+                gate,
+                first,
+                second,
+                third,
+            } => {
+                render_three_qubit_gate(&mut out, *gate, *first, *second, *third);
+            }
             QirOp::GateRotation { gate, theta, qubit } => {
                 render_rotation_call(&mut out, *gate, *theta, *qubit);
             }
@@ -789,6 +830,10 @@ fn render_sdg(out: &mut String, qubit: usize) {
     render_rotation_call(out, QirRotation::Rz, -std::f64::consts::FRAC_PI_2, qubit);
 }
 
+fn render_tdg(out: &mut String, qubit: usize) {
+    render_rotation_call(out, QirRotation::Rz, -std::f64::consts::FRAC_PI_4, qubit);
+}
+
 fn render_controlled_gate(out: &mut String, gate: QirControlled, control: usize, target: usize) {
     match gate {
         QirControlled::Ch => {
@@ -817,6 +862,46 @@ fn render_controlled_phase(out: &mut String, theta: f64, control: usize, target:
     render_rotation_call(out, QirRotation::Rz, -half_theta, target);
     render_two_qubit_call(out, "cnot", control, target);
     render_rotation_call(out, QirRotation::Rz, half_theta, control);
+}
+
+fn render_three_qubit_gate(
+    out: &mut String,
+    gate: QirThree,
+    first: usize,
+    second: usize,
+    third: usize,
+) {
+    match gate {
+        QirThree::Ccnot => render_ccnot(out, first, second, third),
+        QirThree::Ccz => {
+            render_one_qubit_call(out, "h", third);
+            render_ccnot(out, first, second, third);
+            render_one_qubit_call(out, "h", third);
+        }
+        QirThree::Cswap => {
+            render_two_qubit_call(out, "cnot", third, second);
+            render_ccnot(out, first, second, third);
+            render_two_qubit_call(out, "cnot", third, second);
+        }
+    }
+}
+
+fn render_ccnot(out: &mut String, control_a: usize, control_b: usize, target: usize) {
+    render_one_qubit_call(out, "h", target);
+    render_two_qubit_call(out, "cnot", control_b, target);
+    render_tdg(out, target);
+    render_two_qubit_call(out, "cnot", control_a, target);
+    render_one_qubit_call(out, "t", target);
+    render_two_qubit_call(out, "cnot", control_b, target);
+    render_tdg(out, target);
+    render_two_qubit_call(out, "cnot", control_a, target);
+    render_one_qubit_call(out, "t", control_b);
+    render_one_qubit_call(out, "t", target);
+    render_two_qubit_call(out, "cnot", control_a, control_b);
+    render_one_qubit_call(out, "h", target);
+    render_one_qubit_call(out, "t", control_a);
+    render_tdg(out, control_b);
+    render_two_qubit_call(out, "cnot", control_a, control_b);
 }
 
 fn qir_rotation_intrinsic(gate: QirRotation) -> &'static str {
@@ -1110,6 +1195,40 @@ fn main() i32 {
             ir.contains("call void @__quantum__qis__rz__body(double 3.92699081698724139e-1, ptr inttoptr (i64 4 to ptr))"),
             "IR:\n{ir}"
         );
+    }
+
+    #[test]
+    fn qir_lowers_three_qubit_gates() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let a = qubit();
+        let b = qubit();
+        let c = qubit();
+        CCNOT(a, b, c);
+        CCZ(a, b, c);
+        CSWAP(a, b, c);
+    }
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__h__body(ptr inttoptr (i64 2 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__cnot__body(ptr inttoptr (i64 1 to ptr), ptr inttoptr (i64 2 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__cnot__body(ptr inttoptr (i64 2 to ptr), ptr inttoptr (i64 1 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(!ir.contains("__quantum__qis__ccnot__body"), "IR:\n{ir}");
+        assert!(!ir.contains("__quantum__qis__ccz__body"), "IR:\n{ir}");
+        assert!(!ir.contains("__quantum__qis__cswap__body"), "IR:\n{ir}");
     }
 
     #[test]
