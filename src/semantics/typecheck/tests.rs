@@ -380,7 +380,7 @@ fn main() i32 {
 
 #[test]
 fn typecheck_rejects_new_single_qubit_gates_outside_quant() {
-    for gate in ["Y", "Z", "S", "T"] {
+    for gate in ["I", "Y", "Z", "S", "Sdg", "T", "Tdg"] {
         let src = format!(
             r#"
 fn main() i32 {{
@@ -396,7 +396,7 @@ fn main() i32 {{
 
 #[test]
 fn typecheck_rejects_new_single_qubit_gates_non_qubit_argument() {
-    for gate in ["Y", "Z", "S", "T"] {
+    for gate in ["I", "Y", "Z", "S", "Sdg", "T", "Tdg"] {
         let src = format!(
             r#"
 fn main() i32 {{
@@ -414,7 +414,7 @@ fn main() i32 {{
 
 #[test]
 fn typecheck_rejects_two_qubit_gates_outside_quant() {
-    for gate in ["CNOT", "CZ", "SWAP"] {
+    for gate in ["CNOT", "CZ", "SWAP", "CH", "CY", "CS", "CT"] {
         let src = format!(
             r#"
 fn main() i32 {{
@@ -430,7 +430,7 @@ fn main() i32 {{
 
 #[test]
 fn typecheck_rejects_two_qubit_gates_non_qubit_argument() {
-    for gate in ["CNOT", "CZ", "SWAP"] {
+    for gate in ["CNOT", "CZ", "SWAP", "CH", "CY", "CS", "CT"] {
         let src = format!(
             r#"
 fn main() i32 {{
@@ -449,7 +449,7 @@ fn main() i32 {{
 
 #[test]
 fn typecheck_rejects_two_qubit_gates_wrong_arity() {
-    for gate in ["CNOT", "CZ", "SWAP"] {
+    for gate in ["CNOT", "CZ", "SWAP", "CH", "CY", "CS", "CT"] {
         let src = format!(
             r#"
 fn main() i32 {{
@@ -703,7 +703,7 @@ fn main() i32 {
 
 #[test]
 fn typecheck_reserves_new_single_qubit_gate_function_names() {
-    for gate in ["Y", "Z", "S", "T"] {
+    for gate in ["I", "Y", "Z", "S", "Sdg", "T", "Tdg"] {
         let src = format!(
             r#"
 fn {gate}() i32 {{
@@ -725,7 +725,7 @@ fn main() i32 {{
 
 #[test]
 fn typecheck_reserves_two_qubit_gate_function_names() {
-    for gate in ["CNOT", "CZ", "SWAP"] {
+    for gate in ["CNOT", "CZ", "SWAP", "CH", "CY", "CS", "CT"] {
         let src = format!(
             r#"
 fn {gate}() i32 {{

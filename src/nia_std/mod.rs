@@ -48,15 +48,22 @@ pub const PI: &str = "PI";
 pub const CIS: &str = "cis";
 pub const QUBIT: &str = "qubit";
 pub const RESULT: &str = "result";
+pub const GATE_I: &str = "I";
 pub const GATE_H: &str = "H";
 pub const GATE_X: &str = "X";
 pub const GATE_Y: &str = "Y";
 pub const GATE_Z: &str = "Z";
 pub const GATE_S: &str = "S";
+pub const GATE_SDG: &str = "Sdg";
 pub const GATE_T: &str = "T";
+pub const GATE_TDG: &str = "Tdg";
 pub const GATE_CNOT: &str = "CNOT";
 pub const GATE_CZ: &str = "CZ";
 pub const GATE_SWAP: &str = "SWAP";
+pub const GATE_CH: &str = "CH";
+pub const GATE_CY: &str = "CY";
+pub const GATE_CS: &str = "CS";
+pub const GATE_CT: &str = "CT";
 pub const GATE_RX: &str = "Rx";
 pub const GATE_RY: &str = "Ry";
 pub const GATE_RZ: &str = "Rz";
@@ -121,15 +128,22 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | CIS
             | QUBIT
             | RESULT
+            | GATE_I
             | GATE_H
             | GATE_X
             | GATE_Y
             | GATE_Z
             | GATE_S
+            | GATE_SDG
             | GATE_T
+            | GATE_TDG
             | GATE_CNOT
             | GATE_CZ
             | GATE_SWAP
+            | GATE_CH
+            | GATE_CY
+            | GATE_CS
+            | GATE_CT
             | GATE_RX
             | GATE_RY
             | GATE_RZ

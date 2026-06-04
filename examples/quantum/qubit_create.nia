@@ -29,6 +29,19 @@ quant fn rotate_like(rx: qubit, ry: qubit, rz: qubit, r1: qubit) {
     R1(PI, r1);
 }
 
+quant fn identity_and_adjoint(i: qubit, s: qubit, t: qubit) {
+    I(i);
+    Sdg(s);
+    Tdg(t);
+}
+
+quant fn controlled_more(control: qubit, h: qubit, y: qubit, s: qubit, t: qubit) {
+    CH(control, h);
+    CY(control, y);
+    CS(control, s);
+    CT(control, t);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
@@ -43,6 +56,8 @@ fn main() i32 {
         flip(x);
         phase_like(y, z, s, t);
         rotate_like(y, z, s, t);
+        identity_and_adjoint(x, s, t);
+        controlled_more(a, y, z, s, t);
         swap_pair(s, t);
         let ar = q_measure(a);
         let br = q_measure(b);

@@ -487,6 +487,19 @@ quant fn rotate_like(rx: qubit, ry: qubit, rz: qubit, r1: qubit) {
     R1(PI, r1);
 }
 
+quant fn identity_and_adjoint(i: qubit, s: qubit, t: qubit) {
+    I(i);
+    Sdg(s);
+    Tdg(t);
+}
+
+quant fn controlled_more(control: qubit, h: qubit, y: qubit, s: qubit, t: qubit) {
+    CH(control, h);
+    CY(control, y);
+    CS(control, s);
+    CT(control, t);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
@@ -501,6 +514,8 @@ fn main() i32 {
         flip(x);
         phase_like(y, z, s, t);
         rotate_like(y, z, s, t);
+        identity_and_adjoint(x, s, t);
+        controlled_more(a, y, z, s, t);
         swap_pair(s, t);
         let ar = q_measure(a);
         let br = q_measure(b);
@@ -529,15 +544,22 @@ The quantum surface is intentionally small:
 | `quant { ... }` | quantum scope; quantum resources cannot escape it |
 | `quant fn Name(...) { ... }` | quantum function; callable only from `quant` scopes |
 | `qubit()` | create a qubit resource inside `quant` |
+| `I(q)` | identity gate; leaves a qubit unchanged |
 | `H(q)` | apply the Hadamard gate to a qubit |
 | `X(q)` | apply the Pauli-X gate; flips `|0>` and `|1>` |
 | `Y(q)` | apply the Pauli-Y gate; bit flip with phase |
 | `Z(q)` | apply the Pauli-Z gate; phase flip on `|1>` |
 | `S(q)` | apply the phase gate, a `pi/2` Z-axis phase rotation |
+| `Sdg(q)` | apply the inverse of `S(q)` |
 | `T(q)` | apply the T gate, a `pi/4` Z-axis phase rotation |
+| `Tdg(q)` | apply the inverse of `T(q)` |
 | `CNOT(c, t)` | controlled-X: flips target `t` when control `c` is `|1>` |
 | `CZ(c, t)` | controlled-Z: applies a phase flip to `t` when control `c` is `|1>` |
 | `SWAP(a, b)` | swap the quantum states of two qubits |
+| `CH(c, t)` | controlled-H: applies `H(t)` when control `c` is `|1>` |
+| `CY(c, t)` | controlled-Y: applies `Y(t)` when control `c` is `|1>` |
+| `CS(c, t)` | controlled-S: applies `S(t)` when control `c` is `|1>` |
+| `CT(c, t)` | controlled-T: applies `T(t)` when control `c` is `|1>` |
 | `Rx(theta, q)` | rotate a qubit around the X axis by a constant `f64` angle |
 | `Ry(theta, q)` | rotate a qubit around the Y axis by a constant `f64` angle |
 | `Rz(theta, q)` | rotate a qubit around the Z axis by a constant `f64` angle |
@@ -554,7 +576,8 @@ outside `quant { ... }`.
 The current QIR lowering inlines void `quant fn` calls. Parameters of type
 `qubit` and `result` are supported in that path; returning values from quantum
 functions is reserved for future work. Rotation gates currently lower constant
-angles such as `PI`, `PI / 2.0`, or `0.125 + 0.125`.
+angles such as `PI`, `PI / 2.0`, or `0.125 + 0.125`. Some gates lower through
+equivalent base QIR operations so they run on the current QIR runner.
 
 Run the current sample:
 
@@ -566,24 +589,25 @@ The runner output includes QIR metadata and recorded measurement results:
 
 ```text
 START
+METADATA	entry_point
+METADATA	output_labeling_schema
+METADATA	qir_profiles	base_profile
 METADATA	required_num_qubits	7
 METADATA	required_num_results	7
-OUTPUT	RESULT	0
-OUTPUT	RESULT	0
 OUTPUT	RESULT	1
 OUTPUT	RESULT	1
-OUTPUT	RESULT	0
+OUTPUT	RESULT	1
+OUTPUT	RESULT	1
+OUTPUT	RESULT	1
 OUTPUT	RESULT	0
 OUTPUT	RESULT	0
 END	0
 ```
 
 Because `H(q)` creates a superposition and `CNOT(c, t)` entangles the two
-qubits, the recorded results can vary between runs but should be correlated for
-the Bell-pair sample. The separate `flip(x)` path demonstrates `X(q)`, so its
-recorded result should be `1`; the same sample also lowers `CZ(c, t)`,
-`SWAP(a, b)`, and constant-angle rotations. You can also write the generated QIR
-IR to a file:
+qubits, the recorded results can vary between runs. The same sample also lowers
+`CZ(c, t)`, `SWAP(a, b)`, adjoint phase gates, controlled gates, and
+constant-angle rotations. You can also write the generated QIR IR to a file:
 
 ```bash
 cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q -o build/qubit_create.ll
