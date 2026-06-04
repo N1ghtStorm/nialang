@@ -201,6 +201,17 @@ fn compile_qft4_example_to_qir() {
 }
 
 #[test]
+fn compile_iqft4_example_to_qir() {
+    let ir = compile_fixture_qir_ok("examples/quantum/iqft4.nia");
+    assert!(ir.contains("\"required_num_qubits\"=\"4\""), "{ir}");
+    assert!(ir.contains("\"required_num_results\"=\"4\""), "{ir}");
+    assert!(
+        ir.contains("call void @__quantum__qis__rz__body(double -7.85398163397448279e-1"),
+        "{ir}"
+    );
+}
+
+#[test]
 fn compile_to_ll_with_qir_emits_qir_module() {
     let src = "fn main() i32 { 0 }\n";
     let ir =

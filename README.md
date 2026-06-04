@@ -728,6 +728,8 @@ Good places to start:
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
 | `examples/quantum/qubit_create.nia` | QIR qubits, basic one- and two-qubit gates, measurement, and result recording |
+| `examples/quantum/qft4.nia` | 4-qubit quantum Fourier transform over a qubit register |
+| `examples/quantum/iqft4.nia` | inverse 4-qubit QFT, composed with QFT as a round-trip check |
 | `examples/sample_all.nia` | broad language feature sample |
 
 ## Project Status
