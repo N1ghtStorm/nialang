@@ -12,9 +12,9 @@ use std::fmt::Write;
 use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, Ty, VectorDef};
 use crate::nia_std::{
     GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS,
-    GATE_CSWAP, GATE_CT, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ,
-    GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, MEASURE, PI, QUBIT,
-    RECORD,
+    GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX,
+    GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z,
+    MEASURE, PI, QUBIT, RECORD,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -81,7 +81,9 @@ enum QirControlled {
     Ch,
     Cy,
     Cs,
+    Csdg,
     Ct,
+    Ctdg,
 }
 
 #[derive(Clone, Copy)]
@@ -438,7 +440,12 @@ fn collect_quant_expr(
             Ok(())
         }
         Expr::Call { name, args }
-            if (name == GATE_CH || name == GATE_CY || name == GATE_CS || name == GATE_CT)
+            if (name == GATE_CH
+                || name == GATE_CY
+                || name == GATE_CS
+                || name == GATE_CSDG
+                || name == GATE_CT
+                || name == GATE_CTDG)
                 && args.len() == 2 =>
         {
             let control = qubit_arg_id(&args[0], resources)?;
@@ -447,7 +454,9 @@ fn collect_quant_expr(
                 GATE_CH => QirControlled::Ch,
                 GATE_CY => QirControlled::Cy,
                 GATE_CS => QirControlled::Cs,
+                GATE_CSDG => QirControlled::Csdg,
                 GATE_CT => QirControlled::Ct,
+                GATE_CTDG => QirControlled::Ctdg,
                 _ => unreachable!(),
             };
             plan.ops.push(QirOp::GateControlled {
@@ -894,8 +903,14 @@ fn render_controlled_gate(out: &mut String, gate: QirControlled, control: usize,
         QirControlled::Cs => {
             render_controlled_phase(out, std::f64::consts::FRAC_PI_2, control, target);
         }
+        QirControlled::Csdg => {
+            render_controlled_phase(out, -std::f64::consts::FRAC_PI_2, control, target);
+        }
         QirControlled::Ct => {
             render_controlled_phase(out, std::f64::consts::FRAC_PI_4, control, target);
+        }
+        QirControlled::Ctdg => {
+            render_controlled_phase(out, -std::f64::consts::FRAC_PI_4, control, target);
         }
     }
 }
@@ -1245,11 +1260,15 @@ fn main() i32 {
         let h = qubit();
         let y = qubit();
         let s = qubit();
+        let sdg = qubit();
         let t = qubit();
+        let tdg = qubit();
         CH(c, h);
         CY(c, y);
         CS(c, s);
+        CSdg(c, sdg);
         CT(c, t);
+        CTdg(c, tdg);
     }
     0
 }
@@ -1276,9 +1295,19 @@ fn main() i32 {
             "IR:\n{ir}"
         );
         assert!(
-            ir.contains("call void @__quantum__qis__rz__body(double 3.92699081698724139e-1, ptr inttoptr (i64 4 to ptr))"),
+            ir.contains("call void @__quantum__qis__rz__body(double 3.92699081698724139e-1, ptr inttoptr (i64 5 to ptr))"),
             "IR:\n{ir}"
         );
+        assert!(
+            ir.contains("call void @__quantum__qis__rz__body(double -7.85398163397448279e-1, ptr inttoptr (i64 4 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__rz__body(double -3.92699081698724139e-1, ptr inttoptr (i64 6 to ptr))"),
+            "IR:\n{ir}"
+        );
+        assert!(!ir.contains("__quantum__qis__csdg__body"), "IR:\n{ir}");
+        assert!(!ir.contains("__quantum__qis__ctdg__body"), "IR:\n{ir}");
     }
 
     #[test]

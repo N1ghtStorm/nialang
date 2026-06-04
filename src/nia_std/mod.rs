@@ -63,7 +63,9 @@ pub const GATE_SWAP: &str = "SWAP";
 pub const GATE_CH: &str = "CH";
 pub const GATE_CY: &str = "CY";
 pub const GATE_CS: &str = "CS";
+pub const GATE_CSDG: &str = "CSdg";
 pub const GATE_CT: &str = "CT";
+pub const GATE_CTDG: &str = "CTdg";
 pub const GATE_CCNOT: &str = "CCNOT";
 pub const GATE_CCZ: &str = "CCZ";
 pub const GATE_CSWAP: &str = "CSWAP";
@@ -150,7 +152,9 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | GATE_CH
             | GATE_CY
             | GATE_CS
+            | GATE_CSDG
             | GATE_CT
+            | GATE_CTDG
             | GATE_CCNOT
             | GATE_CCZ
             | GATE_CSWAP

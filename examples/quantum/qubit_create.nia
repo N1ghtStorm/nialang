@@ -39,7 +39,9 @@ quant fn controlled_more(control: qubit, h: qubit, y: qubit, s: qubit, t: qubit)
     CH(control, h);
     CY(control, y);
     CS(control, s);
+    CSdg(control, s);
     CT(control, t);
+    CTdg(control, t);
 }
 
 quant fn three_qubit_like(control_a: qubit, control_b: qubit, target: qubit) {

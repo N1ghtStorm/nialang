@@ -497,7 +497,9 @@ quant fn controlled_more(control: qubit, h: qubit, y: qubit, s: qubit, t: qubit)
     CH(control, h);
     CY(control, y);
     CS(control, s);
+    CSdg(control, s);
     CT(control, t);
+    CTdg(control, t);
 }
 
 quant fn three_qubit_like(control_a: qubit, control_b: qubit, target: qubit) {
@@ -574,7 +576,9 @@ The quantum surface is intentionally small:
 | `CH(c, t)` | controlled-H: applies `H(t)` when control `c` is `|1>` |
 | `CY(c, t)` | controlled-Y: applies `Y(t)` when control `c` is `|1>` |
 | `CS(c, t)` | controlled-S: applies `S(t)` when control `c` is `|1>` |
+| `CSdg(c, t)` | controlled inverse-S: applies `Sdg(t)` when control `c` is `|1>` |
 | `CT(c, t)` | controlled-T: applies `T(t)` when control `c` is `|1>` |
+| `CTdg(c, t)` | controlled inverse-T: applies `Tdg(t)` when control `c` is `|1>` |
 | `CCNOT(a, b, t)` | Toffoli gate: applies `X(t)` when both controls are `|1>` |
 | `CCZ(a, b, t)` | controlled-controlled-Z phase flip |
 | `CSWAP(c, a, b)` | Fredkin gate: swaps `a` and `b` when control `c` is `|1>` |
@@ -617,10 +621,10 @@ METADATA	output_labeling_schema
 METADATA	qir_profiles	base_profile
 METADATA	required_num_qubits	7
 METADATA	required_num_results	7
+OUTPUT	RESULT	1
 OUTPUT	RESULT	0
 OUTPUT	RESULT	0
 OUTPUT	RESULT	1
-OUTPUT	RESULT	0
 OUTPUT	RESULT	1
 OUTPUT	RESULT	0
 OUTPUT	RESULT	0
