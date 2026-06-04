@@ -785,6 +785,57 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_qubit_array_inside_quant() {
+    let src = r#"
+fn main() i32 {
+    quant {
+        let qs: [qubit; 4] = [qubit(), qubit(), qubit(), qubit()];
+        H(qs[0]);
+        for i in 0..4 {
+            H(qs[i]);
+        }
+        CNOT(qs[0], qs[1]);
+        CR1(PI / 2.0, qs[1], qs[0]);
+    }
+    0
+}
+"#;
+    check_all(src).expect("qubit array inside quant should typecheck");
+}
+
+#[test]
+fn typecheck_rejects_qubit_array_escape_from_quant() {
+    let src = r#"
+fn main() i32 {
+    let qs = quant {
+        [qubit(), qubit()]
+    };
+    0
+}
+"#;
+    let err = check_all(src).expect_err("qubit array must not escape quant");
+    assert!(err.contains("cannot return quantum type"), "{err}");
+}
+
+#[test]
+fn typecheck_allows_quant_fn_qubit_array_parameter() {
+    let src = r#"
+quant fn qft4(qs: [qubit; 4]) {
+    H(qs[0]);
+}
+
+fn main() i32 {
+    quant {
+        let qs: [qubit; 4] = [qubit(), qubit(), qubit(), qubit()];
+        qft4(qs);
+    }
+    0
+}
+"#;
+    check_all(src).expect("quant fn with qubit array parameter should typecheck");
+}
+
+#[test]
 fn typecheck_reserves_qubit_function_name() {
     let src = r#"
 fn qubit() i32 {

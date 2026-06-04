@@ -6,6 +6,13 @@ fn compile_fixture_ok(path: &str) {
     crate::driver::pipeline::compile_to_ll(&src).expect("full pipeline");
 }
 
+fn compile_fixture_qir_ok(path: &str) -> String {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    let src = std::fs::read_to_string(&p).unwrap();
+    crate::driver::pipeline::compile_to_ll_with(&src, crate::driver::pipeline::Backend::Qir)
+        .expect("qir pipeline")
+}
+
 #[test]
 /// Ensures a representative set of valid language fixtures still compiles end-to-end.
 fn compile_fixtures_pipeline() {
@@ -180,6 +187,17 @@ fn parse_cli_args_rejects_qir_with_lib() {
     ])
     .expect_err("qir + lib must be rejected");
     assert!(err.contains("cannot be combined with `--lib`"), "{err}");
+}
+
+#[test]
+fn compile_qft4_example_to_qir() {
+    let ir = compile_fixture_qir_ok("examples/quantum/qft4.nia");
+    assert!(ir.contains("\"required_num_qubits\"=\"4\""), "{ir}");
+    assert!(ir.contains("\"required_num_results\"=\"4\""), "{ir}");
+    assert!(
+        ir.contains("call void @__quantum__qis__swap__body(ptr null, ptr inttoptr (i64 3 to ptr))"),
+        "{ir}"
+    );
 }
 
 #[test]

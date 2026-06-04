@@ -114,6 +114,7 @@ enum QirControlledRotation {
 #[derive(Clone, Default)]
 struct QuantResources {
     qubits: HashMap<String, usize>,
+    qubit_arrays: HashMap<String, Vec<usize>>,
     results: HashMap<String, usize>,
     const_ints: HashMap<String, i128>,
 }
@@ -182,8 +183,13 @@ fn collect_stmt(
         Stmt::Gpu { body } if !in_quant => {
             collect_block(body, false, plan, resources, fns, fn_sigs, call_stack)
         }
-        Stmt::Let { name, init, .. } if in_quant => {
-            collect_quant_let(name, init, plan, resources, fns, fn_sigs, call_stack)
+        Stmt::Let {
+            name,
+            ty,
+            init,
+            ..
+        } if in_quant => {
+            collect_quant_let(name, ty.as_ref(), init, plan, resources, fns, fn_sigs, call_stack)
         }
         Stmt::Expr(e) if in_quant => collect_quant_expr(e, plan, resources, fns, fn_sigs, call_stack),
         Stmt::For {
@@ -377,6 +383,7 @@ fn collect_expr(
 
 fn collect_quant_let(
     name: &str,
+    ty: Option<&Ty>,
     init: &Expr,
     plan: &mut QirPlan,
     resources: &mut QuantResources,
@@ -390,6 +397,13 @@ fn collect_quant_let(
             plan.qubits += 1;
             resources.qubits.insert(name.to_string(), id);
             Ok(())
+        }
+        Expr::ArrayLit(elems) => {
+            let expected_len = ty.and_then(|t| match t {
+                Ty::Array(_, n) => Some(*n),
+                _ => None,
+            });
+            collect_qubit_array_from_literal(name, elems, expected_len, plan, resources)
         }
         Expr::Call { name: call, args } if call == MEASURE && args.len() == 1 => {
             let qubit = qubit_arg_id(&args[0], resources)?;
@@ -407,6 +421,40 @@ fn collect_quant_let(
         }
         _ => collect_quant_expr(init, plan, resources, fns, fn_sigs, call_stack),
     }
+}
+
+fn collect_qubit_array_from_literal(
+    name: &str,
+    elems: &[Expr],
+    expected_len: Option<usize>,
+    plan: &mut QirPlan,
+    resources: &mut QuantResources,
+) -> Result<(), String> {
+    if let Some(n) = expected_len {
+        if elems.len() != n {
+            return Err(format!(
+                "qubit array `{name}` length mismatch: expected {n}, got {}",
+                elems.len()
+            ));
+        }
+    }
+    let mut ids = Vec::with_capacity(elems.len());
+    for elem in elems {
+        match elem {
+            Expr::Call { name: call, args } if call == QUBIT && args.is_empty() => {
+                let id = plan.qubits;
+                plan.qubits += 1;
+                ids.push(id);
+            }
+            _ => {
+                return Err(format!(
+                    "qubit array `{name}` elements must be `qubit()` calls"
+                ));
+            }
+        }
+    }
+    resources.qubit_arrays.insert(name.to_string(), ids);
+    Ok(())
 }
 
 fn collect_quant_expr(
@@ -628,13 +676,32 @@ fn collect_quant_fn_call(
                 let id = qubit_arg_id(arg, resources)?;
                 body_resources.qubits.insert(param_name.clone(), id);
             }
+            Ty::Array(elem, n) if **elem == Ty::Qubit => {
+                let Expr::Ident(array_name) = arg else {
+                    return Err(format!(
+                        "QIR lowering currently supports only qubit array variable arguments for `{name}`"
+                    ));
+                };
+                let ids = resources.qubit_arrays.get(array_name).ok_or_else(|| {
+                    format!("unknown qubit array `{array_name}` passed to `{name}`")
+                })?;
+                if ids.len() != *n {
+                    return Err(format!(
+                        "qubit array argument length mismatch for `{name}`: expected {n}, got {}",
+                        ids.len()
+                    ));
+                }
+                body_resources
+                    .qubit_arrays
+                    .insert(param_name.clone(), ids.clone());
+            }
             Ty::Result => {
                 let id = result_arg_id(arg, resources)?;
                 body_resources.results.insert(param_name.clone(), id);
             }
             other => {
                 return Err(format!(
-                    "QIR lowering currently supports only `qubit` and `result` quantum function parameters, got {other:?}"
+                    "QIR lowering currently supports only `qubit`, `[qubit; N]`, and `result` quantum function parameters, got {other:?}"
                 ));
             }
         }
@@ -655,14 +722,44 @@ fn collect_quant_fn_call(
 }
 
 fn qubit_arg_id(arg: &Expr, resources: &QuantResources) -> Result<usize, String> {
-    let Expr::Ident(name) = arg else {
-        return Err("QIR lowering currently supports only variable qubit arguments".into());
-    };
-    resources
-        .qubits
-        .get(name)
-        .copied()
-        .ok_or_else(|| format!("unknown qubit `{name}` in QIR lowering"))
+    match arg {
+        Expr::Ident(name) => resources.qubits.get(name).copied().ok_or_else(|| {
+            if resources.qubit_arrays.contains_key(name) {
+                format!("expected qubit, got qubit array `{name}`")
+            } else {
+                format!("unknown qubit `{name}` in QIR lowering")
+            }
+        }),
+        Expr::Index(arr, idx) => {
+            let Expr::Ident(array_name) = arr.as_ref() else {
+                return Err(
+                    "QIR lowering currently supports only `qs[i]` where `qs` is a variable".into(),
+                );
+            };
+            let ids = resources
+                .qubit_arrays
+                .get(array_name)
+                .ok_or_else(|| format!("unknown qubit array `{array_name}` in QIR lowering"))?;
+            let index = const_i128_expr(idx, resources).map_err(|_| {
+                format!(
+                    "QIR lowering requires compile-time integer index for qubit array `{array_name}`"
+                )
+            })?;
+            if index < 0 {
+                return Err(format!(
+                    "qubit array index out of bounds: `{array_name}[{index}]`"
+                ));
+            }
+            let index = index as usize;
+            ids.get(index).copied().ok_or_else(|| {
+                format!(
+                    "qubit array index out of bounds: `{array_name}[{index}]` (length {})",
+                    ids.len()
+                )
+            })
+        }
+        _ => Err("QIR lowering currently supports only variable or indexed qubit arguments".into()),
+    }
 }
 
 fn result_arg_id(arg: &Expr, resources: &QuantResources) -> Result<usize, String> {
@@ -1607,5 +1704,158 @@ fn main() i32 {
             .expect_err("unsupported quantum body");
         assert!(err.contains("`let r = q_measure(q);`"), "{err}");
         assert!(err.contains("`q_record(r);`"), "{err}");
+    }
+
+    #[test]
+    fn qir_lowers_qubit_array_literal() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let qs: [qubit; 2] = [qubit(), qubit()];
+    }
+    0
+}
+"#,
+        );
+        assert!(ir.contains("\"required_num_qubits\"=\"2\""), "IR:\n{ir}");
+    }
+
+    #[test]
+    fn qir_lowers_qubit_array_index_gate() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let qs: [qubit; 2] = [qubit(), qubit()];
+        H(qs[0]);
+        CNOT(qs[0], qs[1]);
+    }
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains("call void @__quantum__qis__h__body(ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains(
+                "call void @__quantum__qis__cnot__body(ptr null, ptr inttoptr (i64 1 to ptr))"
+            ),
+            "IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn qir_lowers_qubit_array_index_in_static_for() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let qs: [qubit; 4] = [qubit(), qubit(), qubit(), qubit()];
+        for i in 0..4 {
+            H(qs[i]);
+        }
+    }
+    0
+}
+"#,
+        );
+        assert_eq!(
+            ir.matches("call void @__quantum__qis__h__body(").count(),
+            4,
+            "IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn qir_lowers_qubit_array_index_in_nested_static_for() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let qs: [qubit; 4] = [qubit(), qubit(), qubit(), qubit()];
+        for i in 0..4 {
+            for j in i + 1..4 {
+                CR1(PI / 2.0, qs[j], qs[i]);
+            }
+        }
+    }
+    0
+}
+"#,
+        );
+        // Nested loop runs 6 times; each CR1 lowers to two CNOT gates.
+        assert_eq!(
+            ir.matches("call void @__quantum__qis__cnot__body(").count(),
+            12,
+            "IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn qir_rejects_dynamic_qubit_array_index() {
+        let err = emit_err(
+            r#"
+fn main() i32 {
+    let n = 1;
+    quant {
+        let qs: [qubit; 2] = [qubit(), qubit()];
+        H(qs[n]);
+    }
+    0
+}
+"#,
+        );
+        assert!(err.contains("compile-time integer index"), "{err}");
+    }
+
+    #[test]
+    fn qir_rejects_out_of_bounds_qubit_array_index() {
+        let err = emit_err(
+            r#"
+fn main() i32 {
+    quant {
+        let qs: [qubit; 2] = [qubit(), qubit()];
+        H(qs[2]);
+    }
+    0
+}
+"#,
+        );
+        assert!(err.contains("index out of bounds"), "{err}");
+    }
+
+    #[test]
+    fn qir_inlines_quant_fn_with_qubit_array_parameter() {
+        let ir = emit(
+            r#"
+quant fn qft4(qs: [qubit; 4]) {
+    H(qs[0]);
+    CR1(PI / 2.0, qs[1], qs[0]);
+    SWAP(qs[0], qs[3]);
+}
+
+fn main() i32 {
+    quant {
+        let qs: [qubit; 4] = [qubit(), qubit(), qubit(), qubit()];
+        qft4(qs);
+    }
+    0
+}
+"#,
+        );
+        assert!(ir.contains("\"required_num_qubits\"=\"4\""), "IR:\n{ir}");
+        assert!(
+            ir.contains("call void @__quantum__qis__h__body(ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains(
+                "call void @__quantum__qis__swap__body(ptr null, ptr inttoptr (i64 3 to ptr))"
+            ),
+            "IR:\n{ir}"
+        );
     }
 }

@@ -1,0 +1,37 @@
+quant fn qft4(qs: [qubit; 4]) {
+    H(qs[0]);
+    CR1(PI / 2.0, qs[1], qs[0]);
+    CR1(PI / 4.0, qs[2], qs[0]);
+    CR1(PI / 8.0, qs[3], qs[0]);
+
+    H(qs[1]);
+    CR1(PI / 2.0, qs[2], qs[1]);
+    CR1(PI / 4.0, qs[3], qs[1]);
+
+    H(qs[2]);
+    CR1(PI / 2.0, qs[3], qs[2]);
+
+    H(qs[3]);
+
+    SWAP(qs[0], qs[3]);
+    SWAP(qs[1], qs[2]);
+}
+
+fn main() i32 {
+    quant {
+        let qs: [qubit; 4] = [qubit(), qubit(), qubit(), qubit()];
+        qft4(qs);
+
+        let r0 = q_measure(qs[0]);
+        let r1 = q_measure(qs[1]);
+        let r2 = q_measure(qs[2]);
+        let r3 = q_measure(qs[3]);
+
+        q_record(r0);
+        q_record(r1);
+        q_record(r2);
+        q_record(r3);
+    }
+
+    0
+}
