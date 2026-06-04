@@ -413,45 +413,57 @@ fn main() i32 {{
 }
 
 #[test]
-fn typecheck_rejects_cnot_outside_quant() {
-    let src = r#"
-fn main() i32 {
-    CNOT(0, 1);
+fn typecheck_rejects_two_qubit_gates_outside_quant() {
+    for gate in ["CNOT", "CZ", "SWAP"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    {gate}(0, 1);
     0
-}
-"#;
-    let err = check_all(src).expect_err("CNOT must be quant-only");
-    assert!(err.contains("only allowed inside `quant`"), "{err}");
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("two-qubit gate must be quant-only");
+        assert!(err.contains("only allowed inside `quant`"), "{gate}: {err}");
+    }
 }
 
 #[test]
-fn typecheck_rejects_cnot_non_qubit_argument() {
-    let src = r#"
-fn main() i32 {
-    quant {
+fn typecheck_rejects_two_qubit_gates_non_qubit_argument() {
+    for gate in ["CNOT", "CZ", "SWAP"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    quant {{
         let q = qubit();
-        CNOT(q, 0);
-    }
+        {gate}(q, 0);
+    }}
     0
-}
-"#;
-    let err = check_all(src).expect_err("CNOT expects qubits");
-    assert!(err.contains("cannot satisfy Qubit"), "{err}");
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("two-qubit gate expects qubits");
+        assert!(err.contains("cannot satisfy Qubit"), "{gate}: {err}");
+    }
 }
 
 #[test]
-fn typecheck_rejects_cnot_wrong_arity() {
-    let src = r#"
-fn main() i32 {
-    quant {
+fn typecheck_rejects_two_qubit_gates_wrong_arity() {
+    for gate in ["CNOT", "CZ", "SWAP"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    quant {{
         let q = qubit();
-        CNOT(q);
-    }
+        {gate}(q);
+    }}
     0
-}
-"#;
-    let err = check_all(src).expect_err("CNOT expects two arguments");
-    assert!(err.contains("expects exactly 2 arguments"), "{err}");
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("two-qubit gate expects two arguments");
+        assert!(err.contains("expects exactly 2 arguments"), "{gate}: {err}");
+    }
 }
 
 #[test]
@@ -639,18 +651,25 @@ fn main() i32 {{
 }
 
 #[test]
-fn typecheck_reserves_cnot_function_name() {
-    let src = r#"
-fn CNOT() i32 {
+fn typecheck_reserves_two_qubit_gate_function_names() {
+    for gate in ["CNOT", "CZ", "SWAP"] {
+        let src = format!(
+            r#"
+fn {gate}() i32 {{
     1
-}
+}}
 
-fn main() i32 {
+fn main() i32 {{
     0
-}
-"#;
-    let err = check_all(src).expect_err("CNOT is a reserved builtin name");
-    assert!(err.contains("function name `CNOT` is reserved"), "{err}");
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("two-qubit gate is a reserved builtin name");
+        assert!(
+            err.contains(&format!("function name `{gate}` is reserved")),
+            "{gate}: {err}"
+        );
+    }
 }
 
 #[test]

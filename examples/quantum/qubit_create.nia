@@ -14,6 +14,14 @@ quant fn phase_like(y: qubit, z: qubit, s: qubit, t: qubit) {
     T(t);
 }
 
+quant fn controlled_phase(control: qubit, target: qubit) {
+    CZ(control, target);
+}
+
+quant fn swap_pair(left: qubit, right: qubit) {
+    SWAP(left, right);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
@@ -24,8 +32,10 @@ fn main() i32 {
         let s = qubit();
         let t = qubit();
         bell(a, b);
+        controlled_phase(a, b);
         flip(x);
         phase_like(y, z, s, t);
+        swap_pair(s, t);
         let ar = q_measure(a);
         let br = q_measure(b);
         let xr = q_measure(x);

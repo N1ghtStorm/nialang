@@ -472,6 +472,14 @@ quant fn phase_like(y: qubit, z: qubit, s: qubit, t: qubit) {
     T(t);
 }
 
+quant fn controlled_phase(control: qubit, target: qubit) {
+    CZ(control, target);
+}
+
+quant fn swap_pair(left: qubit, right: qubit) {
+    SWAP(left, right);
+}
+
 fn main() i32 {
     quant {
         let a = qubit();
@@ -482,8 +490,10 @@ fn main() i32 {
         let s = qubit();
         let t = qubit();
         bell(a, b);
+        controlled_phase(a, b);
         flip(x);
         phase_like(y, z, s, t);
+        swap_pair(s, t);
         let ar = q_measure(a);
         let br = q_measure(b);
         let xr = q_measure(x);
@@ -518,6 +528,8 @@ The quantum surface is intentionally small:
 | `S(q)` | apply the phase gate, a `pi/2` Z-axis phase rotation |
 | `T(q)` | apply the T gate, a `pi/4` Z-axis phase rotation |
 | `CNOT(c, t)` | controlled-X: flips target `t` when control `c` is `|1>` |
+| `CZ(c, t)` | controlled-Z: applies a phase flip to `t` when control `c` is `|1>` |
+| `SWAP(a, b)` | swap the quantum states of two qubits |
 | `q_measure(q)` | measure a qubit in the Z basis and return `result` |
 | `q_record(r)` | record a measurement result as QIR output |
 
@@ -556,7 +568,8 @@ END	0
 Because `H(q)` creates a superposition and `CNOT(c, t)` entangles the two
 qubits, the recorded results can vary between runs but should be correlated for
 the Bell-pair sample. The separate `flip(x)` path demonstrates `X(q)`, so its
-recorded result should be `1`. You can also write the generated QIR IR to a file:
+recorded result should be `1`; the same sample also lowers `CZ(c, t)` and
+`SWAP(a, b)`. You can also write the generated QIR IR to a file:
 
 ```bash
 cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q -o build/qubit_create.ll
@@ -639,7 +652,7 @@ Good places to start:
 | `examples/sample_dft_list.nia` | list-backed discrete Fourier transform |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
-| `examples/quantum/qubit_create.nia` | QIR qubits, basic gates, measurement, and result recording |
+| `examples/quantum/qubit_create.nia` | QIR qubits, basic one- and two-qubit gates, measurement, and result recording |
 | `examples/sample_all.nia` | broad language feature sample |
 
 ## Project Status
@@ -659,7 +672,7 @@ Currently available:
 - matrix-vector and vector-matrix multiplication
 - determinant as a `Matrix` method
 - Rust-style `impl` method syntax
-- early QIR quantum blocks/functions with qubits, basic gates, measurement, and result recording
+- early QIR quantum blocks/functions with qubits, basic one- and two-qubit gates, measurement, and result recording
 
 Still intentionally small or unfinished:
 
