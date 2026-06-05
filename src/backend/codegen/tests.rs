@@ -69,6 +69,26 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_bitwise_shift_and_remainder_instructions() {
+    let ll = emit(include_str!("../../../examples/tests/ok_bitwise.nia"));
+    for instruction in [
+        " and i32 ",
+        " or i32 ",
+        " xor i32 ",
+        " shl i32 ",
+        " ashr i32 ",
+        " lshr i8 ",
+        " srem i32 ",
+        " urem i8 ",
+    ] {
+        assert!(
+            ll.contains(instruction),
+            "missing `{instruction}` in IR:\n{ll}"
+        );
+    }
+}
+
+#[test]
 fn codegen_complex_std_surface() {
     let ll = emit(
         r#"

@@ -231,12 +231,20 @@ pub enum Expr {
     Ident(String),
     /// Unary `-` (integer and float).
     Neg(Box<Expr>),
+    /// Unary bitwise complement `~` (integers only).
+    BitNot(Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     /// Dot product `u @ v` (same `vector` type; result has the axis scalar type).
     VecDot(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    Rem(Box<Expr>, Box<Expr>),
+    BitAnd(Box<Expr>, Box<Expr>),
+    BitOr(Box<Expr>, Box<Expr>),
+    BitXor(Box<Expr>, Box<Expr>),
+    Shl(Box<Expr>, Box<Expr>),
+    Shr(Box<Expr>, Box<Expr>),
     Eq(Box<Expr>, Box<Expr>),
     Ne(Box<Expr>, Box<Expr>),
     Lt(Box<Expr>, Box<Expr>),

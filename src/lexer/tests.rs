@@ -107,6 +107,42 @@ fn lex_arithmetic_and_compound() {
 }
 
 #[test]
+fn lex_bitwise_remainder_and_compound() {
+    let toks = collect("a % b & c | d ^ ~e << f >> g %= h &= i |= j ^= k <<= l >>= m");
+    assert_eq!(
+        toks,
+        vec![
+            Token::Ident("a".into()),
+            Token::Percent,
+            Token::Ident("b".into()),
+            Token::Amp,
+            Token::Ident("c".into()),
+            Token::Pipe,
+            Token::Ident("d".into()),
+            Token::Caret,
+            Token::Tilde,
+            Token::Ident("e".into()),
+            Token::Shl,
+            Token::Ident("f".into()),
+            Token::Shr,
+            Token::Ident("g".into()),
+            Token::PercentEq,
+            Token::Ident("h".into()),
+            Token::AmpEq,
+            Token::Ident("i".into()),
+            Token::PipeEq,
+            Token::Ident("j".into()),
+            Token::CaretEq,
+            Token::Ident("k".into()),
+            Token::ShlEq,
+            Token::Ident("l".into()),
+            Token::ShrEq,
+            Token::Ident("m".into()),
+        ]
+    );
+}
+
+#[test]
 fn lex_comparison_ops() {
     let toks = collect("a == b != c < d <= e > f >= g");
     assert_eq!(

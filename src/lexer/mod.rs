@@ -45,7 +45,19 @@ pub enum Token {
     At,
     Slash,
     SlashEq,
+    Percent,
+    PercentEq,
     Amp,
+    AmpEq,
+    Pipe,
+    PipeEq,
+    Caret,
+    CaretEq,
+    Tilde,
+    Shl,
+    ShlEq,
+    Shr,
+    ShrEq,
     Dot,
     DotDot,
     DoubleColon,
@@ -197,7 +209,27 @@ impl<'a> Lexer<'a> {
                 Token::SlashEq
             }
             '/' => Token::Slash,
+            '%' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::PercentEq
+            }
+            '%' => Token::Percent,
+            '&' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::AmpEq
+            }
             '&' => Token::Amp,
+            '|' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::PipeEq
+            }
+            '|' => Token::Pipe,
+            '^' if matches!(self.src.peek(), Some('=')) => {
+                self.src.next();
+                Token::CaretEq
+            }
+            '^' => Token::Caret,
+            '~' => Token::Tilde,
             '.' if matches!(self.src.peek(), Some('.')) => {
                 self.src.next();
                 Token::DotDot
@@ -220,10 +252,28 @@ impl<'a> Lexer<'a> {
                 self.src.next();
                 Token::Le
             }
+            '<' if matches!(self.src.peek(), Some('<')) => {
+                self.src.next();
+                if matches!(self.src.peek(), Some('=')) {
+                    self.src.next();
+                    Token::ShlEq
+                } else {
+                    Token::Shl
+                }
+            }
             '<' => Token::Lt,
             '>' if matches!(self.src.peek(), Some('=')) => {
                 self.src.next();
                 Token::Ge
+            }
+            '>' if matches!(self.src.peek(), Some('>')) => {
+                self.src.next();
+                if matches!(self.src.peek(), Some('=')) {
+                    self.src.next();
+                    Token::ShrEq
+                } else {
+                    Token::Shr
+                }
             }
             '>' => Token::Gt,
             '"' => self.lex_string_literal(),

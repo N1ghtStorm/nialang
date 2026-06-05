@@ -123,14 +123,22 @@ fn stmt_contains_quantum(st: &Stmt) -> bool {
 fn expr_contains_quantum(e: &Expr) -> bool {
     match e {
         Expr::Quant { .. } => true,
-        Expr::Neg(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) | Expr::Field(inner, _) => {
-            expr_contains_quantum(inner)
-        }
+        Expr::Neg(inner)
+        | Expr::BitNot(inner)
+        | Expr::AddrOf(inner)
+        | Expr::Deref(inner)
+        | Expr::Field(inner, _) => expr_contains_quantum(inner),
         Expr::Add(l, r)
         | Expr::Sub(l, r)
         | Expr::Mul(l, r)
         | Expr::VecDot(l, r)
         | Expr::Div(l, r)
+        | Expr::Rem(l, r)
+        | Expr::BitAnd(l, r)
+        | Expr::BitOr(l, r)
+        | Expr::BitXor(l, r)
+        | Expr::Shl(l, r)
+        | Expr::Shr(l, r)
         | Expr::Eq(l, r)
         | Expr::Ne(l, r)
         | Expr::Lt(l, r)
@@ -263,7 +271,11 @@ fn is_supported_source_char(ch: char) -> bool {
                 | '*'
                 | '@'
                 | '/'
+                | '%'
                 | '&'
+                | '|'
+                | '^'
+                | '~'
                 | '.'
                 | '='
                 | '!'

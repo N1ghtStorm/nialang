@@ -807,6 +807,29 @@ fn infer_arithmetic_bin(
     Ok(tl)
 }
 
+fn infer_integer_bin(
+    l: &Expr,
+    r: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+    hint: Option<&Ty>,
+    op: &str,
+) -> Result<Ty, String> {
+    let integer_hint = hint.filter(|ty| is_integer_ty(ty));
+    let tl = infer_expr(l, env, structs, enums, vectors, fns, integer_hint)?;
+    let tr = infer_expr(r, env, structs, enums, vectors, fns, Some(&tl))?;
+    if !types_equal(&tl, &tr) {
+        return Err(format!("`{op}` operands differ: {tl:?} vs {tr:?}"));
+    }
+    if !is_integer_ty(&tl) {
+        return Err(format!("cannot use `{op}` on non-integer type {tl:?}"));
+    }
+    Ok(tl)
+}
+
 /// `*` : scalar × scalar; scalar × vector / vector × scalar (axis type `T`); component-wise vector × vector (same type).
 fn infer_mul_bin(
     l: &Expr,
@@ -1347,6 +1370,14 @@ fn infer_expr(
             }
             Ok(t)
         }
+        Expr::BitNot(inner) => {
+            let integer_hint = hint.filter(|ty| is_integer_ty(ty));
+            let t = infer_expr(inner, env, structs, enums, vectors, fns, integer_hint)?;
+            if !is_integer_ty(&t) {
+                return Err(format!("cannot use `~` on non-integer type {t:?}"));
+            }
+            Ok(t)
+        }
         Expr::Add(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "+"),
         Expr::Sub(l, r) => infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "-"),
         Expr::Mul(l, r) => infer_mul_bin(l, r, env, structs, enums, vectors, fns),
@@ -1360,6 +1391,17 @@ fn infer_expr(
             }
             infer_arithmetic_bin(l, r, env, structs, enums, vectors, fns, "/")
         }
+        Expr::Rem(l, r) => {
+            if matches!(r.as_ref(), Expr::Int(0)) {
+                return Err("remainder by zero".into());
+            }
+            infer_integer_bin(l, r, env, structs, enums, vectors, fns, hint, "%")
+        }
+        Expr::BitAnd(l, r) => infer_integer_bin(l, r, env, structs, enums, vectors, fns, hint, "&"),
+        Expr::BitOr(l, r) => infer_integer_bin(l, r, env, structs, enums, vectors, fns, hint, "|"),
+        Expr::BitXor(l, r) => infer_integer_bin(l, r, env, structs, enums, vectors, fns, hint, "^"),
+        Expr::Shl(l, r) => infer_integer_bin(l, r, env, structs, enums, vectors, fns, hint, "<<"),
+        Expr::Shr(l, r) => infer_integer_bin(l, r, env, structs, enums, vectors, fns, hint, ">>"),
         Expr::Eq(l, r) => {
             infer_comparison_bin(l, r, env, structs, enums, vectors, fns, "==", false)
         }

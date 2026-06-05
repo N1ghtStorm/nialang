@@ -10,16 +10,12 @@
 // numerators 0, 4, 8, or 12 over denominator 16. Numerators 4 and 12 recover
 // r = 4 directly; the other outcomes require another run.
 
-fn remainder(value: i32, modulus: i32) i32 {
-    value - (value / modulus) * modulus
-}
-
 fn gcd(left: i32, right: i32) i32 {
     let a = left;
     let b = right;
 
     while b != 0 {
-        let next = remainder(a, b);
+        let next = a % b;
         a = b;
         b = next;
     }
@@ -29,16 +25,15 @@ fn gcd(left: i32, right: i32) i32 {
 
 fn pow_mod(base: i32, exponent: i32, modulus: i32) i32 {
     let result = 1;
-    let power = remainder(base, modulus);
+    let power = base % modulus;
     let exp = exponent;
 
     while exp > 0 {
-        let odd = remainder(exp, 2);
-        if odd == 1 {
-            result = remainder(result * power, modulus);
+        if (exp & 1) == 1 {
+            result = (result * power) % modulus;
         }
 
-        power = remainder(power * power, modulus);
+        power = (power * power) % modulus;
         exp = exp / 2;
     }
 
@@ -139,7 +134,7 @@ fn main() i32 {
 
         // Reject denominator 1 or 2 when it is not actually an order of 2 mod 15.
         if pow_mod(2, candidate, 15) == 1 {
-            if (candidate / 2) * 2 == candidate {
+            if (candidate & 1) == 0 {
                 period = candidate;
             }
         }

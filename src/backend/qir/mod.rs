@@ -328,7 +328,7 @@ fn collect_expr(
             )
         }
         Expr::Gpu { body } => collect_block(body, false, plan, resources, fns, fn_sigs, call_stack),
-        Expr::Neg(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) => {
+        Expr::Neg(inner) | Expr::BitNot(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) => {
             collect_expr(inner, false, plan, resources, fns, fn_sigs, call_stack)
         }
         Expr::Add(l, r)
@@ -336,6 +336,12 @@ fn collect_expr(
         | Expr::Mul(l, r)
         | Expr::VecDot(l, r)
         | Expr::Div(l, r)
+        | Expr::Rem(l, r)
+        | Expr::BitAnd(l, r)
+        | Expr::BitOr(l, r)
+        | Expr::BitXor(l, r)
+        | Expr::Shl(l, r)
+        | Expr::Shr(l, r)
         | Expr::Eq(l, r)
         | Expr::Ne(l, r)
         | Expr::Lt(l, r)
@@ -409,7 +415,20 @@ fn collect_classical_print_arg(
             plan.ops.push(QirOp::RecordClassicalBool(*v));
             Ok(())
         }
-        Expr::Float(_) | Expr::Ident(_) | Expr::Neg(_) | Expr::Add(_, _) | Expr::Sub(_, _) | Expr::Mul(_, _) | Expr::Div(_, _) => {
+        Expr::Float(_)
+        | Expr::Ident(_)
+        | Expr::Neg(_)
+        | Expr::BitNot(_)
+        | Expr::Add(_, _)
+        | Expr::Sub(_, _)
+        | Expr::Mul(_, _)
+        | Expr::Div(_, _)
+        | Expr::Rem(_, _)
+        | Expr::BitAnd(_, _)
+        | Expr::BitOr(_, _)
+        | Expr::BitXor(_, _)
+        | Expr::Shl(_, _)
+        | Expr::Shr(_, _) => {
             if let Ok(v) = const_f64_expr(arg) {
                 plan.ops.push(QirOp::RecordDouble(v));
                 Ok(())
@@ -1392,6 +1411,7 @@ fn const_i128_expr(expr: &Expr, resources: &QuantResources) -> Result<i128, Stri
             )
         }),
         Expr::Neg(inner) => Ok(-const_i128_expr(inner, resources)?),
+        Expr::BitNot(inner) => Ok(!const_i128_expr(inner, resources)?),
         Expr::Add(left, right) => const_i128_expr(left, resources)?
             .checked_add(const_i128_expr(right, resources)?)
             .ok_or_else(|| "integer overflow in static QIR `for` range".to_string()),
@@ -1409,6 +1429,42 @@ fn const_i128_expr(expr: &Expr, resources: &QuantResources) -> Result<i128, Stri
             const_i128_expr(left, resources)?
                 .checked_div(rhs)
                 .ok_or_else(|| "integer overflow in static QIR `for` range".to_string())
+        }
+        Expr::Rem(left, right) => {
+            let rhs = const_i128_expr(right, resources)?;
+            if rhs == 0 {
+                return Err("remainder by zero in static QIR `for` range".into());
+            }
+            const_i128_expr(left, resources)?
+                .checked_rem(rhs)
+                .ok_or_else(|| "integer overflow in static QIR `for` range".to_string())
+        }
+        Expr::BitAnd(left, right) => {
+            Ok(const_i128_expr(left, resources)? & const_i128_expr(right, resources)?)
+        }
+        Expr::BitOr(left, right) => {
+            Ok(const_i128_expr(left, resources)? | const_i128_expr(right, resources)?)
+        }
+        Expr::BitXor(left, right) => {
+            Ok(const_i128_expr(left, resources)? ^ const_i128_expr(right, resources)?)
+        }
+        Expr::Shl(left, right) => {
+            let rhs = const_i128_expr(right, resources)?;
+            let rhs: u32 = rhs
+                .try_into()
+                .map_err(|_| "invalid left shift in static QIR `for` range".to_string())?;
+            const_i128_expr(left, resources)?
+                .checked_shl(rhs)
+                .ok_or_else(|| "invalid left shift in static QIR `for` range".to_string())
+        }
+        Expr::Shr(left, right) => {
+            let rhs = const_i128_expr(right, resources)?;
+            let rhs: u32 = rhs
+                .try_into()
+                .map_err(|_| "invalid right shift in static QIR `for` range".to_string())?;
+            const_i128_expr(left, resources)?
+                .checked_shr(rhs)
+                .ok_or_else(|| "invalid right shift in static QIR `for` range".to_string())
         }
         _ => Err(
             "QIR lowering currently supports only static integer expressions in `for` ranges"

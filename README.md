@@ -64,6 +64,30 @@ fn main() i32 {
 }
 ```
 
+## Integer And Bitwise Operators
+
+All integer types support arithmetic, remainder, and bitwise operations:
+
+| Operator | Meaning |
+| --- | --- |
+| `a % b` | signed or unsigned remainder |
+| `a & b` | bitwise AND |
+| `a \| b` | bitwise OR |
+| `a ^ b` | bitwise XOR |
+| `~a` | bitwise complement |
+| `a << n` | left shift |
+| `a >> n` | arithmetic shift for signed integers, logical shift for unsigned integers |
+
+The corresponding compound assignments are also available: `%=`, `&=`, `|=`,
+`^=`, `<<=`, and `>>=`.
+
+```nia
+let flags: u8 = 12;
+let masked = flags & 10;
+let rotated_part = flags << 2;
+let odd = (flags & 1) == 1;
+```
+
 ## Linear Algebra First
 
 ### Named Vectors

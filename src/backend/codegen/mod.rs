@@ -29,14 +29,22 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
         | Expr::Bool(_)
         | Expr::Ident(_)
         | Expr::EnumVariant { .. } => {}
-        Expr::Neg(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) | Expr::Field(inner, _) => {
-            collect_string_literals_expr(inner, out)
-        }
+        Expr::Neg(inner)
+        | Expr::BitNot(inner)
+        | Expr::AddrOf(inner)
+        | Expr::Deref(inner)
+        | Expr::Field(inner, _) => collect_string_literals_expr(inner, out),
         Expr::Add(a, b)
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::VecDot(a, b)
         | Expr::Div(a, b)
+        | Expr::Rem(a, b)
+        | Expr::BitAnd(a, b)
+        | Expr::BitOr(a, b)
+        | Expr::BitXor(a, b)
+        | Expr::Shl(a, b)
+        | Expr::Shr(a, b)
         | Expr::Eq(a, b)
         | Expr::Ne(a, b)
         | Expr::Lt(a, b)
@@ -5779,6 +5787,13 @@ impl<'a> Gen<'a> {
                 }
                 (t, format!("%{tmp}"))
             }
+            Expr::BitNot(inner) => {
+                let (t, v) = self.emit_expr(inner, locals, hint);
+                let tmp = self.fresh();
+                let ll = llvm_ty(&t, self.structs);
+                writeln!(self.out, "  %{} = xor {} {}, -1", tmp, ll, v).unwrap();
+                (t, format!("%{tmp}"))
+            }
             Expr::Add(l, r) => {
                 let (tl, vl) = self.emit_expr(l, locals, None);
                 let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
@@ -6159,6 +6174,46 @@ impl<'a> Gen<'a> {
                         unreachable!("div on non-numeric")
                     }
                 }
+                (tl, format!("%{tmp}"))
+            }
+            Expr::Rem(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, hint);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let tmp = self.fresh();
+                let ll = llvm_ty(&tl, self.structs);
+                let op = if int_ty_signed(&tl) { "srem" } else { "urem" };
+                writeln!(self.out, "  %{} = {} {} {}, {}", tmp, op, ll, vl, vr).unwrap();
+                (tl, format!("%{tmp}"))
+            }
+            Expr::BitAnd(l, r) | Expr::BitOr(l, r) | Expr::BitXor(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, hint);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let tmp = self.fresh();
+                let ll = llvm_ty(&tl, self.structs);
+                let op = match e {
+                    Expr::BitAnd(_, _) => "and",
+                    Expr::BitOr(_, _) => "or",
+                    Expr::BitXor(_, _) => "xor",
+                    _ => unreachable!(),
+                };
+                writeln!(self.out, "  %{} = {} {} {}, {}", tmp, op, ll, vl, vr).unwrap();
+                (tl, format!("%{tmp}"))
+            }
+            Expr::Shl(l, r) | Expr::Shr(l, r) => {
+                let (tl, vl) = self.emit_expr(l, locals, hint);
+                let (tr, vr) = self.emit_expr(r, locals, Some(&tl));
+                assert!(types_match(&tl, &tr));
+                let tmp = self.fresh();
+                let ll = llvm_ty(&tl, self.structs);
+                let op = match e {
+                    Expr::Shl(_, _) => "shl",
+                    Expr::Shr(_, _) if int_ty_signed(&tl) => "ashr",
+                    Expr::Shr(_, _) => "lshr",
+                    _ => unreachable!(),
+                };
+                writeln!(self.out, "  %{} = {} {} {}, {}", tmp, op, ll, vl, vr).unwrap();
                 (tl, format!("%{tmp}"))
             }
             Expr::Eq(l, r)

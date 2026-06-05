@@ -57,6 +57,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_while.nia"),
         include_str!("../../../examples/tests/ok_loop.nia"),
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
+        include_str!("../../../examples/tests/ok_bitwise.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_struct_methods_big.nia"),
@@ -71,6 +72,36 @@ fn typecheck_ok_fixtures() {
         let r = check_all(src);
         assert!(r.is_ok(), "{r:?}");
     }
+}
+
+#[test]
+fn typecheck_rejects_bitwise_non_integer_operands() {
+    for expr in ["true & false", "1.0 | 2.0", "~false", "1.0 << 2.0"] {
+        let src = format!(
+            r#"
+fn main() i32 {{
+    let value = {expr};
+    0
+}}
+"#
+        );
+        let err = check_all(&src).expect_err("bitwise expression must require integers");
+        assert!(err.contains("non-integer"), "{expr}: {err}");
+    }
+}
+
+#[test]
+fn typecheck_rejects_remainder_by_zero() {
+    let err = check_all(
+        r#"
+fn main() i32 {
+    let value = 10 % 0;
+    value
+}
+"#,
+    )
+    .expect_err("remainder by zero must be rejected");
+    assert!(err.contains("remainder by zero"), "{err}");
 }
 
 #[test]

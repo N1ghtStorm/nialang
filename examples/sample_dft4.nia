@@ -1,12 +1,11 @@
 // Discrete Fourier transform for N = 4:
 // beta[y] = 1 / sqrt(4) * sum_{x=0}^{3} alpha[x] * exp(2*pi*i*x*y/4)
 //
-// Current nialang does not have dynamic arrays, `%`, or integer-to-float casts
-// yet, so this sample keeps N fixed at 4 and maps x*y to the four roots of
-// unity with plain `if` statements.
+// Current nialang does not have dynamic arrays or integer-to-float casts yet,
+// so this sample keeps N fixed at 4.
 
 fn twiddle4(x: i32, y: i32) Complex {
-    let k = x * y;
+    let k = (x * y) % 4;
     let w = complex(1.0, 0.0);
 
     if k == 1 {
@@ -18,13 +17,6 @@ fn twiddle4(x: i32, y: i32) Complex {
     if k == 3 {
         w = cis(PI * 1.5);
     }
-    if k == 6 {
-        w = cis(PI);
-    }
-    if k == 9 {
-        w = cis(PI / 2.0);
-    }
-
     w
 }
 
