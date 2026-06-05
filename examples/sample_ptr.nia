@@ -1,9 +1,10 @@
-fn main() {
+fn main() i32 {
     let a = ptr();
     let b = 2;
     println(b);
     plus();
     println(*a);
+    0
 }
 
 fn plus() {
