@@ -1,0 +1,31 @@
+fn main() i32 {
+    let anded: i32 = 12 & 10;
+    let ored: i32 = 12 | 3;
+    let xored: i32 = 12 ^ 10;
+    let inverted: i32 = ~0;
+    let shifted_left: i32 = 3 << 2;
+    let shifted_signed: i32 = -16 >> 2;
+    let shifted_unsigned: u8 = 128 >> 1;
+    let remainder_signed: i32 = 29 % 6;
+    let remainder_unsigned: u8 = 29 % 6;
+
+    let compound: i32 = 7;
+    compound &= 3;
+    compound |= 8;
+    compound ^= 2;
+    compound <<= 1;
+    compound >>= 2;
+    compound %= 3;
+
+    println(anded);
+    println(ored);
+    println(xored);
+    println(inverted);
+    println(shifted_left);
+    println(shifted_signed);
+    println(shifted_unsigned);
+    println(remainder_signed);
+    println(remainder_unsigned);
+    println(compound);
+    0
+}

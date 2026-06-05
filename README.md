@@ -1,8 +1,9 @@
 # NiaLang
 
-**NiaLang** is a small compiled programming language for linear algebra experiments.
-It treats vectors and matrices as first-class values, keeps the syntax compact, and
-lowers programs through LLVM IR and `clang`.
+**NiaLang** is a small experimental compiled language for numeric, linear
+algebra, and quantum-programming experiments. It treats vectors and matrices as
+first-class values, has a compact Rust-like syntax, lowers native programs
+through LLVM IR and `clang`, and can emit QIR for the bundled quantum runner.
 
 The language is still experimental, but the core idea is already visible:
 
@@ -18,10 +19,16 @@ let va = v @ A;         // vector-matrix product
 let d = A.det();        // determinant
 ```
 
-The goal is a language that feels natural for dense numeric code while staying
-simple enough to hack on.
+The goal is a language that feels natural for dense numeric and quantum code
+while staying simple enough to understand and hack on.
 
 ## Quick Start
+
+Requirements:
+
+- a recent Rust toolchain;
+- `clang` for native executables, assembly, and shared libraries;
+- the optional `qir-runner` feature for quantum programs.
 
 Build and run an example:
 
@@ -41,10 +48,22 @@ Emit native assembly for inspection:
 cargo run -- examples/sample_floats.nia --emit-asm build/sample_floats.s
 ```
 
-Emit and run the QIR quantum sample:
+Emit textual LLVM IR:
+
+```bash
+cargo run -- examples/sample_all.nia --emit-ll build/sample_all.ll
+```
+
+Compile and run a QIR quantum sample:
 
 ```bash
 cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q
+```
+
+Run the fixed `N = 15` Shor demonstration:
+
+```bash
+cargo run -r --features qir-runner -- examples/quantum/qubit_shore.nia -q
 ```
 
 Run the compiler test suite:
@@ -62,6 +81,43 @@ fn main() i32 {
 
     0
 }
+```
+
+CLI modes:
+
+| Command | Behavior |
+| --- | --- |
+| `nialang file.nia` | compile with `clang` and run |
+| `nialang file.nia -o out.ll` | run and also keep generated LLVM IR |
+| `nialang file.nia --emit-ll [out.ll]` | write LLVM IR without running |
+| `nialang file.nia --emit-asm [out.s]` | write native assembly |
+| `nialang file.nia --lib -o library` | build a shared library from `extern fn` exports |
+| `nialang file.nia -q [-o out.ll]` | lower to QIR and run through `qir-runner` |
+
+## Integer And Bitwise Operators
+
+All integer types support arithmetic, remainder, bitwise operations, and
+compound assignment:
+
+| Operator | Meaning |
+| --- | --- |
+| `+`, `-`, `*`, `/` | integer arithmetic |
+| `a % b` | signed or unsigned remainder |
+| `a & b` | bitwise AND |
+| `a \| b` | bitwise OR |
+| `a ^ b` | bitwise XOR |
+| `~a` | bitwise complement |
+| `a << n` | left shift |
+| `a >> n` | arithmetic shift for signed integers, logical shift for unsigned integers |
+
+The corresponding compound assignments are available: `+=`, `-=`, `*=`, `/=`,
+`%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=`.
+
+```nia
+let flags: u8 = 12;
+let masked = flags & 10;
+let rotated_part = flags << 2;
+let odd = (flags & 1) == 1;
 ```
 
 ## Linear Algebra First
@@ -399,9 +455,11 @@ println(xs[0]);
 Pointers and heap allocation:
 
 ```nia
-let p = box(123);
+let p: &i32 = alloc(123);
 println(*p);
-free(p);
+*p = 456;
+let moved: &i32 = realloc(p, 789);
+dealloc(moved);
 ```
 
 ### Control Flow
@@ -412,8 +470,6 @@ fn main() i32 {
 
     if n > 0 {
         println("positive");
-    } else {
-        println("not positive");
     }
 
     let acc = 0;
@@ -423,10 +479,22 @@ fn main() i32 {
         i = i + 1;
     }
 
+    for value in 0..3 {
+        println(value);
+    }
+
+    loop {
+        println("once");
+        break;
+    }
+
     println(acc);
     0
 }
 ```
+
+`if` currently has no `else` branch. `break` is supported by `loop`; breaking
+from `while` or `for` is not implemented yet.
 
 ### Scoped Blocks
 
@@ -450,10 +518,11 @@ fn main() i32 {
 
 ## Quantum Computing
 
-NiaLang also has an early QIR backend for small quantum programs. Quantum code is
-written inside `quant { ... }` blocks or `quant fn` functions, and can currently
-use static qubit resources, one- and two-qubit gates, Z-basis measurement, and
-QIR output recording.
+NiaLang has a QIR backend for small static quantum programs. Quantum code is
+written inside `quant { ... }` blocks or `quant fn` functions. The current
+surface includes qubit registers, single-, controlled-, and three-qubit gates,
+constant-angle rotations, Z-basis measurement, classical result reads, and QIR
+output recording.
 
 ```nia
 quant fn bell(control: qubit, target: qubit) {
@@ -609,13 +678,12 @@ result into a classical `bool` before recording it. `quant fn` bodies are
 checked as quantum scopes, so they can create qubits directly. Calls to
 `quant fn` are rejected outside `quant { ... }`.
 
-The current QIR lowering inlines void `quant fn` calls. Parameters of type
-`qubit` and `result` are supported in that path; returning values from quantum
-functions is reserved for future work. Rotation and controlled-rotation gates
-currently lower constant angles such as `PI`, `PI / 2.0`, or `0.125 + 0.125`.
-Static `for` loops in quantum scopes are unrolled during QIR lowering. Some
-gates lower through equivalent base QIR operations so they run on the current
-QIR runner.
+The current QIR lowering supports void `quant fn` calls with `qubit`,
+`[qubit; N]`, and `result` parameters. Returning values from quantum functions
+is reserved for future work. Rotation angles must be compile-time expressions
+such as `PI`, `PI / 2.0`, or `0.125 + 0.125`. Quantum register sizes and
+quantum `for` ranges are static. Measurement results can be converted to
+classical `bool` values with `q_read` and used by ordinary control flow.
 
 Run the current sample:
 
@@ -628,10 +696,9 @@ The runner output includes QIR metadata and recorded measurement results:
 ```text
 START
 METADATA	entry_point
-METADATA	output_labeling_schema
-METADATA	qir_profiles	base_profile
-METADATA	required_num_qubits	7
-METADATA	required_num_results	7
+METADATA	qir_profiles	adaptive_profile
+METADATA	required_num_qubits	0
+METADATA	required_num_results	0
 OUTPUT	RESULT	1
 OUTPUT	RESULT	0
 OUTPUT	RESULT	1
@@ -651,6 +718,11 @@ the generated QIR IR to a file:
 ```bash
 cargo run -r --features qir-runner -- examples/quantum/qubit_create.nia -q -o build/qubit_create.ll
 ```
+
+More complete examples include QFT and inverse QFT, Deutsch-Jozsa, a measured
+random bit, and a specialized Shor factorization circuit for `N = 15`. The Shor
+sample can produce an inconclusive phase and request another run, as expected
+for a probabilistic order-finding procedure.
 
 ### Structs, Enums, Match
 
@@ -725,14 +797,19 @@ Good places to start:
 | `examples/sample_matrix_det.nia` | determinant as `m.det()` |
 | `examples/sample_complex.nia` | complex numbers, trig, and `cis` |
 | `examples/sample_dft4.nia` | discrete Fourier transform for a 4-value signal |
+| `examples/tests/ok_bitwise.nia` | remainder, bitwise operators, shifts, and compound assignment |
 | `examples/sample_list.nia` | dynamic `List[T]` constructors and methods |
 | `examples/sample_dft_list.nia` | list-backed discrete Fourier transform |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
-| `examples/quantum/qubit_create.nia` | QIR qubits, basic one- and two-qubit gates, measurement, and result recording |
+| `examples/sample_extern_lib.nia` | C ABI exports and shared-library mode |
+| `examples/quantum/qubit_create.nia` | QIR gates, rotations, measurement, and result recording |
 | `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |
+| `examples/quantum/random_bit.nia` | measurement-driven classical control |
+| `examples/quantum/deutsch_jozsa_1bit.nia` | one-bit Deutsch-Jozsa circuits |
 | `examples/quantum/qft4.nia` | 4-qubit quantum Fourier transform over a qubit register |
 | `examples/quantum/iqft4.nia` | inverse 4-qubit QFT, composed with QFT as a round-trip check |
+| `examples/quantum/qubit_shore.nia` | specialized Shor factorization demo for `N = 15`, `a = 2` |
 | `examples/sample_all.nia` | broad language feature sample |
 
 ## Project Status
@@ -741,29 +818,38 @@ NiaLang is an experimental compiler and language playground.
 
 Currently available:
 
-- scalar arithmetic, variables, functions, and control flow
-- arrays, structs, enums, pattern matching, pointers, and heap allocation
+- signed and unsigned integer types, floating-point types, strings, and booleans
+- scalar arithmetic, `%`, bitwise operators, shifts, and compound assignment
+- functions, `if`, `while`, static range `for`, and `loop` with `break`
+- fixed arrays with indexing and mutation
+- structs, tuple structs, enums, pattern matching, pointers, and heap allocation
+- `extern fn` C ABI exports and shared-library builds
 - named and anonymous vectors
 - dynamic `List[T]` values with `len`, `capacity`, `push`, and `get`
 - complex numbers, `sin`, `cos`, `PI`, and `cis`
-- dense matrices
-- vector arithmetic, dot products, outer products
-- matrix arithmetic and matrix multiplication
+- dense reference-counted matrices
+- vector arithmetic, dot products, scalar multiplication, and outer products
+- matrix arithmetic, matrix multiplication, and array conversions
 - matrix-vector and vector-matrix multiplication
 - determinant as a `Matrix` method
 - Rust-style `impl` method syntax
-- early QIR quantum blocks/functions with qubits, basic one- and two-qubit gates, measurement, and result recording
+- QIR quantum blocks/functions with qubit arrays, controlled and three-qubit
+  gates, rotations, measurement, result reads, and recording
 
 Still intentionally small or unfinished:
 
+- no `else` branch yet
+- `break` works only with `loop`, not `while` or `for`
 - no sparse matrices
 - no eigenvalues, QR, SVD, or advanced decomposition APIs
 - no list index syntax or explicit list cleanup yet
-- quantum support is limited to static QIR resources, inline void `quant fn`
-  calls, and a small builtin surface
+- quantum register sizes, quantum loops, and rotation angles are static
+- quantum functions are currently void and do not have general
+  `controlled`/`adjoint` generation
+- no generic register-size parameters or universal `shor(N)` implementation
 - explicit matrix lifetime management
 - limited diagnostics compared with production languages
 - experimental syntax and type inference
 
-The sweet spot today is compact examples, compiler experiments, and dense linear
-algebra programs that should read close to the math.
+The sweet spot today is compact compiler experiments, dense numeric programs,
+and small quantum circuits that should read close to the underlying math.

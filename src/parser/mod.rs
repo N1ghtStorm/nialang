@@ -496,7 +496,16 @@ impl Parser {
                     }
                     if matches!(
                         self.peek(),
-                        Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq
+                        Token::PlusEq
+                            | Token::MinusEq
+                            | Token::StarEq
+                            | Token::SlashEq
+                            | Token::PercentEq
+                            | Token::AmpEq
+                            | Token::PipeEq
+                            | Token::CaretEq
+                            | Token::ShlEq
+                            | Token::ShrEq
                     ) {
                         let op_tok = self.bump();
                         let rhs = self.parse_expr()?;
@@ -506,6 +515,12 @@ impl Parser {
                             Token::MinusEq => Expr::Sub(Box::new(e.clone()), Box::new(rhs)),
                             Token::StarEq => Expr::Mul(Box::new(e.clone()), Box::new(rhs)),
                             Token::SlashEq => Expr::Div(Box::new(e.clone()), Box::new(rhs)),
+                            Token::PercentEq => Expr::Rem(Box::new(e.clone()), Box::new(rhs)),
+                            Token::AmpEq => Expr::BitAnd(Box::new(e.clone()), Box::new(rhs)),
+                            Token::PipeEq => Expr::BitOr(Box::new(e.clone()), Box::new(rhs)),
+                            Token::CaretEq => Expr::BitXor(Box::new(e.clone()), Box::new(rhs)),
+                            Token::ShlEq => Expr::Shl(Box::new(e.clone()), Box::new(rhs)),
+                            Token::ShrEq => Expr::Shr(Box::new(e.clone()), Box::new(rhs)),
                             _ => unreachable!(),
                         };
                         stmts.push(Stmt::Assign { target: e, value });
@@ -715,9 +730,40 @@ impl Parser {
         Ok(ty)
     }
 
-    /// Expression entrypoint with comparison precedence above arithmetic.
+    /// Expression entrypoint. Bitwise operators follow conventional precedence:
+    /// comparisons bind tighter than `&`, then `^`, then `|`.
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_equality()
+        self.parse_bit_or()
+    }
+
+    fn parse_bit_or(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_bit_xor()?;
+        while matches!(self.peek(), Token::Pipe) {
+            self.bump();
+            let right = self.parse_bit_xor()?;
+            left = Expr::BitOr(Box::new(left), Box::new(right));
+        }
+        Ok(left)
+    }
+
+    fn parse_bit_xor(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_bit_and()?;
+        while matches!(self.peek(), Token::Caret) {
+            self.bump();
+            let right = self.parse_bit_and()?;
+            left = Expr::BitXor(Box::new(left), Box::new(right));
+        }
+        Ok(left)
+    }
+
+    fn parse_bit_and(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_equality()?;
+        while matches!(self.peek(), Token::Amp) {
+            self.bump();
+            let right = self.parse_equality()?;
+            left = Expr::BitAnd(Box::new(left), Box::new(right));
+        }
+        Ok(left)
     }
 
     fn parse_equality(&mut self) -> Result<Expr, String> {
@@ -741,28 +787,49 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_additive()?;
+        let mut left = self.parse_shift()?;
         loop {
             match self.peek().clone() {
                 Token::Lt => {
                     self.bump();
-                    let right = self.parse_additive()?;
+                    let right = self.parse_shift()?;
                     left = Expr::Lt(Box::new(left), Box::new(right));
                 }
                 Token::Le => {
                     self.bump();
-                    let right = self.parse_additive()?;
+                    let right = self.parse_shift()?;
                     left = Expr::Le(Box::new(left), Box::new(right));
                 }
                 Token::Gt => {
                     self.bump();
-                    let right = self.parse_additive()?;
+                    let right = self.parse_shift()?;
                     left = Expr::Gt(Box::new(left), Box::new(right));
                 }
                 Token::Ge => {
                     self.bump();
-                    let right = self.parse_additive()?;
+                    let right = self.parse_shift()?;
                     left = Expr::Ge(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    /// Parses left-associative integer shifts below additive precedence.
+    fn parse_shift(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_additive()?;
+        loop {
+            match self.peek().clone() {
+                Token::Shl => {
+                    self.bump();
+                    let right = self.parse_additive()?;
+                    left = Expr::Shl(Box::new(left), Box::new(right));
+                }
+                Token::Shr => {
+                    self.bump();
+                    let right = self.parse_additive()?;
+                    left = Expr::Shr(Box::new(left), Box::new(right));
                 }
                 _ => break,
             }
@@ -791,7 +858,7 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parses left-associative `*` / `/` chains.
+    /// Parses left-associative `*` / `/` / `%` chains.
     fn parse_multiplicative(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_unary()?;
         loop {
@@ -811,6 +878,11 @@ impl Parser {
                     let right = self.parse_unary()?;
                     left = Expr::Div(Box::new(left), Box::new(right));
                 }
+                Token::Percent => {
+                    self.bump();
+                    let right = self.parse_unary()?;
+                    left = Expr::Rem(Box::new(left), Box::new(right));
+                }
                 _ => break,
             }
         }
@@ -822,6 +894,11 @@ impl Parser {
             self.bump();
             let inner = self.parse_unary()?;
             return Ok(Expr::Neg(Box::new(inner)));
+        }
+        if matches!(self.peek(), Token::Tilde) {
+            self.bump();
+            let inner = self.parse_unary()?;
+            return Ok(Expr::BitNot(Box::new(inner)));
         }
         self.parse_suffix_chain()
     }

@@ -12,6 +12,45 @@ fn emit(src: &str) -> String {
     emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
 }
 
+fn emit_qir_runner(src: &str) -> String {
+    let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().expect("parse");
+    let (struct_map, enum_map, vector_map, fn_sigs) =
+        collect_sigs(&structs, &enums, &vectors, &fns).expect("sigs");
+    for f in &fns {
+        check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs).expect("typecheck");
+    }
+    emit_module_for_qir_runner(&structs, &enums, &vectors, &fns, &fn_sigs)
+}
+
+#[test]
+fn codegen_qir_runner_prints_strings_without_printf() {
+    let ll = emit_qir_runner(
+        r#"
+fn main() i32 {
+    let s: string = "hello";
+    println(s);
+    if s == "hello" {
+        return 0
+    }
+    1
+}
+"#,
+    );
+    assert!(
+        ll.contains("define i32 @strcmp(ptr %a, ptr %b)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call ptr @__quantum__rt__string_create(ptr"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call void @__quantum__rt__message(ptr"),
+        "IR:\n{ll}"
+    );
+    assert!(!ll.contains("@printf"), "IR:\n{ll}");
+}
+
 #[test]
 fn codegen_extern_fn_exports_c_abi_symbol() {
     let ll = emit(
@@ -27,6 +66,26 @@ fn main() i32 {
     );
     assert!(ll.contains("define i32 @add(i32 %a, i32 %b)"), "IR:\n{ll}");
     assert!(ll.contains("call i32 @add(i32 1, i32 2)"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_bitwise_shift_and_remainder_instructions() {
+    let ll = emit(include_str!("../../../examples/tests/ok_bitwise.nia"));
+    for instruction in [
+        " and i32 ",
+        " or i32 ",
+        " xor i32 ",
+        " shl i32 ",
+        " ashr i32 ",
+        " lshr i8 ",
+        " srem i32 ",
+        " urem i8 ",
+    ] {
+        assert!(
+            ll.contains(instruction),
+            "missing `{instruction}` in IR:\n{ll}"
+        );
+    }
 }
 
 #[test]

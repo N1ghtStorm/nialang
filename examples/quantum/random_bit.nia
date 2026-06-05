@@ -1,0 +1,23 @@
+quant fn generate_random_bit() {
+    let q = qubit();
+
+    H(q);
+
+    let r = q_measure(q);
+    let b = q_read(r);
+
+    if b {
+        X(q);
+    }
+
+    q_record(r);
+    q_record(b);
+}
+
+fn main() i32 {
+    quant {
+        generate_random_bit();
+    }
+
+    0
+}

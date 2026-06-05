@@ -14,7 +14,7 @@ use crate::nia_std::{
     GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS,
     GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX,
     GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z,
-    MEASURE, PI, QUBIT, READ, RECORD,
+    MEASURE, PI, PRINTLN, QUBIT, READ, RECORD,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -82,6 +82,10 @@ enum QirOp {
     },
     RecordResult(usize),
     RecordBool(usize),
+    RecordInt(i128),
+    RecordDouble(f64),
+    RecordClassicalBool(bool),
+    RecordMessage(String),
 }
 
 #[derive(Clone, Copy)]
@@ -324,7 +328,7 @@ fn collect_expr(
             )
         }
         Expr::Gpu { body } => collect_block(body, false, plan, resources, fns, fn_sigs, call_stack),
-        Expr::Neg(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) => {
+        Expr::Neg(inner) | Expr::BitNot(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) => {
             collect_expr(inner, false, plan, resources, fns, fn_sigs, call_stack)
         }
         Expr::Add(l, r)
@@ -332,6 +336,12 @@ fn collect_expr(
         | Expr::Mul(l, r)
         | Expr::VecDot(l, r)
         | Expr::Div(l, r)
+        | Expr::Rem(l, r)
+        | Expr::BitAnd(l, r)
+        | Expr::BitOr(l, r)
+        | Expr::BitXor(l, r)
+        | Expr::Shl(l, r)
+        | Expr::Shr(l, r)
         | Expr::Eq(l, r)
         | Expr::Ne(l, r)
         | Expr::Lt(l, r)
@@ -341,6 +351,9 @@ fn collect_expr(
         | Expr::Index(l, r) => {
             collect_expr(l, false, plan, resources, fns, fn_sigs, call_stack)?;
             collect_expr(r, false, plan, resources, fns, fn_sigs, call_stack)
+        }
+        Expr::Call { name, args } if name == PRINTLN && args.len() == 1 => {
+            collect_classical_print_arg(&args[0], plan, resources)
         }
         Expr::Call { args, .. } | Expr::GenericCall { args, .. } => {
             for arg in args {
@@ -385,6 +398,51 @@ fn collect_expr(
         | Expr::String(_)
         | Expr::Ident(_)
         | Expr::EnumVariant { .. } => Ok(()),
+    }
+}
+
+fn collect_classical_print_arg(
+    arg: &Expr,
+    plan: &mut QirPlan,
+    resources: &QuantResources,
+) -> Result<(), String> {
+    match arg {
+        Expr::String(s) => {
+            plan.ops.push(QirOp::RecordMessage(s.clone()));
+            Ok(())
+        }
+        Expr::Bool(v) => {
+            plan.ops.push(QirOp::RecordClassicalBool(*v));
+            Ok(())
+        }
+        Expr::Float(_)
+        | Expr::Ident(_)
+        | Expr::Neg(_)
+        | Expr::BitNot(_)
+        | Expr::Add(_, _)
+        | Expr::Sub(_, _)
+        | Expr::Mul(_, _)
+        | Expr::Div(_, _)
+        | Expr::Rem(_, _)
+        | Expr::BitAnd(_, _)
+        | Expr::BitOr(_, _)
+        | Expr::BitXor(_, _)
+        | Expr::Shl(_, _)
+        | Expr::Shr(_, _) => {
+            if let Ok(v) = const_f64_expr(arg) {
+                plan.ops.push(QirOp::RecordDouble(v));
+                Ok(())
+            } else {
+                let v = const_i128_expr(arg, resources)?;
+                plan.ops.push(QirOp::RecordInt(v));
+                Ok(())
+            }
+        }
+        Expr::Int(v) => {
+            plan.ops.push(QirOp::RecordInt(*v));
+            Ok(())
+        }
+        _ => Err("QIR lowering currently supports `println` outside `quant` only for constant strings, bools, integers, and floats".into()),
     }
 }
 
@@ -820,11 +878,36 @@ fn render_module(plan: &QirPlan) -> String {
     .unwrap();
     writeln!(out, "target triple = \"unknown-unknown-unknown\"").unwrap();
     writeln!(out).unwrap();
+    for (idx, message) in plan
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            QirOp::RecordMessage(message) => Some(message),
+            _ => None,
+        })
+        .enumerate()
+    {
+        let len = message.as_bytes().len() + 1;
+        writeln!(
+            out,
+            "@nialang.qir.msg.{idx} = private unnamed_addr constant [{len} x i8] c\"{}\\00\", align 1",
+            qir_c_escape(message.as_bytes())
+        )
+        .unwrap();
+    }
+    if plan
+        .ops
+        .iter()
+        .any(|op| matches!(op, QirOp::RecordMessage(_)))
+    {
+        writeln!(out).unwrap();
+    }
     writeln!(out, "define void @main() #0 {{").unwrap();
     writeln!(out, "entry:").unwrap();
     for id in 0..plan.qubits {
         writeln!(out, "  ; qubit {id}: ptr inttoptr (i64 {id} to ptr)").unwrap();
     }
+    let mut message_idx = 0usize;
     for op in &plan.ops {
         match op {
             QirOp::GateI(id) => {
@@ -971,6 +1054,48 @@ fn render_module(plan: &QirPlan) -> String {
                 )
                 .unwrap();
             }
+            QirOp::RecordInt(v) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__rt__int_record_output(i64 {}, ptr null)",
+                    *v as i64
+                )
+                .unwrap();
+            }
+            QirOp::RecordDouble(v) => {
+                writeln!(
+                    out,
+                    "  call void @__quantum__rt__double_record_output(double {}, ptr null)",
+                    qir_float_value(*v)
+                )
+                .unwrap();
+            }
+            QirOp::RecordClassicalBool(v) => {
+                let value = if *v { "true" } else { "false" };
+                writeln!(
+                    out,
+                    "  call void @__quantum__rt__bool_record_output(i1 {}, ptr null)",
+                    value
+                )
+                .unwrap();
+            }
+            QirOp::RecordMessage(message) => {
+                let len = message.as_bytes().len() + 1;
+                let raw = format!("%qirmsgraw{message_idx}");
+                let qstr = format!("%qirmsg{message_idx}");
+                writeln!(
+                    out,
+                    "  {raw} = getelementptr inbounds [{len} x i8], ptr @nialang.qir.msg.{message_idx}, i64 0, i64 0"
+                )
+                .unwrap();
+                writeln!(
+                    out,
+                    "  {qstr} = call ptr @__quantum__rt__string_create(ptr {raw})"
+                )
+                .unwrap();
+                writeln!(out, "  call void @__quantum__rt__message(ptr {qstr})").unwrap();
+                message_idx += 1;
+            }
         }
     }
     writeln!(out, "  ret void").unwrap();
@@ -1000,6 +1125,18 @@ fn render_module(plan: &QirPlan) -> String {
         "declare void @__quantum__rt__bool_record_output(i1, ptr)"
     )
     .unwrap();
+    writeln!(
+        out,
+        "declare void @__quantum__rt__int_record_output(i64, ptr)"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "declare void @__quantum__rt__double_record_output(double, ptr)"
+    )
+    .unwrap();
+    writeln!(out, "declare ptr @__quantum__rt__string_create(ptr)").unwrap();
+    writeln!(out, "declare void @__quantum__rt__message(ptr)").unwrap();
     writeln!(out).unwrap();
     let profile = if plan
         .ops
@@ -1227,6 +1364,21 @@ fn qir_float_value(v: f64) -> String {
     format!("{v:.17e}")
 }
 
+fn qir_c_escape(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for &b in bytes {
+        match b {
+            b'\\' => s.push_str("\\5C"),
+            b'"' => s.push_str("\\22"),
+            0x20..=0x7e => s.push(char::from(b)),
+            _ => {
+                let _ = write!(s, "\\{:02X}", b);
+            }
+        }
+    }
+    s
+}
+
 fn const_f64_arg(arg: &Expr) -> Result<f64, String> {
     let value = const_f64_expr(arg)?;
     if value.is_finite() {
@@ -1259,6 +1411,7 @@ fn const_i128_expr(expr: &Expr, resources: &QuantResources) -> Result<i128, Stri
             )
         }),
         Expr::Neg(inner) => Ok(-const_i128_expr(inner, resources)?),
+        Expr::BitNot(inner) => Ok(!const_i128_expr(inner, resources)?),
         Expr::Add(left, right) => const_i128_expr(left, resources)?
             .checked_add(const_i128_expr(right, resources)?)
             .ok_or_else(|| "integer overflow in static QIR `for` range".to_string()),
@@ -1276,6 +1429,42 @@ fn const_i128_expr(expr: &Expr, resources: &QuantResources) -> Result<i128, Stri
             const_i128_expr(left, resources)?
                 .checked_div(rhs)
                 .ok_or_else(|| "integer overflow in static QIR `for` range".to_string())
+        }
+        Expr::Rem(left, right) => {
+            let rhs = const_i128_expr(right, resources)?;
+            if rhs == 0 {
+                return Err("remainder by zero in static QIR `for` range".into());
+            }
+            const_i128_expr(left, resources)?
+                .checked_rem(rhs)
+                .ok_or_else(|| "integer overflow in static QIR `for` range".to_string())
+        }
+        Expr::BitAnd(left, right) => {
+            Ok(const_i128_expr(left, resources)? & const_i128_expr(right, resources)?)
+        }
+        Expr::BitOr(left, right) => {
+            Ok(const_i128_expr(left, resources)? | const_i128_expr(right, resources)?)
+        }
+        Expr::BitXor(left, right) => {
+            Ok(const_i128_expr(left, resources)? ^ const_i128_expr(right, resources)?)
+        }
+        Expr::Shl(left, right) => {
+            let rhs = const_i128_expr(right, resources)?;
+            let rhs: u32 = rhs
+                .try_into()
+                .map_err(|_| "invalid left shift in static QIR `for` range".to_string())?;
+            const_i128_expr(left, resources)?
+                .checked_shl(rhs)
+                .ok_or_else(|| "invalid left shift in static QIR `for` range".to_string())
+        }
+        Expr::Shr(left, right) => {
+            let rhs = const_i128_expr(right, resources)?;
+            let rhs: u32 = rhs
+                .try_into()
+                .map_err(|_| "invalid right shift in static QIR `for` range".to_string())?;
+            const_i128_expr(left, resources)?
+                .checked_shr(rhs)
+                .ok_or_else(|| "invalid right shift in static QIR `for` range".to_string())
         }
         _ => Err(
             "QIR lowering currently supports only static integer expressions in `for` ranges"
@@ -1352,6 +1541,44 @@ fn main() i32 {
         );
         assert!(ir.contains("qir_major_version"), "IR:\n{ir}");
         assert!(ir.contains("dynamic_qubit_management"), "IR:\n{ir}");
+    }
+
+    #[test]
+    fn qir_records_constant_println_outside_quant_blocks() {
+        let ir = emit(
+            r#"
+fn main() i32 {
+    quant {
+        let q = qubit();
+        X(q);
+        let r = q_measure(q);
+        q_record(r);
+    }
+    println("done");
+    println(7);
+    println(true);
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains(
+                "@nialang.qir.msg.0 = private unnamed_addr constant [5 x i8] c\"done\\00\""
+            ),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__rt__message(ptr %qirmsg0)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__rt__int_record_output(i64 7, ptr null)"),
+            "IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @__quantum__rt__bool_record_output(i1 true, ptr null)"),
+            "IR:\n{ir}"
+        );
     }
 
     #[test]

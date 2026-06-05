@@ -1,1 +1,160 @@
-    
+// A compiled demonstration of Shor's algorithm for N = 15 and a = 2.
+//
+// This is intentionally specialized for the current static quantum surface.
+// Multiplication by 2 modulo 15 is a cyclic rotation of a four-qubit register:
+//
+//     |0001> -> |0010> -> |0100> -> |1000> -> |0001>
+//
+// Therefore controlled modular multiplication can be expressed with CSWAP
+// gates. The order is r = 4. Quantum phase estimation can measure phase
+// numerators 0, 4, 8, or 12 over denominator 16. Numerators 4 and 12 recover
+// r = 4 directly; the other outcomes require another run.
+
+fn gcd(left: i32, right: i32) i32 {
+    let a = left;
+    let b = right;
+
+    while b != 0 {
+        let next = a % b;
+        a = b;
+        b = next;
+    }
+
+    a
+}
+
+fn pow_mod(base: i32, exponent: i32, modulus: i32) i32 {
+    let result = 1;
+    let power = base % modulus;
+    let exp = exponent;
+
+    while exp > 0 {
+        if (exp & 1) == 1 {
+            result = (result * power) % modulus;
+        }
+
+        power = (power * power) % modulus;
+        exp = exp / 2;
+    }
+
+    result
+}
+
+// Controlled multiplication by 2 modulo 15.
+quant fn controlled_mul2_mod15(control: qubit, work: [qubit; 4]) {
+    CSWAP(control, work[3], work[2]);
+    CSWAP(control, work[2], work[1]);
+    CSWAP(control, work[1], work[0]);
+}
+
+// Controlled multiplication by 4 modulo 15, equal to two bit rotations.
+quant fn controlled_mul4_mod15(control: qubit, work: [qubit; 4]) {
+    CSWAP(control, work[0], work[2]);
+    CSWAP(control, work[1], work[3]);
+}
+
+quant fn inverse_qft4(count: [qubit; 4]) {
+    SWAP(count[1], count[2]);
+    SWAP(count[0], count[3]);
+
+    H(count[3]);
+
+    CR1(-PI / 2.0, count[3], count[2]);
+    H(count[2]);
+
+    CR1(-PI / 4.0, count[3], count[1]);
+    CR1(-PI / 2.0, count[2], count[1]);
+    H(count[1]);
+
+    CR1(-PI / 8.0, count[3], count[0]);
+    CR1(-PI / 4.0, count[2], count[0]);
+    CR1(-PI / 2.0, count[1], count[0]);
+    H(count[0]);
+}
+
+quant fn find_order_2_mod15(count: [qubit; 4], work: [qubit; 4]) {
+    // Prepare |1> in the work register.
+    X(work[0]);
+
+    for i in 0..4 {
+        H(count[i]);
+    }
+
+    // count[3] controls U^(1), count[2] controls U^(2).
+    // U^(4) and U^(8) are identity because the order is four.
+    controlled_mul2_mod15(count[3], work);
+    controlled_mul4_mod15(count[2], work);
+
+    inverse_qft4(count);
+}
+
+fn main() i32 {
+    println("Shor demo: factor N = 15 with base a = 2");
+
+    quant {
+        let count: [qubit; 4] = [qubit(), qubit(), qubit(), qubit()];
+        let work: [qubit; 4] = [qubit(), qubit(), qubit(), qubit()];
+
+        find_order_2_mod15(count, work);
+
+        let r0 = q_measure(count[0]);
+        let r1 = q_measure(count[1]);
+        let r2 = q_measure(count[2]);
+        let r3 = q_measure(count[3]);
+
+        let b0 = q_read(r0);
+        let b1 = q_read(r1);
+        let b2 = q_read(r2);
+        let b3 = q_read(r3);
+
+        println("phase bits, most significant first:");
+        q_record(b0);
+        q_record(b1);
+        q_record(b2);
+        q_record(b3);
+
+        let phase_numerator = 0;
+        if b0 {
+            phase_numerator = phase_numerator + 8;
+        }
+        if b1 {
+            phase_numerator = phase_numerator + 4;
+        }
+        if b2 {
+            phase_numerator = phase_numerator + 2;
+        }
+        if b3 {
+            phase_numerator = phase_numerator + 1;
+        }
+
+        // For exact phases y/16, reducing the fraction gives an order candidate.
+        let divisor = gcd(phase_numerator, 16);
+        let candidate = 16 / divisor;
+        let period = 0;
+
+        // Reject denominator 1 or 2 when it is not actually an order of 2 mod 15.
+        if pow_mod(2, candidate, 15) == 1 {
+            if (candidate & 1) == 0 {
+                period = candidate;
+            }
+        }
+
+        let factor1 = 0;
+        let factor2 = 0;
+        if period > 0 {
+            let square_root = pow_mod(2, period / 2, 15);
+            factor1 = gcd(square_root - 1, 15);
+            factor2 = gcd(square_root + 1, 15);
+        }
+
+        println("phase numerator y for y/16:");
+        println(phase_numerator);
+        println("recovered period, zero means retry:");
+        println(period);
+        println("factors, zero means retry:");
+        println(factor1);
+        println(factor2);
+    }
+
+    0
+}

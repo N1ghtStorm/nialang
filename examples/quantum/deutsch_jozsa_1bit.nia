@@ -1,0 +1,47 @@
+quant fn oracle_constant_zero(x: qubit, y: qubit) {
+}
+
+quant fn oracle_balanced_identity(x: qubit, y: qubit) {
+    CNOT(x, y);
+}
+
+quant fn deutsch_jozsa_1bit_constant() {
+    let x = qubit();
+    let y = qubit();
+
+    X(y);
+    H(x);
+    H(y);
+
+    oracle_constant_zero(x, y);
+
+    H(x);
+
+    let r = q_measure(x);
+    q_record(r);
+}
+
+quant fn deutsch_jozsa_1bit_balanced() {
+    let x = qubit();
+    let y = qubit();
+
+    X(y);
+    H(x);
+    H(y);
+
+    oracle_balanced_identity(x, y);
+
+    H(x);
+
+    let r = q_measure(x);
+    q_record(r);
+}
+
+fn main() i32 {
+    quant {
+        deutsch_jozsa_1bit_constant();
+        deutsch_jozsa_1bit_balanced();
+    }
+
+    0
+}
