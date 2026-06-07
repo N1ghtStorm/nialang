@@ -1370,6 +1370,13 @@ fn infer_expr(
             }
             Ok(t)
         }
+        Expr::Not(inner) => {
+            let t = infer_expr(inner, env, structs, enums, vectors, fns, Some(&Ty::Bool))?;
+            if t != Ty::Bool {
+                return Err(format!("cannot use `!` on non-bool type {t:?}"));
+            }
+            Ok(Ty::Bool)
+        }
         Expr::BitNot(inner) => {
             let integer_hint = hint.filter(|ty| is_integer_ty(ty));
             let t = infer_expr(inner, env, structs, enums, vectors, fns, integer_hint)?;

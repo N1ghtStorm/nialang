@@ -144,10 +144,11 @@ fn lex_bitwise_remainder_and_compound() {
 
 #[test]
 fn lex_comparison_ops() {
-    let toks = collect("a == b != c < d <= e > f >= g");
+    let toks = collect("!a == b != c < d <= e > f >= g");
     assert_eq!(
         toks,
         vec![
+            Token::Bang,
             Token::Ident("a".into()),
             Token::EqEq,
             Token::Ident("b".into()),

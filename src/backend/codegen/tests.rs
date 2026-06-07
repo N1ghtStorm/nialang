@@ -618,6 +618,22 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_logical_not_emits_bool_xor() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let value: bool = !false;
+    if !value {
+        return 1
+    }
+    0
+}
+"#,
+    );
+    assert!(ll.contains("xor i1"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_float_fixture_contains_half() {
     let ll = emit(include_str!("../../../examples/tests/ok_floats.nia"));
     assert!(ll.contains("half"), "IR:\n{ll}");

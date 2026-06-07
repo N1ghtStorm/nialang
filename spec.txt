@@ -41,6 +41,12 @@ string
 Complex
 ```
 
+Logical negation accepts only booleans:
+
+```
+let ready: bool = !false
+```
+
 `Complex` is a built-in named-field type equivalent to:
 
 ```

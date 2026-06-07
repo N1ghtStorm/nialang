@@ -328,7 +328,11 @@ fn collect_expr(
             )
         }
         Expr::Gpu { body } => collect_block(body, false, plan, resources, fns, fn_sigs, call_stack),
-        Expr::Neg(inner) | Expr::BitNot(inner) | Expr::AddrOf(inner) | Expr::Deref(inner) => {
+        Expr::Neg(inner)
+        | Expr::Not(inner)
+        | Expr::BitNot(inner)
+        | Expr::AddrOf(inner)
+        | Expr::Deref(inner) => {
             collect_expr(inner, false, plan, resources, fns, fn_sigs, call_stack)
         }
         Expr::Add(l, r)
@@ -418,6 +422,7 @@ fn collect_classical_print_arg(
         Expr::Float(_)
         | Expr::Ident(_)
         | Expr::Neg(_)
+        | Expr::Not(_)
         | Expr::BitNot(_)
         | Expr::Add(_, _)
         | Expr::Sub(_, _)

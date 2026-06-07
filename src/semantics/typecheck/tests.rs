@@ -91,6 +91,33 @@ fn main() i32 {{
 }
 
 #[test]
+fn typecheck_logical_not_requires_bool() {
+    check_all(
+        r#"
+fn main() i32 {
+    let value: bool = !false;
+    if !value {
+        return 1
+    }
+    0
+}
+"#,
+    )
+    .expect("logical not should accept bool operands");
+
+    let err = check_all(
+        r#"
+fn main() i32 {
+    let value = !1;
+    0
+}
+"#,
+    )
+    .expect_err("logical not must reject integer operands");
+    assert!(err.contains("bool"), "{err}");
+}
+
+#[test]
 fn typecheck_rejects_remainder_by_zero() {
     let err = check_all(
         r#"

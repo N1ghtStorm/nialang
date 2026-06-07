@@ -113,6 +113,8 @@ compound assignment:
 The corresponding compound assignments are available: `+=`, `-=`, `*=`, `/=`,
 `%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=`.
 
+Booleans support logical negation with `!value`.
+
 ```nia
 let flags: u8 = 12;
 let masked = flags & 10;
@@ -819,7 +821,7 @@ NiaLang is an experimental compiler and language playground.
 Currently available:
 
 - signed and unsigned integer types, floating-point types, strings, and booleans
-- scalar arithmetic, `%`, bitwise operators, shifts, and compound assignment
+- scalar arithmetic, `%`, bitwise operators, shifts, logical `!`, and compound assignment
 - functions, `if`, `while`, static range `for`, and `loop` with `break`
 - fixed arrays with indexing and mutation
 - structs, tuple structs, enums, pattern matching, pointers, and heap allocation

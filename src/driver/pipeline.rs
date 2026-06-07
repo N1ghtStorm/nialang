@@ -124,6 +124,7 @@ fn expr_contains_quantum(e: &Expr) -> bool {
     match e {
         Expr::Quant { .. } => true,
         Expr::Neg(inner)
+        | Expr::Not(inner)
         | Expr::BitNot(inner)
         | Expr::AddrOf(inner)
         | Expr::Deref(inner)
@@ -424,6 +425,7 @@ fn token_lexeme(token: &str) -> Option<&'static str> {
         "Star" => Some("*"),
         "At" => Some("@"),
         "Slash" => Some("/"),
+        "Bang" => Some("!"),
         "Amp" => Some("&"),
         "Dot" => Some("."),
         "DotDot" => Some(".."),

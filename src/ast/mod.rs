@@ -231,6 +231,8 @@ pub enum Expr {
     Ident(String),
     /// Unary `-` (integer and float).
     Neg(Box<Expr>),
+    /// Unary logical negation `!` (booleans only).
+    Not(Box<Expr>),
     /// Unary bitwise complement `~` (integers only).
     BitNot(Box<Expr>),
     Add(Box<Expr>, Box<Expr>),

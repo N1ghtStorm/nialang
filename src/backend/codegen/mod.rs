@@ -30,6 +30,7 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
         | Expr::Ident(_)
         | Expr::EnumVariant { .. } => {}
         Expr::Neg(inner)
+        | Expr::Not(inner)
         | Expr::BitNot(inner)
         | Expr::AddrOf(inner)
         | Expr::Deref(inner)
@@ -5785,6 +5786,12 @@ impl<'a> Gen<'a> {
                         unreachable!("typechecked neg")
                     }
                 }
+                (t, format!("%{tmp}"))
+            }
+            Expr::Not(inner) => {
+                let (t, v) = self.emit_expr(inner, locals, Some(&Ty::Bool));
+                let tmp = self.fresh();
+                writeln!(self.out, "  %{} = xor i1 {}, true", tmp, v).unwrap();
                 (t, format!("%{tmp}"))
             }
             Expr::BitNot(inner) => {

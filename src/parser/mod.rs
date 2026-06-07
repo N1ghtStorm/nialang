@@ -895,6 +895,11 @@ impl Parser {
             let inner = self.parse_unary()?;
             return Ok(Expr::Neg(Box::new(inner)));
         }
+        if matches!(self.peek(), Token::Bang) {
+            self.bump();
+            let inner = self.parse_unary()?;
+            return Ok(Expr::Not(Box::new(inner)));
+        }
         if matches!(self.peek(), Token::Tilde) {
             self.bump();
             let inner = self.parse_unary()?;

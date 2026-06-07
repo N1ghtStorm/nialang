@@ -53,6 +53,7 @@ pub enum Token {
     PipeEq,
     Caret,
     CaretEq,
+    Bang,
     Tilde,
     Shl,
     ShlEq,
@@ -248,6 +249,7 @@ impl<'a> Lexer<'a> {
                 self.src.next();
                 Token::NotEq
             }
+            '!' => Token::Bang,
             '<' if matches!(self.src.peek(), Some('=')) => {
                 self.src.next();
                 Token::Le
