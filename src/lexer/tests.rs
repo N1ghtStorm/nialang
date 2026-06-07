@@ -67,6 +67,32 @@ fn lex_float_literals_fraction_and_exponent() {
 }
 
 #[test]
+fn lex_numeric_literals_with_digit_separators() {
+    let toks = collect("1_000 3.141_592 1.0e1_0 1_000..2_000");
+    assert_eq!(
+        toks,
+        vec![
+            Token::Int(1_000),
+            Token::Float(3.141_592),
+            Token::Float(1.0e10),
+            Token::Int(1_000),
+            Token::DotDot,
+            Token::Int(2_000),
+        ]
+    );
+}
+
+#[test]
+fn lex_numeric_separator_must_be_between_digits() {
+    assert_eq!(
+        collect("1__000"),
+        vec![Token::Int(1), Token::Ident("__000".into())]
+    );
+    assert_eq!(collect("1_"), vec![Token::Int(1), Token::Ident("_".into())]);
+    assert_eq!(collect("_1"), vec![Token::Ident("_1".into())]);
+}
+
+#[test]
 fn lex_while_keyword() {
     let toks = collect("while x");
     assert_eq!(toks, vec![Token::While, Token::Ident("x".into()),]);

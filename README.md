@@ -115,6 +115,14 @@ The corresponding compound assignments are available: `+=`, `-=`, `*=`, `/=`,
 
 Booleans support logical negation with `!value`.
 
+Numeric literals may use `_` between digits for readability:
+
+```nia
+let population = 1_000_000;
+let ratio = 3.141_592;
+let scale = 1.0e1_0;
+```
+
 ```nia
 let flags: u8 = 12;
 let masked = flags & 10;

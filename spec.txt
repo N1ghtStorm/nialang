@@ -47,6 +47,14 @@ Logical negation accepts only booleans:
 let ready: bool = !false
 ```
 
+Decimal numeric literals may contain `_` between digits:
+
+```
+let count: i32 = 1_000_000
+let ratio: f64 = 3.141_592
+let scale: f64 = 1.0e1_0
+```
+
 `Complex` is a built-in named-field type equivalent to:
 
 ```

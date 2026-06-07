@@ -404,6 +404,20 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_numeric_literals_with_digit_separators() {
+    parse_ok(
+        r#"
+fn main() i32 {
+    let count: i32 = 1_000;
+    let ratio: f64 = 3.141_592;
+    let scale: f64 = 1.0e1_0;
+    count
+}
+"#,
+    );
+}
+
+#[test]
 fn parse_array_type_and_literal() {
     parse_ok(include_str!("../../examples/tests/ok_array.nia"));
 }

@@ -128,6 +128,31 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Appends decimal digits while allowing `_` only between two digits.
+    ///
+    /// Separators are omitted from `buf`, so the result can be parsed directly
+    /// by Rust's numeric parsers.
+    fn lex_decimal_digits(&mut self, buf: &mut String) {
+        loop {
+            match self.src.peek() {
+                Some(&d @ '0'..='9') => {
+                    buf.push(d);
+                    self.src.next();
+                }
+                Some('_') => {
+                    let mut ahead = self.src.clone();
+                    ahead.next();
+                    if matches!(ahead.peek(), Some('0'..='9')) {
+                        self.src.next();
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
     /// Consumes whitespace and line comments (`// ...`) before tokenization.
     ///
     /// This method loops until it reaches a character that can start a real token.
@@ -164,7 +189,7 @@ impl<'a> Lexer<'a> {
     ///
     /// ## Current behavior details
     /// - Skips whitespace/comments first.
-    /// - Parses decimal integers only.
+    /// - Parses decimal numeric literals with optional `_` digit separators.
     /// - Parses double-quoted string literals with escapes (`\\`, `\"`, `\n`, `\t`, `\r`, `\0`).
     /// - Parses identifiers/keywords with ASCII alnum + `_` rule.
     /// - On unknown characters returns `Token::Eof` (simple fail-stop behavior).
@@ -282,9 +307,7 @@ impl<'a> Lexer<'a> {
             '0'..='9' => {
                 let mut buf = String::new();
                 buf.push(c);
-                while let Some(&_d @ '0'..='9') = self.src.peek() {
-                    buf.push(self.src.next().unwrap());
-                }
+                self.lex_decimal_digits(&mut buf);
                 if matches!(self.src.peek(), Some(&'.')) {
                     let mut ahead = self.src.clone();
                     ahead.next();
@@ -293,17 +316,13 @@ impl<'a> Lexer<'a> {
                         return Token::Int(n);
                     }
                     buf.push(self.src.next().unwrap());
-                    while let Some(&_d @ '0'..='9') = self.src.peek() {
-                        buf.push(self.src.next().unwrap());
-                    }
+                    self.lex_decimal_digits(&mut buf);
                     if matches!(self.src.peek(), Some('e') | Some('E')) {
                         buf.push(self.src.next().unwrap());
                         if matches!(self.src.peek(), Some('+') | Some('-')) {
                             buf.push(self.src.next().unwrap());
                         }
-                        while let Some(&_d @ '0'..='9') = self.src.peek() {
-                            buf.push(self.src.next().unwrap());
-                        }
+                        self.lex_decimal_digits(&mut buf);
                     }
                     let v = buf.parse::<f64>().unwrap_or(0.0);
                     return Token::Float(v);
