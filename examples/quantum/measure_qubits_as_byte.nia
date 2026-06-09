@@ -1,0 +1,130 @@
+// Prepares a biased cat state:
+// sqrt(3)/2 |00000000> + 1/2 |11111111>.
+// Measurements should therefore produce byte 0 about 75% of the time and
+// byte 255 about 25% of the time.
+quant fn prepare_biased_cat8(qs: [qubit; 8]) {
+    Ry(PI / 3.0, qs[0]);
+    CNOT(qs[0], qs[1]);
+    CNOT(qs[0], qs[2]);
+    CNOT(qs[0], qs[3]);
+    CNOT(qs[0], qs[4]);
+    CNOT(qs[0], qs[5]);
+    CNOT(qs[0], qs[6]);
+    CNOT(qs[0], qs[7]);
+}
+
+// Irreversibly measures eight qubits in the Z basis and packs the classical
+// outcomes into one byte. qs[0] is the least significant bit.
+quant fn measure_qubits_as_byte(qs: [qubit; 8]) u8 {
+    let value: u8 = 0;
+
+    let r0 = q_measure(qs[0]);
+    let r1 = q_measure(qs[1]);
+    let r2 = q_measure(qs[2]);
+    let r3 = q_measure(qs[3]);
+    let r4 = q_measure(qs[4]);
+    let r5 = q_measure(qs[5]);
+    let r6 = q_measure(qs[6]);
+    let r7 = q_measure(qs[7]);
+
+    if q_read(r0) {
+        value = value | 1;
+    }
+    if q_read(r1) {
+        value = value | 2;
+    }
+    if q_read(r2) {
+        value = value | 4;
+    }
+    if q_read(r3) {
+        value = value | 8;
+    }
+    if q_read(r4) {
+        value = value | 16;
+    }
+    if q_read(r5) {
+        value = value | 32;
+    }
+    if q_read(r6) {
+        value = value | 64;
+    }
+    if q_read(r7) {
+        value = value | 128;
+    }
+
+    value
+}
+
+// Measurement leaves each qubit in the observed basis state. Flip every
+// measured 1 back to 0 so the same register can be reused for another shot.
+quant fn reset_measured_byte(qs: [qubit; 8], value: u8) {
+    if (value & 1) == 1 {
+        X(qs[0]);
+    }
+    if (value & 2) == 2 {
+        X(qs[1]);
+    }
+    if (value & 4) == 4 {
+        X(qs[2]);
+    }
+    if (value & 8) == 8 {
+        X(qs[3]);
+    }
+    if (value & 16) == 16 {
+        X(qs[4]);
+    }
+    if (value & 32) == 32 {
+        X(qs[5]);
+    }
+    if (value & 64) == 64 {
+        X(qs[6]);
+    }
+    if (value & 128) == 128 {
+        X(qs[7]);
+    }
+}
+
+fn main() i32 {
+    let shots = 1_000;
+    let zeros = 0;
+    let ones = 0;
+    let unexpected = 0;
+
+    quant {
+        let qs: [qubit; 8] = [
+            qubit(), qubit(), qubit(), qubit(),
+            qubit(), qubit(), qubit(), qubit(),
+        ];
+
+        for shot in 0..shots {
+            prepare_biased_cat8(qs);
+            let value: u8 = measure_qubits_as_byte(qs);
+
+            if value == 0 {
+                zeros += 1;
+            }
+            if value == 255 {
+                ones += 1;
+            }
+            if value != 0 {
+                if value != 255 {
+                    unexpected += 1;
+                }
+            }
+
+            reset_measured_byte(qs, value);
+        }
+    }
+
+    println("Biased 8-qubit cat-state statistics");
+    println("shots:");
+    println(shots);
+    println("byte 0:");
+    println(zeros);
+    println("byte 255:");
+    println(ones);
+    println("unexpected bytes:");
+    println(unexpected);
+
+    0
+}

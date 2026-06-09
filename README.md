@@ -815,6 +815,7 @@ Good places to start:
 | `examples/sample_extern_lib.nia` | C ABI exports and shared-library mode |
 | `examples/quantum/qubit_create.nia` | QIR gates, rotations, measurement, and result recording |
 | `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |
+| `examples/quantum/measure_qubits_as_byte.nia` | sample a biased 8-qubit cat state and collect byte statistics |
 | `examples/quantum/random_bit.nia` | measurement-driven classical control |
 | `examples/quantum/deutsch_jozsa_1bit.nia` | one-bit Deutsch-Jozsa circuits |
 | `examples/quantum/qft4.nia` | 4-qubit quantum Fourier transform over a qubit register |
