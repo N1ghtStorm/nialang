@@ -265,8 +265,8 @@ fn lex_multiline_comments_whitespace_and_identifiers() {
 }
 
 #[test]
-/// Documents current fallback behavior for unknown characters (`#` stops tokenization).
-fn lex_unknown_char_stops_token_stream() {
+/// `#` is a valid token (implicit type parameters).
+fn lex_hash_token() {
     let src = "let x = 1 # 2";
     let toks = collect(src);
     assert_eq!(
@@ -275,7 +275,9 @@ fn lex_unknown_char_stops_token_stream() {
             Token::Let,
             Token::Ident("x".into()),
             Token::Eq,
-            Token::Int(1)
+            Token::Int(1),
+            Token::Hash,
+            Token::Int(2),
         ]
     );
 }

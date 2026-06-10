@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, deptypes]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nialang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run compiler tests (tier 0..2 + quantum subset)
+        run: cargo test --lib

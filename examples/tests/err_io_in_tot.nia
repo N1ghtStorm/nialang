@@ -1,0 +1,13 @@
+fn io_helper() i32 {
+    println(1);
+    0
+}
+
+fn tot_helper() i32 {
+    io_helper();
+    0
+}
+
+fn main() i32 {
+    tot_helper()
+}

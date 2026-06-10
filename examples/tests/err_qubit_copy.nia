@@ -1,0 +1,9 @@
+fn main() i32 {
+    quant {
+        let a = qubit();
+        let b = a;
+        H(a);
+        H(b);
+    }
+    0
+}

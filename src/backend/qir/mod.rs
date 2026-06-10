@@ -10,13 +10,15 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast::{Block, EnumDef, Expr, FnDef, Stmt, StructDef, Ty, VectorDef};
+use crate::backend::legacy_typecheck::collect_sigs;
+use crate::frontend::resolve::ResolvedModule;
 use crate::nia_std::{
     GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS,
     GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX,
     GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z,
     MEASURE, PI, PRINTLN, QUBIT, READ, RECORD,
 };
-use crate::semantics::typecheck::FnSig;
+use crate::backend::legacy_typecheck::FnSig;
 
 const MAX_QUANT_FOR_UNROLL: i128 = 10_000;
 
@@ -130,6 +132,21 @@ struct QuantResources {
     const_ints: HashMap<String, i128>,
 }
 
+/// Emits QIR from a resolved surface module (new pipeline entry point).
+pub fn emit_from_resolved(resolved: &ResolvedModule) -> Result<String, String> {
+    let structs: Vec<StructDef> = resolved
+        .structs
+        .iter()
+        .filter(|s| !s.is_builtin)
+        .map(|s| s.def.clone())
+        .collect();
+    let enums: Vec<EnumDef> = resolved.enums.iter().map(|e| e.def.clone()).collect();
+    let vectors: Vec<VectorDef> = resolved.vectors.iter().map(|v| v.def.clone()).collect();
+    let fns: Vec<FnDef> = resolved.fns.iter().map(|f| f.def.clone()).collect();
+    let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns)?;
+    emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
+}
+
 /// Emits a QIR module for the validated AST.
 ///
 /// The signature mirrors [`crate::backend::codegen::emit_module`] so the driver
@@ -221,6 +238,12 @@ fn collect_stmt(
         }
         Stmt::Return(e) if !in_quant => {
             collect_expr(e, false, plan, resources, fns, fn_sigs, call_stack)
+        }
+        Stmt::Admit(expr) => {
+            if in_quant {
+                return Err("admit is not supported inside quant blocks".into());
+            }
+            collect_expr(expr, false, plan, resources, fns, fn_sigs, call_stack)
         }
         Stmt::If { cond, then_block } if !in_quant => {
             collect_expr(cond, false, plan, resources, fns, fn_sigs, call_stack)?;
@@ -752,7 +775,7 @@ fn collect_quant_fn_call(
     }
 
     let mut body_resources = resources.clone();
-    for (((param_name, _), param_ty), arg) in f.params.iter().zip(&sig.params).zip(args) {
+    for (((param_name, _, _), param_ty), arg) in f.params.iter().zip(&sig.params).zip(args) {
         match param_ty {
             Ty::Qubit => {
                 let id = qubit_arg_id(arg, resources)?;
@@ -1482,18 +1505,44 @@ fn const_i128_expr(expr: &Expr, resources: &QuantResources) -> Result<i128, Stri
 mod tests {
     use super::*;
     use crate::parser::{Parser, tokenize};
-    use crate::semantics::typecheck::collect_sigs;
+    use crate::backend::legacy_typecheck::collect_sigs;
 
     fn emit(src: &str) -> String {
-        let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().unwrap();
-        let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns).unwrap();
-        emit_module(&structs, &enums, &vectors, &fns, &fn_sigs).unwrap()
+        let module = Parser::new(tokenize(src)).parse_file().unwrap();
+        let (_, _, _, fn_sigs) = collect_sigs(
+            &module.structs,
+            &module.enums,
+            &module.vectors,
+            &module.fns,
+        )
+        .unwrap();
+        emit_module(
+            &module.structs,
+            &module.enums,
+            &module.vectors,
+            &module.fns,
+            &fn_sigs,
+        )
+        .unwrap()
     }
 
     fn emit_err(src: &str) -> String {
-        let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().unwrap();
-        let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns).unwrap();
-        emit_module(&structs, &enums, &vectors, &fns, &fn_sigs).expect_err("QIR emit error")
+        let module = Parser::new(tokenize(src)).parse_file().unwrap();
+        let (_, _, _, fn_sigs) = collect_sigs(
+            &module.structs,
+            &module.enums,
+            &module.vectors,
+            &module.fns,
+        )
+        .unwrap();
+        emit_module(
+            &module.structs,
+            &module.enums,
+            &module.vectors,
+            &module.fns,
+            &fn_sigs,
+        )
+        .expect_err("QIR emit error")
     }
 
     #[test]
@@ -1985,7 +2034,7 @@ fn main() i32 {
 
     #[test]
     fn qir_rejects_unsupported_quant_body() {
-        let (structs, enums, fns, vectors) = Parser::new(tokenize(
+        let module = Parser::new(tokenize(
             r#"
 fn main() i32 {
     quant {
@@ -1997,8 +2046,20 @@ fn main() i32 {
         ))
         .parse_file()
         .unwrap();
-        let (_, _, _, fn_sigs) = collect_sigs(&structs, &enums, &vectors, &fns).unwrap();
-        let err = emit_module(&structs, &enums, &vectors, &fns, &fn_sigs)
+        let (_, _, _, fn_sigs) = collect_sigs(
+            &module.structs,
+            &module.enums,
+            &module.vectors,
+            &module.fns,
+        )
+        .unwrap();
+        let err = emit_module(
+            &module.structs,
+            &module.enums,
+            &module.vectors,
+            &module.fns,
+            &fn_sigs,
+        )
             .expect_err("unsupported quantum body");
         assert!(err.contains("`let r = q_measure(q);`"), "{err}");
         assert!(err.contains("`let b = q_read(r);`"), "{err}");
@@ -2159,6 +2220,13 @@ fn main() i32 {
 "#,
         );
         assert!(err.contains("index out of bounds"), "{err}");
+    }
+
+    #[test]
+    fn qir_lowers_qubit_create_fixture() {
+        let src = include_str!("../../../examples/quantum/qubit_create.nia");
+        let ir = emit(src);
+        assert!(ir.contains("call void @__quantum__qis__h__body"), "IR:\n{ir}");
     }
 
     #[test]

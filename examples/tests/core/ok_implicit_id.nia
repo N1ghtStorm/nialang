@@ -1,0 +1,7 @@
+fn id(#a: Type, x: a) a {
+    x
+}
+
+fn main() i32 {
+    id(42)
+}

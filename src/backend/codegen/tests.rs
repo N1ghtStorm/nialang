@@ -1,9 +1,11 @@
 use super::*;
 use crate::parser::{Parser, tokenize};
-use crate::semantics::typecheck::{check_fn, collect_sigs};
+use crate::backend::legacy_typecheck::{check_fn, collect_sigs};
 
 fn emit(src: &str) -> String {
-    let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().expect("parse");
+    let module = Parser::new(tokenize(src)).parse_file().expect("parse");
+    let (structs, enums, fns, vectors) =
+        (module.structs, module.enums, module.fns, module.vectors);
     let (struct_map, enum_map, vector_map, fn_sigs) =
         collect_sigs(&structs, &enums, &vectors, &fns).expect("sigs");
     for f in &fns {
@@ -13,7 +15,9 @@ fn emit(src: &str) -> String {
 }
 
 fn emit_qir_runner(src: &str) -> String {
-    let (structs, enums, fns, vectors) = Parser::new(tokenize(src)).parse_file().expect("parse");
+    let module = Parser::new(tokenize(src)).parse_file().expect("parse");
+    let (structs, enums, fns, vectors) =
+        (module.structs, module.enums, module.fns, module.vectors);
     let (struct_map, enum_map, vector_map, fn_sigs) =
         collect_sigs(&structs, &enums, &vectors, &fns).expect("sigs");
     for f in &fns {

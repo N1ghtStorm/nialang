@@ -1,0 +1,10 @@
+fn main() i32 {
+    quant {
+        let q = qubit();
+        H(q);
+        let r = q_measure(q);
+        q_record(r);
+        H(q);
+    }
+    0
+}

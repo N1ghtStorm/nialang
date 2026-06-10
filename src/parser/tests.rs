@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::surface::{Expr, Stmt, SurfaceTy};
 
 /// Shared parser assertion helper for fixtures and inline snippets.
 fn parse_ok(src: &str) {
@@ -92,7 +93,8 @@ fn main() i32 {
 }
 "#;
     let toks = tokenize(src);
-    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    let module = Parser::new(toks).parse_file().expect("parse");
+    let fns = &module.fns;
     assert!(fns[0].is_extern);
     assert_eq!(fns[0].name, "helper");
     assert!(!fns[1].is_extern);
@@ -116,7 +118,8 @@ fn main() i32 {
 }
 "#;
     let toks = tokenize(src);
-    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    let module = Parser::new(toks).parse_file().expect("parse");
+    let fns = &module.fns;
     assert!(fns[0].is_quantum);
     assert!(!fns[0].is_extern);
     assert_eq!(fns[0].name, "prepare");
@@ -300,11 +303,12 @@ fn main(v: i32<6>) i32 {
 }
 "#;
     let toks = tokenize(src);
-    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
-    assert_eq!(fns[0].params[0].1, Ty::AnonVector(Box::new(Ty::I32), 6));
+    let module = Parser::new(toks).parse_file().expect("parse");
+    let fns = &module.fns;
+    assert_eq!(fns[0].params[0].1, SurfaceTy::AnonVector(Box::new(SurfaceTy::I32), 6));
     match &fns[0].body.stmts[0] {
         Stmt::Let { ty: Some(ty), .. } => {
-            assert_eq!(ty, &Ty::AnonVector(Box::new(Ty::F64), 2));
+            assert_eq!(ty, &SurfaceTy::AnonVector(Box::new(SurfaceTy::F64), 2));
         }
         other => panic!("expected typed let, got {other:?}"),
     }
@@ -319,11 +323,12 @@ fn main(v: f64<>) i32 {
 }
 "#;
     let toks = tokenize(src);
-    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
-    assert_eq!(fns[0].params[0].1, Ty::HeapVector(Box::new(Ty::F64)));
+    let module = Parser::new(toks).parse_file().expect("parse");
+    let fns = &module.fns;
+    assert_eq!(fns[0].params[0].1, SurfaceTy::HeapVector(Box::new(SurfaceTy::F64)));
     match &fns[0].body.stmts[0] {
         Stmt::Let { ty: Some(ty), .. } => {
-            assert_eq!(ty, &Ty::HeapVector(Box::new(Ty::I32)));
+            assert_eq!(ty, &SurfaceTy::HeapVector(Box::new(SurfaceTy::I32)));
         }
         other => panic!("expected typed let, got {other:?}"),
     }
@@ -340,16 +345,17 @@ fn main() i32 {
 }
 "#;
     let toks = tokenize(src);
-    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    let module = Parser::new(toks).parse_file().expect("parse");
+    let fns = &module.fns;
     match &fns[0].body.stmts[0] {
         Stmt::Let {
             ty: Some(ty), init, ..
         } => {
-            assert_eq!(ty, &Ty::List(Box::new(Ty::U8)));
+            assert_eq!(ty, &SurfaceTy::List(Box::new(SurfaceTy::U8)));
             assert!(matches!(
                 init,
                 Expr::GenericCall { name, ty_args, args }
-                    if name == "list_new" && ty_args == &vec![Ty::U8] && args.is_empty()
+                    if name == "list_new" && ty_args == &vec![SurfaceTy::U8] && args.is_empty()
             ));
         }
         other => panic!("expected typed list let, got {other:?}"),

@@ -20,6 +20,11 @@ pub enum Token {
     In,
     Match,
     Return,
+    Decreases,
+    Partial,
+    Requires,
+    Ensures,
+    Admit,
     Ident(String),
     Int(i128),
     Float(f64),
@@ -54,6 +59,7 @@ pub enum Token {
     Caret,
     CaretEq,
     Bang,
+    Hash,
     Tilde,
     Shl,
     ShlEq,
@@ -275,6 +281,7 @@ impl<'a> Lexer<'a> {
                 Token::NotEq
             }
             '!' => Token::Bang,
+            '#' => Token::Hash,
             '<' if matches!(self.src.peek(), Some('=')) => {
                 self.src.next();
                 Token::Le
@@ -358,6 +365,11 @@ impl<'a> Lexer<'a> {
                     "in" => Token::In,
                     "match" => Token::Match,
                     "return" => Token::Return,
+                    "decreases" => Token::Decreases,
+                    "partial" => Token::Partial,
+                    "requires" => Token::Requires,
+                    "ensures" => Token::Ensures,
+                    "admit" => Token::Admit,
                     "true" => Token::Bool(true),
                     "false" => Token::Bool(false),
                     "i8" => Token::TyI8,

@@ -100,6 +100,47 @@ pub fn is_reserved_type_name(name: &str) -> bool {
     )
 }
 
+/// Returns true when `name` refers to a quantum primitive that requires the QIR backend.
+pub fn is_quantum_builtin_fn(name: &str) -> bool {
+    matches!(
+        name,
+        QUBIT
+            | RESULT
+            | MEASURE
+            | READ
+            | RECORD
+            | GATE_I
+            | GATE_H
+            | GATE_X
+            | GATE_Y
+            | GATE_Z
+            | GATE_S
+            | GATE_SDG
+            | GATE_T
+            | GATE_TDG
+            | GATE_CNOT
+            | GATE_CZ
+            | GATE_SWAP
+            | GATE_CH
+            | GATE_CY
+            | GATE_CS
+            | GATE_CSDG
+            | GATE_CT
+            | GATE_CTDG
+            | GATE_CCNOT
+            | GATE_CCZ
+            | GATE_CSWAP
+            | GATE_RX
+            | GATE_RY
+            | GATE_RZ
+            | GATE_R1
+            | GATE_CRX
+            | GATE_CRY
+            | GATE_CRZ
+            | GATE_CR1
+    )
+}
+
 pub fn is_reserved_fn_name(name: &str) -> bool {
     matches!(
         name,

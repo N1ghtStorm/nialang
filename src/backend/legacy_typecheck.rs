@@ -1,3 +1,5 @@
+//! Legacy surface typechecker retained for the QIR / classical legacy codegen path.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
@@ -23,6 +25,7 @@ const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
 /// We collect `FnSig` for every function before checking bodies so calls can be
 /// validated in one pass (arity + argument types + return type), including
 /// forward references and recursive calls.
+#[derive(Debug, Clone)]
 pub struct FnSig {
     pub params: Vec<Ty>,
     pub ret: Option<Ty>,
@@ -92,6 +95,7 @@ fn normalize_ty(
             }
             Ok(Ty::Matrix(Box::new(norm), *shape))
         }
+        Ty::Refined { base, pred: _ } => normalize_ty(base, structs, enums, vectors),
         other => Ok(other.clone()),
     }
 }
@@ -301,10 +305,10 @@ pub fn collect_sigs(
         let params = f
             .params
             .iter()
-            .map(|(_, t)| normalize_ty(t, &struct_map, &enum_map, &vector_map))
+            .map(|(_, t, _)| normalize_ty(t, &struct_map, &enum_map, &vector_map))
             .collect::<Result<Vec<_>, _>>()?;
         if !f.is_quantum {
-            for ((pname, _), pty) in f.params.iter().zip(&params) {
+            for ((pname, _, _), pty) in f.params.iter().zip(&params) {
                 reject_quantum_ty(pty, &format!("function `{}` parameter `{pname}`", f.name))?;
             }
         }
@@ -370,7 +374,7 @@ pub fn check_fn(
     } else {
         HashMap::new()
     };
-    for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
+    for ((pname, _, _), pty) in f.params.iter().zip(&sig.params) {
         if env.contains_key(pname) {
             return Err(format!(
                 "duplicate parameter `{pname}` in function `{}`",
@@ -509,7 +513,7 @@ fn is_c_abi_ty(t: &Ty) -> bool {
 }
 
 fn check_extern_c_abi(f: &FnDef, sig: &FnSig) -> Result<(), String> {
-    for ((name, _), ty) in f.params.iter().zip(&sig.params) {
+    for ((name, _, _), ty) in f.params.iter().zip(&sig.params) {
         if !is_c_abi_ty(ty) {
             return Err(format!(
                 "extern fn `{}` parameter `{name}` has non-C-ABI type {ty:?}",
@@ -2829,7 +2833,7 @@ fn stmt_contains_return(st: &Stmt) -> bool {
         Stmt::For { body, .. } => block_contains_return(body),
         Stmt::Quant { body } => block_contains_return(body),
         Stmt::Gpu { body } => block_contains_return(body),
-        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Break => false,
+        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Admit(_) | Stmt::Break => false,
     }
 }
 
@@ -2842,7 +2846,7 @@ fn stmt_has_break(st: &Stmt) -> bool {
         | Stmt::For { body, .. }
         | Stmt::Quant { body }
         | Stmt::Gpu { body } => block_has_break(body),
-        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Return(_) => false,
+        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Admit(_) | Stmt::Return(_) => false,
     }
 }
 
@@ -3160,6 +3164,9 @@ fn check_stmt(
                 )?;
             }
         }
+        Stmt::Admit(expr) => {
+            infer_expr(expr, env, struct_fields, enums, vectors, fn_sigs, Some(&Ty::Bool))?;
+        }
         Stmt::Gpu { body } => {
             let mut body_env = env.clone();
             for st in &body.stmts {
@@ -3190,6 +3197,3 @@ fn check_stmt(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

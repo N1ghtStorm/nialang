@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
+use crate::frontend::surface::strip_refinement;
 use crate::ast::{
     Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
     method_symbol,
@@ -16,7 +17,7 @@ use crate::nia_std::{
     TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
     VECTOR_REFCOUNT, VECTOR_SET,
 };
-use crate::semantics::typecheck::FnSig;
+use crate::backend::legacy_typecheck::FnSig;
 
 /// Walks all functions and collects UTF-8 string literal payloads for module-level globals.
 fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
@@ -141,6 +142,7 @@ fn collect_string_literals_stmt(st: &Stmt, out: &mut BTreeSet<String>) {
         }
         Stmt::Quant { body } => collect_string_literals_block(body, out),
         Stmt::Gpu { body } => collect_string_literals_block(body, out),
+        Stmt::Admit(expr) => collect_string_literals_expr(expr, out),
         Stmt::Break => {}
     }
 }
@@ -482,6 +484,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::List(inner) => format!("List[{}]", ty_print_label(inner)),
         Ty::Matrix(inner, _) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
         Ty::Matrix(inner, _) => format!("Matrix<{}>", ty_print_label(inner)),
+        Ty::Refined { base, .. } => ty_print_label(base),
     }
 }
 
@@ -659,6 +662,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::HeapVector(_) => "ptr".into(),
         Ty::List(_) => "ptr".into(),
         Ty::Matrix(_, _) => "ptr".into(),
+        Ty::Refined { base, .. } => llvm_ty(base, _structs),
     }
 }
 
@@ -673,6 +677,7 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         Ty::HeapVector(inner) => Ty::HeapVector(Box::new(normalize_codegen_ty(inner))),
         Ty::List(inner) => Ty::List(Box::new(normalize_codegen_ty(inner))),
         Ty::Matrix(inner, shape) => Ty::Matrix(Box::new(normalize_codegen_ty(inner)), *shape),
+        Ty::Refined { base, .. } => normalize_codegen_ty(base),
         other => other.clone(),
     }
 }
@@ -1675,6 +1680,7 @@ impl<'a> Gen<'a> {
             | Ty::HeapVector(_)
             | Ty::List(_)
             | Ty::Matrix(_, _) => unreachable!("typechecked"),
+            Ty::Refined { base, .. } => self.emit_print_primitive(base, v, newline),
         }
     }
 
@@ -1788,6 +1794,7 @@ impl<'a> Gen<'a> {
             | Ty::HeapVector(_)
             | Ty::List(_)
             | Ty::Matrix(_, _) => unreachable!("typechecked"),
+            Ty::Refined { base, .. } => self.emit_qir_print_primitive(base, v, _newline),
         }
     }
 
@@ -5263,7 +5270,7 @@ impl<'a> Gen<'a> {
             Some(t) => llvm_ty(t, self.structs),
         };
         let mut params = Vec::new();
-        for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
+        for ((pname, _, _), pty) in f.params.iter().zip(&sig.params) {
             let ll = llvm_ty(pty, self.structs);
             let ps = sanitize(pname);
             params.push(format!("{ll} %{ps}"));
@@ -5287,7 +5294,7 @@ impl<'a> Gen<'a> {
         // Allocate and initialize stack slots for all parameters to unify load/store path
         // with local variables.
         let mut local_ptr: HashMap<String, (Ty, String)> = HashMap::new();
-        for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
+        for ((pname, _, _), pty) in f.params.iter().zip(&sig.params) {
             let ps = sanitize(pname);
             let ptr = format!("%{ps}.addr");
             writeln!(
@@ -5357,6 +5364,9 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
                 locals.insert(name.clone(), (t, ptr));
+            }
+            Stmt::Admit(expr) => {
+                self.emit_expr(expr, locals, None);
             }
             Stmt::Expr(e) => {
                 self.emit_expr(e, locals, None);
@@ -5592,7 +5602,8 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
-                    | Ty::Matrix(_, _) => unreachable!("typechecked for range"),
+                    | Ty::Matrix(_, _)
+                    | Ty::Refined { .. } => unreachable!("typechecked for range"),
                 }
                 writeln!(self.out, "  br label %{}", header).unwrap();
 
@@ -5649,7 +5660,7 @@ impl<'a> Gen<'a> {
         hint: Option<&Ty>,
     ) -> (Ty, String) {
         match e {
-            Expr::Int(n) => match hint {
+            Expr::Int(n) => match hint.map(|h| strip_refinement(h).clone()).as_ref() {
                 Some(Ty::F16 | Ty::F32 | Ty::F64) => {
                     let tmp = self.fresh();
                     let t = hint.unwrap().clone();
@@ -5687,9 +5698,8 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Result)
                 | Some(Ty::String)
                 | Some(Ty::Array(_, _))
-                | Some(Ty::Matrix(_, _)) => {
-                    unreachable!("typechecked")
-                }
+                | Some(Ty::Matrix(_, _))
+                | Some(Ty::Refined { .. }) => unreachable!("typechecked"),
             },
             Expr::Float(v) => {
                 let lit = format!("{:.17e}", v);
@@ -5782,9 +5792,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
-                        unreachable!("typechecked neg")
-                    }
+                    | Ty::Matrix(_, _)
+                    | Ty::Refined { .. } => unreachable!("typechecked neg"),
                 }
                 (t, format!("%{tmp}"))
             }
@@ -5853,9 +5862,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
-                        unreachable!("add on non-numeric")
-                    }
+                    | Ty::Matrix(_, _)
+                    | Ty::Refined { .. } => unreachable!("add on non-numeric"),
                 }
                 (tl, format!("%{tmp}"))
             }
@@ -5911,9 +5919,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
-                        unreachable!("sub on non-numeric")
-                    }
+                    | Ty::Matrix(_, _)
+                    | Ty::Refined { .. } => unreachable!("sub on non-numeric"),
                 }
                 (tl, format!("%{tmp}"))
             }
@@ -6033,9 +6040,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
-                        unreachable!("mul on non-numeric")
-                    }
+                    | Ty::Matrix(_, _)
+                    | Ty::Refined { .. } => unreachable!("mul on non-numeric"),
                 }
                 (tl, format!("%{tmp}"))
             }
@@ -6177,9 +6183,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
-                        unreachable!("div on non-numeric")
-                    }
+                    | Ty::Matrix(_, _)
+                    | Ty::Refined { .. } => unreachable!("div on non-numeric"),
                 }
                 (tl, format!("%{tmp}"))
             }

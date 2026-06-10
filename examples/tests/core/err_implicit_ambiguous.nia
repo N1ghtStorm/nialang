@@ -1,0 +1,7 @@
+fn pair(#a: Type, x: a, y: a) i32 {
+    0
+}
+
+fn main() i32 {
+    pair(1, true)
+}

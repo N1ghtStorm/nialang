@@ -1,0 +1,4 @@
+fn main() i32 {
+    append(Cons(1, Cons(2, Nil)), Cons(3, Nil));
+    0
+}

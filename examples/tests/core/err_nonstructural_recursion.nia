@@ -1,0 +1,4 @@
+fn spin(x: i32) i32 decreases x {
+    spin(x);
+    0
+}

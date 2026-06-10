@@ -2,10 +2,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::collections::HashSet;
+
 use crate::ast::{Block, Expr, FnDef, Stmt};
-use crate::backend::codegen;
+use crate::backend::llvm;
+use crate::elab::{check_elaborated, elaborate_module, format_elaborated_module};
+use crate::verify::{collect_vcs, discharge_vcs, format_vcs};
+use crate::erase;
+use crate::hir::{format_classical_module, lower_classical, lower_quantum, emit_qir};
+use crate::frontend::resolve::{format_resolved_module, resolve_module, ResolvedModule};
+use crate::frontend::surface::SurfaceModule;
 use crate::frontend::parser::{Parser, tokenize};
-use crate::semantics::typecheck::{check_fn, collect_sigs};
+use crate::nia_std::is_quantum_builtin_fn;
 
 /// Which backend should consume the validated AST and emit LLVM IR text.
 ///
@@ -23,32 +31,14 @@ impl Default for Backend {
     }
 }
 
-/// Compiles nialang source text into one textual LLVM IR module.
-///
-/// ## What this function guarantees
-/// - Returns IR only after the source passes *all* frontend and semantic checks.
-/// - Fails fast on the first error and returns a human-readable message.
-/// - Produces backend input that is already type-consistent.
-///
-/// ## Internal stages (in strict order)
-/// 1. **Lexing**: converts text into tokens.
-/// 2. **Parsing**: builds AST (`structs`, `fns`) from token stream.
-/// 3. **Signature collection**: builds global symbol tables and validates duplicates.
-/// 4. **Type checking**: validates each function body against collected signatures.
-/// 5. **Code generation**: lowers validated AST to LLVM IR text.
-///
-/// Each stage depends on previous output, so failures are intentionally not aggregated.
-pub fn compile_to_ll(src: &str) -> Result<String, String> {
-    compile_to_ll_with(src, Backend::Default)
-}
+/// Parsed surface module produced by the lexer and parser.
+pub type ParsedModule = SurfaceModule;
 
-/// Same as [`compile_to_ll`] but lets the caller pick which backend consumes
-/// the validated AST.
-///
-/// Frontend and semantic stages always run unchanged so that diagnostics
-/// behave identically across backends; only the final lowering step is
-/// dispatched.
-pub fn compile_to_ll_with(src: &str, backend: Backend) -> Result<String, String> {
+/// Surface module with stable top-level `DefId`s assigned.
+pub type ResolvedParsedModule = ResolvedModule;
+
+/// Lexes and parses source text into a surface AST module.
+pub fn parse_module(src: &str) -> Result<ParsedModule, String> {
     if let Some((line, column, ch)) = find_unsupported_char(src) {
         return Err(format_diagnostic_at_line(
             src,
@@ -59,76 +49,185 @@ pub fn compile_to_ll_with(src: &str, backend: Backend) -> Result<String, String>
     }
 
     let tokens = tokenize(src);
-    let (structs, enums, fns, vectors) = Parser::new(tokens)
+    Parser::new(tokens)
         .parse_file()
-        .map_err(|e| format_diagnostic(src, "parse error", None, &e))?;
-    let (struct_map, enum_map, vector_map, fn_sigs) =
-        collect_sigs(&structs, &enums, &vectors, &fns)
-            .map_err(|e| format_diagnostic(src, "semantic error", None, &e))?;
-    for f in &fns {
-        check_fn(f, &struct_map, &enum_map, &vector_map, &fn_sigs)
-            .map_err(|e| format_diagnostic(src, "type error", Some(&f.name), &e))?;
+        .map_err(|e| format_diagnostic(src, "parse error", None, &e))
+}
+
+/// Assigns stable ids to top-level items in a parsed module.
+pub fn resolve_parsed_module(module: ParsedModule) -> Result<ResolvedParsedModule, String> {
+    resolve_module(module)
+}
+
+/// Pretty-prints resolved top-level symbols for `--resolve-only` debugging.
+pub fn format_resolved_ast(module: &ResolvedParsedModule) -> String {
+    format_resolved_module(module)
+}
+
+/// Lowers a resolved module to Core and validates it with the Core checker.
+pub fn elaborate_resolved_module(
+    module: &ResolvedParsedModule,
+) -> Result<crate::elab::ElaboratedModule, String> {
+    let elaborated = elaborate_module(module)?;
+    check_elaborated(&elaborated)?;
+    Ok(elaborated)
+}
+
+/// Pretty-prints elaborated Core terms for `--elab-only` debugging.
+pub fn format_elaborated_ast(module: &crate::elab::ElaboratedModule) -> String {
+    format_elaborated_module(module)
+}
+
+/// Pretty-prints verification conditions for `--dump-vc` debugging.
+pub fn format_verification_conditions(module: &crate::elab::ElaboratedModule) -> String {
+    let mut vcs = collect_vcs(module);
+    if let Err(e) = discharge_vcs(module, &mut vcs) {
+        vcs.warnings.push(e);
     }
-    let has_quantum = fns.iter().any(fn_contains_quantum);
-    if backend == Backend::Default && has_quantum {
-        return Err(format_diagnostic(
-            src,
-            "backend error",
-            None,
-            "quantum syntax requires the QIR backend; pass `-q`",
-        ));
+    format_vcs(&vcs)
+}
+
+/// Parse → resolve → elab → Core check → erase → HIR → LLVM.
+pub fn compile_new_to_ll(src: &str) -> Result<String, String> {
+    let module = parse_module(src)?;
+    let resolved = resolve_parsed_module(module)?;
+    if module_contains_quantum(&resolved) {
+        return Err(
+            "quantum syntax requires the QIR backend; pass `-q`".into(),
+        );
     }
-    Ok(match backend {
-        Backend::Default => codegen::emit_module(&structs, &enums, &vectors, &fns, &fn_sigs),
-        Backend::Qir => {
-            codegen::emit_module_for_qir_runner(&structs, &enums, &vectors, &fns, &fn_sigs)
+    let elaborated = elaborate_resolved_module(&resolved)?;
+    let erased = erase::erase_module(&elaborated)?;
+    let classical = lower_classical(resolved, erased);
+    Ok(llvm::emit_module(&classical))
+}
+
+/// Parse → resolve → elab → Core check → QuantumHir → QIR.
+pub fn compile_new_to_qir(src: &str) -> Result<String, String> {
+    let module = parse_module(src)?;
+    let resolved = resolve_parsed_module(module)?;
+    let _elaborated = elaborate_resolved_module(&resolved)?;
+    let quantum = lower_quantum(resolved);
+    emit_qir(&quantum)
+}
+
+/// Parse → resolve → elab → erase → print classical HIR.
+pub fn format_hir_ast(src: &str) -> Result<String, String> {
+    let module = parse_module(src)?;
+    let resolved = resolve_parsed_module(module)?;
+    let elaborated = elaborate_resolved_module(&resolved)?;
+    let erased = erase::erase_module(&elaborated)?;
+    let classical = lower_classical(resolved, erased);
+    Ok(format_classical_module(&classical))
+}
+
+/// Pretty-prints the parsed surface AST for `--core-only` debugging.
+pub fn format_surface_ast(module: &ParsedModule) -> String {
+    let mut out = String::from(";; nialang surface ast\n");
+    if !module.structs.is_empty() {
+        out.push_str(&format!("\n;; structs ({})\n", module.structs.len()));
+        for item in &module.structs {
+            out.push_str(&format!("{item:#?}\n"));
         }
-    })
+    }
+    if !module.enums.is_empty() {
+        out.push_str(&format!("\n;; enums ({})\n", module.enums.len()));
+        for item in &module.enums {
+            out.push_str(&format!("{item:#?}\n"));
+        }
+    }
+    if !module.vectors.is_empty() {
+        out.push_str(&format!("\n;; vectors ({})\n", module.vectors.len()));
+        for item in &module.vectors {
+            out.push_str(&format!("{item:#?}\n"));
+        }
+    }
+    if !module.fns.is_empty() {
+        out.push_str(&format!("\n;; functions ({})\n", module.fns.len()));
+        for item in &module.fns {
+            out.push_str(&format!("{item:#?}\n"));
+        }
+    }
+    out
 }
 
-fn fn_contains_quantum(f: &FnDef) -> bool {
-    f.is_quantum || block_contains_quantum(&f.body)
+/// Compiles nialang source text into LLVM IR via the new pipeline
+/// (parse → resolve → elab → Core check → erase → LLVM).
+pub fn compile_to_ll(src: &str) -> Result<String, String> {
+    compile_to_ll_with(src, Backend::Default)
 }
 
-fn block_contains_quantum(block: &Block) -> bool {
-    block.stmts.iter().any(stmt_contains_quantum)
-        || block.tail.as_ref().is_some_and(expr_contains_quantum)
+/// Dispatches to the new classical pipeline or the legacy QIR pipeline.
+pub fn compile_to_ll_with(src: &str, backend: Backend) -> Result<String, String> {
+    match backend {
+        Backend::Default => compile_new_to_ll(src),
+        Backend::Qir => compile_new_to_qir(src),
+    }
 }
 
-fn stmt_contains_quantum(st: &Stmt) -> bool {
+fn module_contains_quantum(resolved: &ResolvedModule) -> bool {
+    let quantum_fns: HashSet<&str> = resolved
+        .fns
+        .iter()
+        .filter(|f| f.def.is_quantum)
+        .map(|f| f.name.as_str())
+        .collect();
+    resolved
+        .fns
+        .iter()
+        .any(|f| fn_contains_quantum(&f.def, &quantum_fns))
+}
+
+fn fn_contains_quantum(f: &FnDef, quantum_fns: &HashSet<&str>) -> bool {
+    f.is_quantum || block_contains_quantum(&f.body, quantum_fns)
+}
+
+fn block_contains_quantum(block: &Block, quantum_fns: &HashSet<&str>) -> bool {
+    block.stmts.iter().any(|st| stmt_contains_quantum(st, quantum_fns))
+        || block
+            .tail
+            .as_ref()
+            .is_some_and(|e| expr_contains_quantum(e, quantum_fns))
+}
+
+fn stmt_contains_quantum(st: &Stmt, quantum_fns: &HashSet<&str>) -> bool {
     match st {
         Stmt::Let { init, .. } | Stmt::Expr(init) | Stmt::Return(init) => {
-            expr_contains_quantum(init)
+            expr_contains_quantum(init, quantum_fns)
         }
         Stmt::Assign { target, value } => {
-            expr_contains_quantum(target) || expr_contains_quantum(value)
+            expr_contains_quantum(target, quantum_fns) || expr_contains_quantum(value, quantum_fns)
         }
         Stmt::If { cond, then_block } => {
-            expr_contains_quantum(cond) || block_contains_quantum(then_block)
+            expr_contains_quantum(cond, quantum_fns) || block_contains_quantum(then_block, quantum_fns)
         }
-        Stmt::While { cond, body } => expr_contains_quantum(cond) || block_contains_quantum(body),
-        Stmt::Loop { body } | Stmt::Gpu { body } => block_contains_quantum(body),
+        Stmt::While { cond, body } => {
+            expr_contains_quantum(cond, quantum_fns) || block_contains_quantum(body, quantum_fns)
+        }
+        Stmt::Loop { body } | Stmt::Gpu { body } | Stmt::Quant { body } => {
+            block_contains_quantum(body, quantum_fns)
+        }
         Stmt::For {
             start, end, body, ..
         } => {
-            expr_contains_quantum(start)
-                || expr_contains_quantum(end)
-                || block_contains_quantum(body)
+            expr_contains_quantum(start, quantum_fns)
+                || expr_contains_quantum(end, quantum_fns)
+                || block_contains_quantum(body, quantum_fns)
         }
-        Stmt::Quant { .. } => true,
+        Stmt::Admit(_) => false,
         Stmt::Break => false,
     }
 }
 
-fn expr_contains_quantum(e: &Expr) -> bool {
+fn expr_contains_quantum(e: &Expr, quantum_fns: &HashSet<&str>) -> bool {
     match e {
-        Expr::Quant { .. } => true,
+        Expr::Quant { body } => block_contains_quantum(body, quantum_fns),
         Expr::Neg(inner)
         | Expr::Not(inner)
         | Expr::BitNot(inner)
         | Expr::AddrOf(inner)
         | Expr::Deref(inner)
-        | Expr::Field(inner, _) => expr_contains_quantum(inner),
+        | Expr::Field(inner, _) => expr_contains_quantum(inner, quantum_fns),
         Expr::Add(l, r)
         | Expr::Sub(l, r)
         | Expr::Mul(l, r)
@@ -146,23 +245,38 @@ fn expr_contains_quantum(e: &Expr) -> bool {
         | Expr::Le(l, r)
         | Expr::Gt(l, r)
         | Expr::Ge(l, r)
-        | Expr::Index(l, r) => expr_contains_quantum(l) || expr_contains_quantum(r),
-        Expr::Call { args, .. } | Expr::GenericCall { args, .. } => {
-            args.iter().any(expr_contains_quantum)
+        | Expr::Index(l, r) => {
+            expr_contains_quantum(l, quantum_fns) || expr_contains_quantum(r, quantum_fns)
+        }
+        Expr::Call { name, args, .. } => {
+            is_quantum_call(name, quantum_fns)
+                || args.iter().any(|a| expr_contains_quantum(a, quantum_fns))
+        }
+        Expr::GenericCall { name, args, .. } => {
+            is_quantum_call(name, quantum_fns)
+                || args.iter().any(|a| expr_contains_quantum(a, quantum_fns))
         }
         Expr::MethodCall { receiver, args, .. } => {
-            expr_contains_quantum(receiver) || args.iter().any(expr_contains_quantum)
+            expr_contains_quantum(receiver, quantum_fns)
+                || args.iter().any(|a| expr_contains_quantum(a, quantum_fns))
         }
         Expr::StructLit { fields, .. }
         | Expr::VectorLit { fields, .. }
-        | Expr::EnumStruct { fields, .. } => fields.iter().any(|(_, e)| expr_contains_quantum(e)),
+        | Expr::EnumStruct { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| expr_contains_quantum(e, quantum_fns)),
         Expr::AnonVectorLit(elems)
         | Expr::ArrayLit(elems)
-        | Expr::EnumTuple { args: elems, .. } => elems.iter().any(expr_contains_quantum),
-        Expr::Match { scrutinee, arms } => {
-            expr_contains_quantum(scrutinee) || arms.iter().any(|(_, e)| expr_contains_quantum(e))
+        | Expr::EnumTuple { args: elems, .. } => {
+            elems.iter().any(|e| expr_contains_quantum(e, quantum_fns))
         }
-        Expr::Gpu { body } => block_contains_quantum(body),
+        Expr::Match { scrutinee, arms } => {
+            expr_contains_quantum(scrutinee, quantum_fns)
+                || arms
+                    .iter()
+                    .any(|(_, e)| expr_contains_quantum(e, quantum_fns))
+        }
+        Expr::Gpu { body } => block_contains_quantum(body, quantum_fns),
         Expr::Int(_)
         | Expr::Float(_)
         | Expr::Bool(_)
@@ -170,6 +284,22 @@ fn expr_contains_quantum(e: &Expr) -> bool {
         | Expr::Ident(_)
         | Expr::EnumVariant { .. } => false,
     }
+}
+
+fn is_quantum_call(name: &str, quantum_fns: &HashSet<&str>) -> bool {
+    is_quantum_builtin_fn(name) || quantum_fns.contains(name)
+}
+
+pub(crate) fn format_elab_diagnostic(src: &str, message: &str) -> String {
+    let function = message
+        .strip_prefix("in `")
+        .and_then(|rest| rest.split('`').next());
+    let detail = message
+        .strip_prefix("in `")
+        .and_then(|rest| rest.split_once("`: "))
+        .map(|(_, detail)| detail)
+        .unwrap_or(message);
+    format_diagnostic(src, "error", function, detail)
 }
 
 fn format_diagnostic(src: &str, kind: &str, function: Option<&str>, message: &str) -> String {
@@ -280,6 +410,7 @@ fn is_supported_source_char(ch: char) -> bool {
                 | '.'
                 | '='
                 | '!'
+                | '#'
                 | '<'
                 | '>'
                 | '"'
@@ -309,6 +440,9 @@ fn find_problem_line(src: &str, message: &str, function: Option<&str>) -> Option
         let in_function = function_bounds
             .map(|(start, end)| (start..=end).contains(&line_no))
             .unwrap_or(false);
+        if function_bounds.is_some() && !in_function {
+            continue;
+        }
         let mut score = usize::from(in_function) * 3;
 
         for term in &terms {
@@ -317,6 +451,13 @@ fn find_problem_line(src: &str, message: &str, function: Option<&str>) -> Option
             }
         }
         score += structural_score(message, trimmed);
+        if in_function && trimmed.starts_with("fn ") {
+            let penalty = if message.contains("argument") { 10 } else { 5 };
+            score = score.saturating_sub(penalty);
+        }
+        if message.contains("argument") && trimmed.contains('(') {
+            score += 8;
+        }
 
         if score == 0 {
             continue;
@@ -558,9 +699,50 @@ pub fn run_cli() -> Result<i32, String> {
     // Read the input program after path resolution, so diagnostics include final path.
     let src =
         std::fs::read_to_string(&in_path).map_err(|e| format!("{}: {e}", in_path.display()))?;
-    let ll = compile_to_ll_with(&src, cli.backend)?;
+    if matches!(cli.mode, BuildMode::CoreOnly) {
+        let module = parse_module(&src)?;
+        print!("{}", format_surface_ast(&module));
+        return Ok(0);
+    }
+    if matches!(cli.mode, BuildMode::ResolveOnly) {
+        let module = parse_module(&src)?;
+        let resolved = resolve_parsed_module(module)?;
+        print!("{}", format_resolved_ast(&resolved));
+        return Ok(0);
+    }
+    if matches!(cli.mode, BuildMode::ElabOnly) {
+        let module = parse_module(&src)?;
+        let resolved = resolve_parsed_module(module)?;
+        let elaborated = elaborate_resolved_module(&resolved)
+            .map_err(|e| format_elab_diagnostic(&src, &e))?;
+        print!("{}", format_elaborated_ast(&elaborated));
+        return Ok(0);
+    }
+    if matches!(cli.mode, BuildMode::DumpVc) {
+        let module = parse_module(&src)?;
+        let resolved = resolve_parsed_module(module)?;
+        let elaborated = elaborate_resolved_module(&resolved)
+            .map_err(|e| format_elab_diagnostic(&src, &e))?;
+        print!("{}", format_verification_conditions(&elaborated));
+        return Ok(0);
+    }
+    if matches!(cli.mode, BuildMode::DumpHir) {
+        let out = format_hir_ast(&src).map_err(|e| format_elab_diagnostic(&src, &e))?;
+        print!("{out}");
+        return Ok(0);
+    }
+
+    let ll = compile_to_ll_with(&src, cli.backend)
+        .map_err(|e| format_elab_diagnostic(&src, &e))?;
 
     match cli.mode {
+        BuildMode::CoreOnly
+        | BuildMode::ResolveOnly
+        | BuildMode::ElabOnly
+        | BuildMode::DumpVc
+        | BuildMode::DumpHir => {
+            unreachable!("handled before codegen")
+        }
         BuildMode::QirRun { out_ll } => run_qir_runner_mode(&ll, out_ll),
         BuildMode::Run { out_ll } => run_executable_mode(&ll, out_ll),
         BuildMode::EmitLl { out_ll } => emit_ll_mode(&ll, &in_path, out_ll),
@@ -880,6 +1062,16 @@ pub(crate) struct CliArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BuildMode {
+    /// Parse only and print the surface AST (new pipeline debugging).
+    CoreOnly,
+    /// Parse and resolve top-level names, then print id tables.
+    ResolveOnly,
+    /// Parse, resolve, elaborate to Core, typecheck, and print terms.
+    ElabOnly,
+    /// Parse, resolve, elaborate, collect VCs, and print verification goals.
+    DumpVc,
+    /// Parse, resolve, elaborate, erase, and print classical HIR.
+    DumpHir,
     /// Run generated QIR through qir-runner.
     QirRun {
         out_ll: Option<PathBuf>,
@@ -910,8 +1102,18 @@ where
     let mut qir = false;
     let mut emit_ll = false;
     let mut emit_asm = false;
+    let mut core_only = false;
+    let mut resolve_only = false;
+    let mut elab_only = false;
+    let mut dump_vc = false;
+    let mut dump_hir = false;
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--core-only" => core_only = true,
+            "--resolve-only" => resolve_only = true,
+            "--elab-only" => elab_only = true,
+            "--dump-vc" => dump_vc = true,
+            "--dump-hir" => dump_hir = true,
             "--lib" => lib = true,
             "-q" | "--qir" => qir = true,
             "--emit-ll" => {
@@ -954,6 +1156,67 @@ where
             }
             _ => return Err(format!("unknown flag `{a}`\n{}", usage())),
         }
+    }
+
+    let debug_flags = [core_only, resolve_only, elab_only, dump_vc, dump_hir]
+        .into_iter()
+        .filter(|&b| b)
+        .count();
+    if debug_flags > 1 {
+        return Err(
+            "`--core-only`, `--resolve-only`, `--elab-only`, `--dump-vc`, and `--dump-hir` are mutually exclusive"
+                .into(),
+        );
+    }
+    if core_only {
+        if lib || qir || emit_ll || emit_asm || out.is_some() {
+            return Err("`--core-only` cannot be combined with other output or backend flags".into());
+        }
+        return Ok(CliArgs {
+            in_path,
+            mode: BuildMode::CoreOnly,
+            backend: Backend::Default,
+        });
+    }
+    if resolve_only {
+        if lib || qir || emit_ll || emit_asm || out.is_some() {
+            return Err("`--resolve-only` cannot be combined with other output or backend flags".into());
+        }
+        return Ok(CliArgs {
+            in_path,
+            mode: BuildMode::ResolveOnly,
+            backend: Backend::Default,
+        });
+    }
+    if elab_only {
+        if lib || qir || emit_ll || emit_asm || out.is_some() {
+            return Err("`--elab-only` cannot be combined with other output or backend flags".into());
+        }
+        return Ok(CliArgs {
+            in_path,
+            mode: BuildMode::ElabOnly,
+            backend: Backend::Default,
+        });
+    }
+    if dump_vc {
+        if lib || qir || emit_ll || emit_asm || out.is_some() {
+            return Err("`--dump-vc` cannot be combined with other output or backend flags".into());
+        }
+        return Ok(CliArgs {
+            in_path,
+            mode: BuildMode::DumpVc,
+            backend: Backend::Default,
+        });
+    }
+    if dump_hir {
+        if lib || qir || emit_ll || emit_asm || out.is_some() {
+            return Err("`--dump-hir` cannot be combined with other output or backend flags".into());
+        }
+        return Ok(CliArgs {
+            in_path,
+            mode: BuildMode::DumpHir,
+            backend: Backend::Default,
+        });
     }
 
     if qir && lib {
@@ -1002,11 +1265,21 @@ fn usage() -> String {
      usage: nialang <file.nia> --emit-asm [out.s]\n\
      usage: nialang <file.nia> --lib -o libname.{dylib,so,dll}\n\
      usage: nialang <file.nia> -q [-o out.ll]   (run QIR through qir-runner)\n\
-     Default mode compiles with clang, runs the executable, then exits with its status.\n\
+     usage: nialang <file.nia> --core-only      (parse and print surface AST)\n\
+     usage: nialang <file.nia> --resolve-only  (parse, resolve names, print ids)\n\
+     usage: nialang <file.nia> --elab-only     (parse, resolve, elaborate Core, check)\n\
+     usage: nialang <file.nia> --dump-vc       (parse, resolve, elaborate, print VCs)\n\
+     usage: nialang <file.nia> --dump-hir      (parse, resolve, elaborate, erase, print HIR)\n\
+     Default mode: parse → resolve → elab → erase → LLVM.\n\
      Use --emit-ll to write textual LLVM IR and exit. Without a path, writes <input>.ll in the current directory.\n\
      Use --emit-asm to write native assembly and exit. Without a path, writes <input>.s in the current directory.\n\
      Use --lib to build a shared library instead of running the program.\n\
-     Use -q / --qir to lower supported quantum primitives to QIR and run via qir-runner."
+     Use -q / --qir to lower supported quantum primitives to QIR and run via qir-runner.\n\
+     Use --core-only to debug the new compiler frontend without typechecking or codegen.\n\
+     Use --resolve-only to inspect assigned DefIds before elaboration.\n\
+     Use --elab-only to inspect elaborated Core terms after the tier-0 checker.\n\
+     Use --dump-vc to inspect refinement verification conditions.\n\
+     Use --dump-hir to inspect erased classical HIR before LLVM lowering."
         .to_string()
 }
 

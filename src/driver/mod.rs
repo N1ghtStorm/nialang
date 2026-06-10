@@ -1,4 +1,5 @@
+pub mod fixtures;
 pub mod pipeline;
 
 #[cfg(test)]
-mod tests;
+mod tests; // src/driver/tests/

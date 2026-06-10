@@ -1,0 +1,10 @@
+fn safe_div(x: i64, y: i64 { y != 0 }) i64 {
+    x / y
+}
+
+fn main() i32 {
+    let x: i64 = 10;
+    let y: i64 = 2;
+    safe_div(x, y);
+    0
+}

@@ -94,6 +94,44 @@ CLI modes:
 | `nialang file.nia --lib -o library` | build a shared library from `extern fn` exports |
 | `nialang file.nia -q [-o out.ll]` | lower to QIR and run through `qir-runner` |
 
+### Compiler architecture
+
+The default pipeline is:
+
+```text
+parse → resolve → elaborate → Core check → erase → HIR → LLVM
+```
+
+Quantum programs (`-q` / `--qir`) follow:
+
+```text
+parse → resolve → elaborate → Core check → QuantumHir → QIR
+```
+
+Developer flags (no codegen):
+
+| Flag | Stops after |
+| --- | --- |
+| `--core-only` | surface AST |
+| `--resolve-only` | name resolution (`DefId` tables) |
+| `--elab-only` | elaborated Core terms |
+| `--dump-vc` | verification conditions (+ Z3 discharge when available) |
+| `--dump-hir` | erased classical HIR |
+
+Source layout (`src/`):
+
+- `frontend/` — lexer, parser, surface AST, name resolution
+- `core/` — dependently-typed Core (`Term`, checker, NbE)
+- `elab/` — surface → Core elaborator
+- `verify/` — refinements, VC collection, SMT discharge
+- `erase/` — Core → runtime terms
+- `hir/` — classical and quantum IR before backends
+- `backend/llvm/` and `backend/qir/` — code generation
+- `driver/pipeline.rs` — CLI orchestration
+
+Regression tiers live in `examples/tests/ok_*.nia` (tier 0..2) and
+`examples/quantum/` (tier 3). Run `cargo test --lib` to exercise them.
+
 ## Integer And Bitwise Operators
 
 All integer types support arithmetic, remainder, bitwise operations, and

@@ -1,6 +1,6 @@
-use crate::ast::{
-    Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
-    Ty, VectorDef, method_symbol,
+use crate::frontend::surface::{
+    method_symbol, Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern,
+    Stmt, StructDef, SurfaceModule, SurfaceTy, VectorDef,
 };
 use crate::lexer::Token;
 use crate::nia_std::{LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY};
@@ -44,7 +44,7 @@ impl Parser {
         }
     }
 
-    /// Parses a complete source file into `(structs, enums, functions, vectors)`.
+    /// Parses a complete source file into a [`SurfaceModule`].
     ///
     /// ## Grammar contract
     /// Top-level accepts only:
@@ -56,37 +56,32 @@ impl Parser {
     ///
     /// Any other token at top level is a hard parse error. This strictness keeps
     /// recovery and diagnostics simple for a small language.
-    pub fn parse_file(
-        mut self,
-    ) -> Result<(Vec<StructDef>, Vec<EnumDef>, Vec<FnDef>, Vec<VectorDef>), String> {
-        let mut structs = Vec::new();
-        let mut enums = Vec::new();
-        let mut fns = Vec::new();
-        let mut vectors = Vec::new();
+    pub fn parse_file(mut self) -> Result<SurfaceModule, String> {
+        let mut module = SurfaceModule::default();
         while !matches!(self.peek(), Token::Eof) {
             match self.peek().clone() {
                 Token::Struct => {
-                    structs.push(self.parse_struct()?);
+                    module.structs.push(self.parse_struct()?);
                 }
                 Token::Vector => {
-                    vectors.push(self.parse_vector()?);
+                    module.vectors.push(self.parse_vector()?);
                 }
                 Token::Enum => {
-                    enums.push(self.parse_enum()?);
+                    module.enums.push(self.parse_enum()?);
                 }
                 Token::Impl => {
-                    fns.extend(self.parse_impl()?);
+                    module.fns.extend(self.parse_impl()?);
                 }
                 Token::Fn | Token::Extern => {
-                    fns.push(self.parse_fn()?);
+                    module.fns.push(self.parse_fn()?);
                 }
                 Token::Quant if matches!(self.peek_n(1), Token::Fn) => {
-                    fns.push(self.parse_fn()?);
+                    module.fns.push(self.parse_fn()?);
                 }
                 other => return Err(format!("unexpected token at top level: {other:?}")),
             }
         }
-        Ok((structs, enums, fns, vectors))
+        Ok(module)
     }
 
     fn parse_impl(&mut self) -> Result<Vec<FnDef>, String> {
@@ -104,7 +99,7 @@ impl Parser {
                 return Err(format!("expected method `fn`, got {:?}", self.peek()));
             }
             let mut method = self.parse_method(&owner)?;
-            let Some((first_name, first_ty)) = method.params.first() else {
+            let Some((first_name, first_ty, _)) = method.params.first() else {
                 return Err(format!(
                     "method `{}` must take `self` or `&self` as its first parameter",
                     method.name
@@ -117,7 +112,7 @@ impl Parser {
                 ));
             }
             let valid_self_ty = first_ty == &owner
-                || matches!(first_ty, Ty::Ptr(inner) if inner.as_ref() == &owner);
+                || matches!(first_ty, SurfaceTy::Ptr(inner) if inner.as_ref() == &owner);
             if !valid_self_ty {
                 return Err(format!(
                     "method `{}` self type mismatch: expected `self` or `&self` for {owner:?}, got {first_ty:?}",
@@ -131,7 +126,7 @@ impl Parser {
         Ok(methods)
     }
 
-    fn parse_method(&mut self, owner: &Ty) -> Result<FnDef, String> {
+    fn parse_method(&mut self, owner: &SurfaceTy) -> Result<FnDef, String> {
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
         self.expect(&Token::LParen)?;
@@ -152,9 +147,12 @@ impl Parser {
         }
         self.expect(&Token::RParen)?;
         let ret = match self.peek() {
-            Token::LBrace => None,
+            Token::LBrace | Token::Decreases | Token::Partial | Token::Requires | Token::Ensures => {
+                None
+            }
             _ => Some(self.parse_ty()?),
         };
+        let (requires, ensures, decreases, partial) = self.parse_fn_annotations()?;
         let body = self.parse_block()?;
         Ok(FnDef {
             name,
@@ -162,16 +160,20 @@ impl Parser {
             is_quantum: false,
             params,
             ret,
+            decreases,
+            partial,
+            requires,
+            ensures,
             body,
         })
     }
 
     fn parse_method_param(
         &mut self,
-        owner: &Ty,
+        owner: &SurfaceTy,
         first: bool,
         method_name: &str,
-    ) -> Result<(String, Ty), String> {
+    ) -> Result<(String, SurfaceTy, bool), String> {
         if first {
             if matches!(self.peek(), Token::Amp) {
                 self.bump();
@@ -184,7 +186,7 @@ impl Parser {
                         "method `{method_name}` first parameter must be `self` or `&self`"
                     ));
                 }
-                return Ok(("self".into(), Ty::Ptr(Box::new(owner.clone()))));
+                return Ok(("self".into(), SurfaceTy::Ptr(Box::new(owner.clone())), false));
             }
 
             if let Token::Ident(name) = self.peek().clone() {
@@ -195,17 +197,17 @@ impl Parser {
                     self.bump();
                     if matches!(self.peek(), Token::Colon) {
                         self.bump();
-                        return Ok(("self".into(), self.parse_ty()?));
+                        return Ok(("self".into(), self.parse_ty()?, false));
                     }
-                    return Ok(("self".into(), owner.clone()));
+                    return Ok(("self".into(), owner.clone(), false));
                 }
             }
         }
 
         let pname = self.expect_ident()?;
         self.expect(&Token::Colon)?;
-        let pty = self.parse_ty()?;
-        Ok((pname, pty))
+        let pty = self.parse_param_ty()?;
+        Ok((pname, pty, false))
     }
 
     fn parse_enum(&mut self) -> Result<EnumDef, String> {
@@ -413,10 +415,16 @@ impl Parser {
         let mut params = Vec::new();
         if !matches!(self.peek(), Token::RParen) {
             loop {
+                let implicit = if matches!(self.peek(), Token::Hash) {
+                    self.bump();
+                    true
+                } else {
+                    false
+                };
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
-                let pty = self.parse_ty()?;
-                params.push((pname, pty));
+                let pty = self.parse_param_ty()?;
+                params.push((pname, pty, implicit));
                 match self.peek() {
                     Token::Comma => {
                         self.bump();
@@ -428,9 +436,12 @@ impl Parser {
         }
         self.expect(&Token::RParen)?;
         let ret = match self.peek() {
-            Token::LBrace => None,
+            Token::LBrace | Token::Decreases | Token::Partial | Token::Requires | Token::Ensures => {
+                None
+            }
             _ => Some(self.parse_ty()?),
         };
+        let (requires, ensures, decreases, partial) = self.parse_fn_annotations()?;
         let body = self.parse_block()?;
         Ok(FnDef {
             name,
@@ -438,8 +449,42 @@ impl Parser {
             is_quantum,
             params,
             ret,
+            decreases,
+            partial,
+            requires,
+            ensures,
             body,
         })
+    }
+
+    fn parse_fn_annotations(
+        &mut self,
+    ) -> Result<(Option<Expr>, Option<Expr>, Option<String>, bool), String> {
+        let requires = if matches!(self.peek(), Token::Requires) {
+            self.bump();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        let ensures = if matches!(self.peek(), Token::Ensures) {
+            self.bump();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        let decreases = if matches!(self.peek(), Token::Decreases) {
+            self.bump();
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+        let partial = if matches!(self.peek(), Token::Partial) {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        Ok((requires, ensures, decreases, partial))
     }
 
     /// Parses `{ ... }` block with statements and optional tail expression.
@@ -484,6 +529,12 @@ impl Parser {
                 }
                 Token::Return => {
                     stmts.push(self.parse_return_stmt()?);
+                }
+                Token::Admit => {
+                    self.bump();
+                    let prop = self.parse_expr()?;
+                    self.expect(&Token::Semi)?;
+                    stmts.push(Stmt::Admit(prop));
                 }
                 _ => {
                     let e = self.parse_expr()?;
@@ -652,48 +703,56 @@ impl Parser {
     /// Pointer and array forms are recursive, so nested types like `&[i32; 4]`
     /// parse naturally.
     ///
-    /// Postfix `T[]` desugars to `Ty::Matrix(T, None)` — a heap-backed matrix
+    /// Postfix `T[]` desugars to `SurfaceTy::Matrix(T, None)` — a heap-backed matrix
     /// with element type `T` and unknown shape (same as the bare `Matrix` annotation).
-    fn parse_ty(&mut self) -> Result<Ty, String> {
+    fn parse_ty(&mut self) -> Result<SurfaceTy, String> {
+        self.parse_ty_inner(false)
+    }
+
+    fn parse_param_ty(&mut self) -> Result<SurfaceTy, String> {
+        self.parse_ty_inner(true)
+    }
+
+    fn parse_ty_inner(&mut self, allow_refinement: bool) -> Result<SurfaceTy, String> {
         let mut ty = if matches!(self.peek(), Token::Amp) {
             self.bump();
-            let inner = self.parse_ty()?;
-            Ty::Ptr(Box::new(inner))
+            let inner = self.parse_ty_inner(false)?;
+            SurfaceTy::Ptr(Box::new(inner))
         } else if matches!(self.peek(), Token::LBracket) {
             self.bump();
-            let elem = self.parse_ty()?;
+            let elem = self.parse_ty_inner(false)?;
             self.expect(&Token::Semi)?;
             let len = match self.bump() {
                 Token::Int(n) if n >= 0 => n as usize,
                 other => return Err(format!("expected non-negative array length, got {other:?}")),
             };
             self.expect(&Token::RBracket)?;
-            Ty::Array(Box::new(elem), len)
+            SurfaceTy::Array(Box::new(elem), len)
         } else {
             match self.bump() {
-                Token::TyI8 => Ok(Ty::I8),
-                Token::TyU8 => Ok(Ty::U8),
-                Token::TyI16 => Ok(Ty::I16),
-                Token::TyU16 => Ok(Ty::U16),
-                Token::TyI32 => Ok(Ty::I32),
-                Token::TyI64 => Ok(Ty::I64),
-                Token::TyU64 => Ok(Ty::U64),
-                Token::TyI128 => Ok(Ty::I128),
-                Token::TyIsize => Ok(Ty::Isize),
-                Token::TyUsize => Ok(Ty::Usize),
-                Token::TyU128 => Ok(Ty::U128),
-                Token::TyBool => Ok(Ty::Bool),
-                Token::TyF16 => Ok(Ty::F16),
-                Token::TyF32 => Ok(Ty::F32),
-                Token::TyF64 => Ok(Ty::F64),
-                Token::TyString => Ok(Ty::String),
+                Token::TyI8 => Ok(SurfaceTy::I8),
+                Token::TyU8 => Ok(SurfaceTy::U8),
+                Token::TyI16 => Ok(SurfaceTy::I16),
+                Token::TyU16 => Ok(SurfaceTy::U16),
+                Token::TyI32 => Ok(SurfaceTy::I32),
+                Token::TyI64 => Ok(SurfaceTy::I64),
+                Token::TyU64 => Ok(SurfaceTy::U64),
+                Token::TyI128 => Ok(SurfaceTy::I128),
+                Token::TyIsize => Ok(SurfaceTy::Isize),
+                Token::TyUsize => Ok(SurfaceTy::Usize),
+                Token::TyU128 => Ok(SurfaceTy::U128),
+                Token::TyBool => Ok(SurfaceTy::Bool),
+                Token::TyF16 => Ok(SurfaceTy::F16),
+                Token::TyF32 => Ok(SurfaceTy::F32),
+                Token::TyF64 => Ok(SurfaceTy::F64),
+                Token::TyString => Ok(SurfaceTy::String),
                 Token::Ident(n) if n == LIST_TYPE => {
                     self.expect(&Token::LBracket)?;
                     let elem = self.parse_ty()?;
                     self.expect(&Token::RBracket)?;
-                    Ok(Ty::List(Box::new(elem)))
+                    Ok(SurfaceTy::List(Box::new(elem)))
                 }
-                Token::Ident(n) => Ok(Ty::Struct(n)),
+                Token::Ident(n) => Ok(SurfaceTy::Struct(n)),
                 other => Err(format!("expected type, got {other:?}")),
             }?
         };
@@ -703,7 +762,7 @@ impl Parser {
                 self.bump();
                 if matches!(self.peek(), Token::Gt) {
                     self.bump();
-                    ty = Ty::HeapVector(Box::new(ty));
+                    ty = SurfaceTy::HeapVector(Box::new(ty));
                     continue;
                 }
                 let len = match self.bump() {
@@ -715,16 +774,26 @@ impl Parser {
                     }
                 };
                 self.expect(&Token::Gt)?;
-                ty = Ty::AnonVector(Box::new(ty), len);
+                ty = SurfaceTy::AnonVector(Box::new(ty), len);
             } else if matches!(self.peek(), Token::LBracket)
                 && matches!(self.peek_n(1), Token::RBracket)
             {
                 self.bump();
                 self.bump();
-                ty = Ty::Matrix(Box::new(ty), None);
+                ty = SurfaceTy::Matrix(Box::new(ty), None);
             } else {
                 break;
             }
+        }
+
+        if allow_refinement && matches!(self.peek(), Token::LBrace) {
+            self.bump();
+            let pred = self.parse_expr()?;
+            self.expect(&Token::RBrace)?;
+            ty = SurfaceTy::Refined {
+                base: Box::new(ty),
+                pred: Box::new(pred),
+            };
         }
 
         Ok(ty)
@@ -991,7 +1060,7 @@ impl Parser {
         Ok(args)
     }
 
-    fn parse_generic_ty_args(&mut self) -> Result<Vec<Ty>, String> {
+    fn parse_generic_ty_args(&mut self) -> Result<Vec<SurfaceTy>, String> {
         self.expect(&Token::LBracket)?;
         let mut ty_args = Vec::new();
         if !matches!(self.peek(), Token::RBracket) {
