@@ -1,0 +1,33 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Rect {
+    width: i32,
+    height: i32,
+}
+
+impl Point {
+    fn shift(self, dx: i32, dy: i32) Point {
+        self::Point {
+            x: self.x + dx,
+            y: self.y + dy,
+        }
+    }
+}
+
+fn origin() Point {
+    self::Point { x: 0, y: 0 }
+}
+
+fn new_rect(width: i32, height: i32) Rect {
+    self::Rect {
+        width: width,
+        height: height,
+    }
+}
+
+fn area(rect: Rect) i32 {
+    rect.width * rect.height
+}

@@ -1,0 +1,15 @@
+mod math;
+mod geometry;
+
+fn main() i32 {
+    let base = math::answer();
+    let origin = geometry::origin();
+    let point = origin.shift(6, 7);
+    let rect = geometry::new_rect(point.x, point.y);
+    let area = geometry::area(rect);
+
+    println(base);
+    println(area);
+
+    base + area
+}
