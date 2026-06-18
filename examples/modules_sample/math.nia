@@ -3,7 +3,3 @@ mod nested;
 fn add(a: i32, b: i32) i32 {
     a + b
 }
-
-fn answer() i32 {
-    self::nested::double_add(10, 11)
-}

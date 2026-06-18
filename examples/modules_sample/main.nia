@@ -1,15 +1,32 @@
 mod math;
 mod geometry;
 
+mod local {
+    struct Counter {
+        value: i32
+    }
+
+    impl Counter {
+        fn inc(self) Counter {
+            self::Counter {
+                value: self.value + 1
+            }
+        }
+    }
+}
+
 fn main() i32 {
-    let base = math::answer();
+    let base = math::nested::forty_two();
+    let counter = local::Counter { value: base };
+    let next = counter.inc();
     let origin = geometry::origin();
     let point = origin.shift(6, 7);
     let rect = geometry::new_rect(point.x, point.y);
     let area = geometry::area(rect);
 
     println(base);
+    println(next.value);
     println(area);
 
-    base + area
+    0
 }
