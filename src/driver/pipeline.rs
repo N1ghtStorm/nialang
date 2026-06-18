@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,6 +43,23 @@ pub fn compile_to_ll(src: &str) -> Result<String, String> {
     compile_to_ll_with(src, Backend::Default)
 }
 
+pub fn compile_file_to_ll(path: &Path) -> Result<String, String> {
+    compile_file_to_ll_with(path, Backend::Default)
+}
+
+pub fn compile_file_to_ll_with(path: &Path, backend: Backend) -> Result<String, String> {
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let base_dir = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let mut stack = HashSet::new();
+    let src = expand_module_file(&path, &base_dir, &mut stack)?;
+    compile_to_ll_with(&src, backend)
+}
+
 /// Same as [`compile_to_ll`] but lets the caller pick which backend consumes
 /// the validated AST.
 ///
@@ -84,6 +102,218 @@ pub fn compile_to_ll_with(src: &str, backend: Backend) -> Result<String, String>
             codegen::emit_module_for_qir_runner(&structs, &enums, &vectors, &fns, &fn_sigs)
         }
     })
+}
+
+fn expand_module_file(
+    path: &Path,
+    module_base_dir: &Path,
+    stack: &mut HashSet<PathBuf>,
+) -> Result<String, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if !stack.insert(canonical.clone()) {
+        return Err(format!("cyclic module load involving `{}`", path.display()));
+    }
+    let src =
+        std::fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", canonical.display()))?;
+    let expanded = expand_module_source(&src, module_base_dir, stack);
+    stack.remove(&canonical);
+    expanded
+}
+
+fn expand_module_source(
+    src: &str,
+    base_dir: &Path,
+    stack: &mut HashSet<PathBuf>,
+) -> Result<String, String> {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '"' {
+            let end = copy_string_literal(&chars, i, &mut out);
+            i = end;
+            continue;
+        }
+        if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+            while i < chars.len() {
+                let ch = chars[i];
+                out.push(ch);
+                i += 1;
+                if ch == '\n' {
+                    break;
+                }
+            }
+            continue;
+        }
+        if starts_keyword_at(&chars, i, "mod") {
+            let after_mod = i + 3;
+            let name_start = skip_ws_and_line_comments(&chars, after_mod);
+            if let Some((name, after_name)) = parse_ascii_ident(&chars, name_start) {
+                let after_name_ws = skip_ws_and_line_comments(&chars, after_name);
+                match chars.get(after_name_ws) {
+                    Some(';') => {
+                        let (file_path, child_base_dir) = resolve_module_file(base_dir, &name)?;
+                        let body = expand_module_file(&file_path, &child_base_dir, stack)?;
+                        out.push_str("mod ");
+                        out.push_str(&name);
+                        out.push_str(" {\n");
+                        out.push_str(&body);
+                        out.push_str("\n}\n");
+                        i = after_name_ws + 1;
+                        continue;
+                    }
+                    Some('{') => {
+                        let close = find_matching_brace(&chars, after_name_ws)?;
+                        out.extend(chars[i..=after_name_ws].iter().copied());
+                        let body: String = chars[after_name_ws + 1..close].iter().collect();
+                        let child_base_dir = base_dir.join(&name);
+                        let expanded_body = expand_module_source(&body, &child_base_dir, stack)?;
+                        out.push_str(&expanded_body);
+                        out.push('}');
+                        i = close + 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn starts_keyword_at(chars: &[char], idx: usize, keyword: &str) -> bool {
+    let kw: Vec<char> = keyword.chars().collect();
+    if idx + kw.len() > chars.len() {
+        return false;
+    }
+    if chars[idx..idx + kw.len()] != kw[..] {
+        return false;
+    }
+    let before = idx.checked_sub(1).and_then(|i| chars.get(i)).copied();
+    let after = chars.get(idx + kw.len()).copied();
+    !before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)
+}
+
+fn is_ident_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn skip_ws_and_line_comments(chars: &[char], mut idx: usize) -> usize {
+    loop {
+        while chars.get(idx).is_some_and(|ch| ch.is_whitespace()) {
+            idx += 1;
+        }
+        if chars.get(idx) == Some(&'/') && chars.get(idx + 1) == Some(&'/') {
+            idx += 2;
+            while idx < chars.len() && chars[idx] != '\n' {
+                idx += 1;
+            }
+            continue;
+        }
+        return idx;
+    }
+}
+
+fn parse_ascii_ident(chars: &[char], idx: usize) -> Option<(String, usize)> {
+    let first = *chars.get(idx)?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    let mut end = idx + 1;
+    while chars.get(end).is_some_and(|ch| is_ident_char(*ch)) {
+        end += 1;
+    }
+    Some((chars[idx..end].iter().collect(), end))
+}
+
+fn copy_string_literal(chars: &[char], start: usize, out: &mut String) -> usize {
+    let mut i = start;
+    let mut escape = false;
+    while i < chars.len() {
+        let ch = chars[i];
+        out.push(ch);
+        i += 1;
+        if escape {
+            escape = false;
+        } else if ch == '\\' {
+            escape = true;
+        } else if ch == '"' {
+            break;
+        }
+    }
+    i
+}
+
+fn find_matching_brace(chars: &[char], open: usize) -> Result<usize, String> {
+    let mut i = open;
+    let mut depth = 0usize;
+    while i < chars.len() {
+        match chars[i] {
+            '"' => {
+                i = skip_string_literal(chars, i);
+                continue;
+            }
+            '/' if chars.get(i + 1) == Some(&'/') => {
+                i += 2;
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Err("unterminated inline module body".into())
+}
+
+fn skip_string_literal(chars: &[char], start: usize) -> usize {
+    let mut i = start;
+    let mut escape = false;
+    while i < chars.len() {
+        let ch = chars[i];
+        i += 1;
+        if escape {
+            escape = false;
+        } else if ch == '\\' {
+            escape = true;
+        } else if ch == '"' {
+            break;
+        }
+    }
+    i
+}
+
+fn resolve_module_file(base_dir: &Path, name: &str) -> Result<(PathBuf, PathBuf), String> {
+    let flat = base_dir.join(format!("{name}.nia"));
+    let nested = base_dir.join(name).join("mod.nia");
+    let flat_exists = flat.is_file();
+    let nested_exists = nested.is_file();
+    match (flat_exists, nested_exists) {
+        (true, true) => Err(format!(
+            "ambiguous module `{name}`: both `{}` and `{}` exist",
+            flat.display(),
+            nested.display()
+        )),
+        (true, false) => Ok((flat, base_dir.join(name))),
+        (false, true) => Ok((nested, base_dir.join(name))),
+        (false, false) => Err(format!(
+            "module `{name}` not found; expected `{}` or `{}`",
+            flat.display(),
+            nested.display()
+        )),
+    }
 }
 
 fn fn_contains_quantum(f: &FnDef) -> bool {
@@ -396,8 +626,10 @@ fn diagnostic_terms(message: &str) -> Vec<String> {
 fn token_lexeme(token: &str) -> Option<&'static str> {
     match token {
         "Extern" => Some("extern"),
+        "Pub" => Some("pub"),
         "Fn" => Some("fn"),
         "Let" => Some("let"),
+        "Mod" => Some("mod"),
         "Struct" => Some("struct"),
         "Vector" => Some("vector"),
         "Enum" => Some("enum"),
@@ -498,8 +730,9 @@ fn first_non_ws_column(line: &str) -> Option<usize> {
 }
 
 fn find_function_bounds(src: &str, name: &str) -> Option<(usize, usize)> {
-    let needle = format!("fn {name}");
-    let quant_needle = format!("quant fn {name}");
+    let leaf = name.rsplit("::").next().unwrap_or(name);
+    let needle = format!("fn {leaf}");
+    let quant_needle = format!("quant fn {leaf}");
     let lines: Vec<&str> = src.lines().collect();
     let start_idx = lines.iter().position(|line| {
         let trimmed = line.trim_start();
@@ -555,10 +788,7 @@ pub fn run_cli() -> Result<i32, String> {
     let cli = parse_cli_args(std::env::args().skip(1))?;
     let in_path = resolve_input_path(cli.in_path)?;
 
-    // Read the input program after path resolution, so diagnostics include final path.
-    let src =
-        std::fs::read_to_string(&in_path).map_err(|e| format!("{}: {e}", in_path.display()))?;
-    let ll = compile_to_ll_with(&src, cli.backend)?;
+    let ll = compile_file_to_ll_with(&in_path, cli.backend)?;
 
     match cli.mode {
         BuildMode::QirRun { out_ll } => run_qir_runner_mode(&ll, out_ll),

@@ -259,6 +259,109 @@ fn compile_to_ll_with_qir_runs_frontend_validation() {
 }
 
 #[test]
+fn compile_inline_modules_with_rust_like_paths() {
+    let src = r#"
+fn root_value() i32 {
+    2
+}
+
+pub mod math {
+    pub struct Pair { value: i32 }
+
+    pub enum Choice {
+        Empty,
+        Number(i32),
+        Named { value: i32 },
+    }
+
+    pub fn add(a: i32, b: i32) i32 {
+        a + b
+    }
+
+    fn via_self() i32 {
+        self::add(20, 20)
+    }
+
+    fn via_crate() i32 {
+        crate::root_value()
+    }
+
+    mod nested {
+        fn forty_two() i32 {
+            super::add(40, 2)
+        }
+    }
+}
+
+fn main() i32 {
+    let p = math::Pair { value: math::nested::forty_two() };
+    let c: math::Choice = math::Choice::Named { value: p.value };
+    let v = match c {
+        math::Choice::Empty => 0,
+        math::Choice::Number(n) => n,
+        math::Choice::Named { value } => value,
+    };
+    v + math::via_self() + math::via_crate()
+}
+"#;
+    let ir = crate::driver::pipeline::compile_to_ll(src).expect("module pipeline");
+    assert!(ir.contains("@math__nested__forty_two"), "{ir}");
+    assert!(ir.contains("%struct.math__Pair"), "{ir}");
+    assert!(ir.contains("%enum.math__Choice"), "{ir}");
+}
+
+#[test]
+fn compile_file_modules_from_mod_declaration() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "nialang-file-modules-{}-{nonce}",
+        std::process::id()
+    ));
+    let math_dir = root.join("math");
+    std::fs::create_dir_all(&math_dir).unwrap();
+    std::fs::write(
+        root.join("main.nia"),
+        r#"
+pub mod math;
+
+fn main() i32 {
+    math::nested::forty_two()
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("math.nia"),
+        r#"
+mod nested;
+
+fn add(a: i32, b: i32) i32 {
+    a + b
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        math_dir.join("nested.nia"),
+        r#"
+fn forty_two() i32 {
+    super::add(40, 2)
+}
+"#,
+    )
+    .unwrap();
+
+    let ir =
+        crate::driver::pipeline::compile_file_to_ll(&root.join("main.nia")).expect("file modules");
+    assert!(ir.contains("@math__nested__forty_two"), "{ir}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn compile_to_ll_rejects_quant_fn_without_qir_backend() {
     let src = r#"
 quant fn prepare() {

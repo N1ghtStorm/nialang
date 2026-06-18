@@ -83,6 +83,24 @@ fn main() i32 {
 }
 ```
 
+Modules follow Rust-style item paths:
+
+```nia
+mod math {
+    fn add(a: i32, b: i32) i32 {
+        a + b
+    }
+}
+
+fn main() i32 {
+    math::add(40, 2)
+}
+```
+
+When compiling from a file, `mod math;` loads `math.nia` or `math/mod.nia`.
+Nested modules can use `self::`, `super::`, and `crate::` paths. Privacy is not
+implemented yet; `pub` is accepted as a no-op.
+
 CLI modes:
 
 | Command | Behavior |

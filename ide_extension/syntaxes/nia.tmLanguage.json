@@ -30,11 +30,12 @@
       }
     },
     "fn-decl": {
-      "match": "\\b(?:(extern)\\s+)?(fn)\\s+([A-Za-z_][\\w]*)",
+      "match": "\\b(?:(pub)\\s+)?(?:(extern)\\s+)?(fn)\\s+([A-Za-z_][\\w]*)",
       "captures": {
         "1": { "name": "keyword.declaration.nia" },
-        "2": { "name": "keyword.other.fn.nia" },
-        "3": { "name": "entity.name.function.nia" }
+        "2": { "name": "keyword.declaration.nia" },
+        "3": { "name": "keyword.other.fn.nia" },
+        "4": { "name": "entity.name.function.nia" }
       }
     },
     "keywords": {
@@ -42,7 +43,7 @@
       "name": "keyword.control.nia"
     },
     "decl-keywords": {
-      "match": "\\b(struct|enum|vector|impl|extern)\\b",
+      "match": "\\b(pub|mod|struct|enum|vector|impl|extern)\\b",
       "name": "keyword.declaration.nia"
     },
     "primitive-types": {
@@ -54,7 +55,7 @@
       "name": "constant.language.boolean.nia"
     },
     "self": {
-      "match": "\\bself\\b",
+      "match": "\\b(self|crate|super)\\b",
       "name": "variable.language.self.nia"
     },
     "outer-builtin": {
@@ -71,7 +72,7 @@
       "name": "entity.name.type.nia"
     },
     "function-call": {
-      "match": "\\b(?!extern|fn|let|quant|gpu|if|while|loop|break|for|in|match|return|struct|enum|vector|impl|self|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|string|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop|vector_get|vector_set|vector_len|vector_clone|vector_refcount|vector_drop)([a-z_][\\w]*)(?=\\s*\\()",
+      "match": "\\b(?!extern|pub|fn|let|mod|quant|gpu|if|while|loop|break|for|in|match|return|struct|enum|vector|impl|self|crate|super|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|string|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop|vector_get|vector_set|vector_len|vector_clone|vector_refcount|vector_drop)([a-z_][\\w]*)(?=\\s*\\()",
       "captures": {
         "1": { "name": "entity.name.function.call.nia" }
       }
@@ -138,7 +139,7 @@
       ]
     },
     "identifiers": {
-      "match": "\\b(?!extern|fn|let|quant|gpu|if|while|loop|break|for|in|match|return|struct|enum|vector|impl|self|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|string|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop|vector_get|vector_set|vector_len|vector_clone|vector_refcount|vector_drop)([a-z_][\\w]*)\\b",
+      "match": "\\b(?!extern|pub|fn|let|mod|quant|gpu|if|while|loop|break|for|in|match|return|struct|enum|vector|impl|self|crate|super|true|false|i8|u8|i16|u16|i32|i64|u64|i128|isize|usize|u128|bool|f16|f32|f64|string|outer|println|len|alloc|dealloc|realloc|matrix|matrix_get|matrix_set|matrix_rows|matrix_cols|matrix_len|matrix_clone|matrix_refcount|matrix_drop|vector_get|vector_set|vector_len|vector_clone|vector_refcount|vector_drop)([a-z_][\\w]*)\\b",
       "captures": {
         "1": { "name": "variable.other.nia" }
       }

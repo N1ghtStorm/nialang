@@ -760,6 +760,11 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
+fn split_variant_path(path: &str) -> Option<(&str, &str)> {
+    path.rsplit_once("::")
+        .filter(|(enum_name, variant)| !enum_name.is_empty() && !variant.is_empty())
+}
+
 /// `root[i][j]...` as a chain ending in a root lvalue expression.
 fn collect_array_index_chain(mut e: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
     let mut idxs = Vec::new();
@@ -988,6 +993,188 @@ impl<'a> Gen<'a> {
     ) -> Option<&crate::ast::EnumVariantDef> {
         let e = self.enums.iter().find(|e| e.name == enum_name)?;
         e.variants.iter().find(|v| v.name == variant)
+    }
+
+    fn emit_enum_unit_variant(&mut self, enum_name: &str, variant: &str) -> (Ty, String) {
+        let tag = self
+            .enum_tag(enum_name, variant)
+            .expect("typechecked enum variant");
+        let enum_ll = format!("%enum.{}", sanitize(enum_name));
+        let idx = self
+            .enum_variant_index(enum_name, variant)
+            .expect("typechecked enum idx");
+        let vdef = self
+            .enum_variant_def(enum_name, variant)
+            .expect("typechecked enum variant")
+            .clone();
+        let payload_ll = enum_variant_payload_ty(&vdef, self.structs);
+        let with_tag = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} poison, i32 {}, 0",
+            with_tag, enum_ll, tag
+        )
+        .unwrap();
+        let with_payload = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} %{}, {} zeroinitializer, {}",
+            with_payload,
+            enum_ll,
+            with_tag,
+            payload_ll,
+            idx + 1
+        )
+        .unwrap();
+        (Ty::Enum(enum_name.to_string()), format!("%{with_payload}"))
+    }
+
+    fn emit_enum_tuple_variant(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let tag = self
+            .enum_tag(enum_name, variant)
+            .expect("typechecked enum variant");
+        let idx = self
+            .enum_variant_index(enum_name, variant)
+            .expect("typechecked enum idx");
+        let vdef = self
+            .enum_variant_def(enum_name, variant)
+            .expect("typechecked enum variant")
+            .clone();
+        let EnumVariantFields::Tuple(ts) = vdef.fields else {
+            unreachable!("typechecked tuple variant")
+        };
+        let enum_ll = format!("%enum.{}", sanitize(enum_name));
+        let with_tag = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} poison, i32 {}, 0",
+            with_tag, enum_ll, tag
+        )
+        .unwrap();
+        let payload_val = if ts.len() == 1 {
+            let (_, v) = self.emit_expr(&args[0], locals, Some(&ts[0]));
+            (llvm_ty(&ts[0], self.structs), v)
+        } else {
+            let payload_ll = if ts.len() == 1 {
+                llvm_ty(&ts[0], self.structs)
+            } else {
+                let inner = ts
+                    .iter()
+                    .map(|t| llvm_ty(t, self.structs))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {inner} }}")
+            };
+            let mut agg = "poison".to_string();
+            for (i, (a, t)) in args.iter().zip(ts.iter()).enumerate() {
+                let (_, av) = self.emit_expr(a, locals, Some(t));
+                let tmp = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = insertvalue {} {}, {} {}, {}",
+                    tmp,
+                    payload_ll,
+                    agg,
+                    llvm_ty(t, self.structs),
+                    av,
+                    i
+                )
+                .unwrap();
+                agg = format!("%{tmp}");
+            }
+            (payload_ll, agg)
+        };
+        let out = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} %{}, {} {}, {}",
+            out,
+            enum_ll,
+            with_tag,
+            payload_val.0,
+            payload_val.1,
+            idx + 1
+        )
+        .unwrap();
+        (Ty::Enum(enum_name.to_string()), format!("%{out}"))
+    }
+
+    fn emit_enum_struct_variant(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        fields: &[(String, Expr)],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let tag = self
+            .enum_tag(enum_name, variant)
+            .expect("typechecked enum variant");
+        let idx = self
+            .enum_variant_index(enum_name, variant)
+            .expect("typechecked enum idx");
+        let vdef = self
+            .enum_variant_def(enum_name, variant)
+            .expect("typechecked enum variant")
+            .clone();
+        let EnumVariantFields::Struct(fs) = vdef.fields else {
+            unreachable!("typechecked struct variant")
+        };
+        let enum_ll = format!("%enum.{}", sanitize(enum_name));
+        let with_tag = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} poison, i32 {}, 0",
+            with_tag, enum_ll, tag
+        )
+        .unwrap();
+        let payload_ll = {
+            let inner = fs
+                .iter()
+                .map(|(_, t)| llvm_ty(t, self.structs))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {inner} }}")
+        };
+        let mut agg = "poison".to_string();
+        for (i, (fname, fty)) in fs.iter().enumerate() {
+            let (_, fe) = fields
+                .iter()
+                .find(|(n, _)| n == fname)
+                .expect("typechecked");
+            let (_, fv) = self.emit_expr(fe, locals, Some(fty));
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} {}, {}",
+                tmp,
+                payload_ll,
+                agg,
+                llvm_ty(fty, self.structs),
+                fv,
+                i
+            )
+            .unwrap();
+            agg = format!("%{tmp}");
+        }
+        let out = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} %{}, {} {}, {}",
+            out,
+            enum_ll,
+            with_tag,
+            payload_ll,
+            agg,
+            idx + 1
+        )
+        .unwrap();
+        (Ty::Enum(enum_name.to_string()), format!("%{out}"))
     }
 
     fn emit_sizeof_i64(&mut self, ty: &Ty) -> String {
@@ -5733,6 +5920,9 @@ impl<'a> Gen<'a> {
                     if name == PI {
                         return (Ty::F64, self.emit_pi_value());
                     }
+                    if let Some((enum_name, variant)) = split_variant_path(name) {
+                        return self.emit_enum_unit_variant(enum_name, variant);
+                    }
                     unreachable!("checked var");
                 };
                 let tmp = self.fresh();
@@ -6543,6 +6733,14 @@ impl<'a> Gen<'a> {
                     writeln!(self.out, "  %{} = load {}, ptr %{}", loadt, llvm_st, tmp).unwrap();
                     return (Ty::Struct(sname), format!("%{loadt}"));
                 }
+                if let Some((enum_name, variant)) = split_variant_path(name) {
+                    if self
+                        .enum_variant_def(enum_name, variant)
+                        .is_some_and(|v| matches!(&v.fields, EnumVariantFields::Tuple(_)))
+                    {
+                        return self.emit_enum_tuple_variant(enum_name, variant, args, locals);
+                    }
+                }
                 let sig = self.fn_sigs.get(name).expect("unknown fn");
                 let mut arg_strs = Vec::new();
                 for (a, pt) in args.iter().zip(&sig.params) {
@@ -6753,7 +6951,18 @@ impl<'a> Gen<'a> {
                 }
             }
             Expr::StructLit { name, fields } => {
-                let sdef = self.structs.iter().find(|s| s.name == *name).unwrap();
+                let Some(sdef) = self.structs.iter().find(|s| s.name == *name) else {
+                    if let Some((enum_name, variant)) = split_variant_path(name) {
+                        if self
+                            .enum_variant_def(enum_name, variant)
+                            .is_some_and(|v| matches!(&v.fields, EnumVariantFields::Struct(_)))
+                        {
+                            return self
+                                .emit_enum_struct_variant(enum_name, variant, fields, locals);
+                        }
+                    }
+                    unreachable!("typechecked struct literal");
+                };
                 let llvm_st = format!("%struct.{}", sanitize(name));
                 let mut agg = "poison".to_string();
                 for (i, (fname, _)) in sdef.fields.iter().enumerate() {

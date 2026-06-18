@@ -124,6 +124,28 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_inline_module_qualifies_items() {
+    let src = r#"
+pub mod math {
+    pub struct Pair { value: i32 }
+
+    pub fn inc(x: i32) i32 {
+        x + 1
+    }
+}
+
+fn main() i32 {
+    math::inc(41)
+}
+"#;
+    let toks = tokenize(src);
+    let (structs, _, fns, _) = Parser::new(toks).parse_file().expect("parse module");
+    assert!(structs.iter().any(|s| s.name == "math::Pair"));
+    assert!(fns.iter().any(|f| f.name == "math::inc"));
+    assert!(fns.iter().any(|f| f.name == "main"));
+}
+
+#[test]
 fn parse_rejects_extern_method_marker() {
     let src = r#"
 struct Counter { value: i32 }

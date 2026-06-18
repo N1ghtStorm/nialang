@@ -114,6 +114,15 @@ fn enum_variant<'a>(edef: &'a EnumDef, variant: &str) -> Option<&'a EnumVariantF
         .map(|v| &v.fields)
 }
 
+fn split_variant_path(path: &str) -> Option<(&str, &str)> {
+    path.rsplit_once("::")
+        .filter(|(enum_name, variant)| !enum_name.is_empty() && !variant.is_empty())
+}
+
+fn path_leaf(path: &str) -> &str {
+    path.rsplit("::").next().unwrap_or(path)
+}
+
 fn is_in_quant_scope(env: &HashMap<String, Ty>) -> bool {
     env.contains_key(QUANT_SCOPE_MARKER)
 }
@@ -211,7 +220,7 @@ pub fn collect_sigs(
         struct_map.insert(s.name.clone(), s);
     }
     for s in structs {
-        if crate::nia_std::is_reserved_type_name(&s.name) {
+        if crate::nia_std::is_reserved_type_name(path_leaf(&s.name)) {
             return Err(format!("type name `{}` is reserved", s.name));
         }
         if struct_map.insert(s.name.clone(), s.clone()).is_some() {
@@ -220,7 +229,7 @@ pub fn collect_sigs(
     }
     let mut vector_map: HashMap<String, VectorDef> = HashMap::new();
     for v in vectors {
-        if crate::nia_std::is_reserved_type_name(&v.name) {
+        if crate::nia_std::is_reserved_type_name(path_leaf(&v.name)) {
             return Err(format!("type name `{}` is reserved", v.name));
         }
         if struct_map.contains_key(&v.name) {
@@ -232,7 +241,7 @@ pub fn collect_sigs(
     }
     let mut enum_map: HashMap<String, EnumDef> = HashMap::new();
     for e in enums {
-        if crate::nia_std::is_reserved_type_name(&e.name) {
+        if crate::nia_std::is_reserved_type_name(path_leaf(&e.name)) {
             return Err(format!("type name `{}` is reserved", e.name));
         }
         if struct_map.contains_key(&e.name) || vector_map.contains_key(&e.name) {
@@ -286,7 +295,7 @@ pub fn collect_sigs(
 
     let mut fn_sigs: HashMap<String, FnSig> = HashMap::new();
     for f in fns {
-        if crate::nia_std::is_reserved_fn_name(&f.name) {
+        if crate::nia_std::is_reserved_fn_name(path_leaf(&f.name)) {
             return Err(format!(
                 "function name `{}` is reserved for the standard library",
                 f.name
@@ -1352,11 +1361,28 @@ fn infer_expr(
             Some(Ty::String) | None => Ok(Ty::String),
             Some(other) => Err(format!("string literal cannot satisfy {other:?}")),
         },
-        Expr::Ident(name) => env
-            .get(name)
-            .cloned()
-            .or_else(|| (name == PI).then_some(Ty::F64))
-            .ok_or_else(|| format!("unknown variable `{name}`")),
+        Expr::Ident(name) => {
+            if let Some(t) = env.get(name) {
+                return Ok(t.clone());
+            }
+            if name == PI {
+                return Ok(Ty::F64);
+            }
+            if let Some((enum_name, variant)) = split_variant_path(name) {
+                if let Some(edef) = enums.get(enum_name) {
+                    let Some(fields) = enum_variant(edef, variant) else {
+                        return Err(format!("enum `{enum_name}` has no variant `{variant}`"));
+                    };
+                    if matches!(fields, EnumVariantFields::Unit) {
+                        return Ok(Ty::Enum(enum_name.to_string()));
+                    }
+                    return Err(format!(
+                        "enum variant `{enum_name}::{variant}` requires payload"
+                    ));
+                }
+            }
+            Err(format!("unknown variable `{name}`"))
+        }
         Expr::Neg(inner) => {
             let t = infer_expr(inner, env, structs, enums, vectors, fns, None)?;
             if matches!(t, Ty::Unit) {
@@ -2078,6 +2104,34 @@ fn infer_expr(
                 }
                 return Ok(Ty::Struct(name.clone()));
             }
+            if let Some((enum_name, variant)) = split_variant_path(name) {
+                if let Some(edef) = enums.get(enum_name) {
+                    let Some(fields) = enum_variant(edef, variant) else {
+                        return Err(format!("enum `{enum_name}` has no variant `{variant}`"));
+                    };
+                    let EnumVariantFields::Tuple(ts) = fields else {
+                        return Err(format!(
+                            "enum variant `{enum_name}::{variant}` is not tuple-style"
+                        ));
+                    };
+                    if args.len() != ts.len() {
+                        return Err(format!(
+                            "enum variant `{enum_name}::{variant}` expects {} args, got {}",
+                            ts.len(),
+                            args.len()
+                        ));
+                    }
+                    for (a, t) in args.iter().zip(ts) {
+                        let at = infer_expr(a, env, structs, enums, vectors, fns, Some(t))?;
+                        if !types_equal(&at, t) {
+                            return Err(format!(
+                                "enum variant `{enum_name}::{variant}` arg mismatch: expected {t:?}, got {at:?}"
+                            ));
+                        }
+                    }
+                    return Ok(Ty::Enum(enum_name.to_string()));
+                }
+            }
             let sig = fns
                 .get(name)
                 .ok_or_else(|| format!("unknown function `{name}`"))?;
@@ -2613,9 +2667,42 @@ fn infer_expr(
             }
         }
         Expr::StructLit { name, fields } => {
-            let def = structs
-                .get(name)
-                .ok_or_else(|| format!("unknown struct `{name}`"))?;
+            let Some(def) = structs.get(name) else {
+                if let Some((enum_name, variant)) = split_variant_path(name) {
+                    if let Some(edef) = enums.get(enum_name) {
+                        let Some(vfields) = enum_variant(edef, variant) else {
+                            return Err(format!("enum `{enum_name}` has no variant `{variant}`"));
+                        };
+                        let EnumVariantFields::Struct(def_fields) = vfields else {
+                            return Err(format!(
+                                "enum variant `{enum_name}::{variant}` is not struct-style"
+                            ));
+                        };
+                        if fields.len() != def_fields.len() {
+                            return Err(format!(
+                                "enum variant `{enum_name}::{variant}` expects {} fields, got {}",
+                                def_fields.len(),
+                                fields.len()
+                            ));
+                        }
+                        for (fname, fty) in def_fields {
+                            let Some((_, fe)) = fields.iter().find(|(n, _)| n == fname) else {
+                                return Err(format!(
+                                    "enum variant `{enum_name}::{variant}` missing field `{fname}`"
+                                ));
+                            };
+                            let et = infer_expr(fe, env, structs, enums, vectors, fns, Some(fty))?;
+                            if !types_equal(&et, fty) {
+                                return Err(format!(
+                                    "enum variant `{enum_name}::{variant}` field `{fname}` mismatch: expected {fty:?}, got {et:?}"
+                                ));
+                            }
+                        }
+                        return Ok(Ty::Enum(enum_name.to_string()));
+                    }
+                }
+                return Err(format!("unknown struct `{name}`"));
+            };
             let def_fields = &def.fields;
             if def.is_tuple {
                 return Err(format!(

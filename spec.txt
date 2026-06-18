@@ -21,6 +21,43 @@ extern fn baz(a: i32) i32 {
 }
 ```
 
+## Modules
+
+Modules use Rust-like `mod` syntax. Inline modules are written with a body:
+
+```
+mod math {
+    fn add(a: i32, b: i32) i32 {
+        a + b
+    }
+}
+
+fn main() i32 {
+    math::add(40, 2)
+}
+```
+
+When compiling from a file path, `mod name;` loads either `name.nia` or
+`name/mod.nia`. Nested modules load children from the module directory.
+
+Paths support `crate::`, `self::`, and `super::`:
+
+```
+fn root() i32 { 1 }
+
+mod a {
+    fn local() i32 { 41 }
+    fn total() i32 { self::local() + crate::root() }
+
+    mod b {
+        fn again() i32 { super::local() }
+    }
+}
+```
+
+Privacy rules are not implemented yet; module items are currently visible
+across the crate, and `pub` is accepted as a no-op.
+
 ## Variables
 
 ```

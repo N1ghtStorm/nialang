@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::ast::{
     Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
     Ty, VectorDef, method_symbol,
@@ -8,12 +10,19 @@ use crate::nia_std::{LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY};
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    module_path: Vec<String>,
+    declared_modules: HashSet<String>,
 }
 
 impl Parser {
     /// Builds parser over a pre-tokenized stream.
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            module_path: Vec::new(),
+            declared_modules: HashSet::new(),
+        }
     }
 
     /// Returns current token without consuming it.
@@ -44,10 +53,86 @@ impl Parser {
         }
     }
 
+    fn qualify_item_name(&self, name: &str) -> String {
+        if self.module_path.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}::{name}", self.module_path.join("::"))
+        }
+    }
+
+    fn parse_path_segments(&mut self) -> Result<Vec<String>, String> {
+        let mut segments = vec![self.expect_ident()?];
+        while matches!(self.peek(), Token::DoubleColon) {
+            self.bump();
+            segments.push(self.expect_ident()?);
+        }
+        Ok(segments)
+    }
+
+    fn resolve_item_path(&self, segments: &[String]) -> Result<String, String> {
+        let Some(first) = segments.first() else {
+            return Err("expected path".into());
+        };
+        let mut out: Vec<String>;
+        let mut idx = 0usize;
+        match first.as_str() {
+            "crate" => {
+                out = Vec::new();
+                idx = 1;
+            }
+            "self" => {
+                out = self.module_path.clone();
+                idx = 1;
+            }
+            "super" => {
+                out = self.module_path.clone();
+                while idx < segments.len() && segments[idx] == "super" {
+                    if out.pop().is_none() {
+                        return Err("too many `super` segments in path".into());
+                    }
+                    idx += 1;
+                }
+            }
+            _ => {
+                out = self.module_path.clone();
+            }
+        }
+        if idx >= segments.len() {
+            return Err(format!("expected item after `{first}` in path"));
+        }
+        out.extend(segments[idx..].iter().cloned());
+        Ok(out.join("::"))
+    }
+
+    fn resolve_type_path(&self, segments: &[String]) -> Result<String, String> {
+        if segments.len() == 1 && crate::nia_std::is_reserved_type_name(&segments[0]) {
+            Ok(segments[0].clone())
+        } else {
+            self.resolve_item_path(segments)
+        }
+    }
+
+    fn resolve_call_path(&self, segments: &[String]) -> Result<String, String> {
+        if segments.len() == 1 && crate::nia_std::is_reserved_fn_name(&segments[0]) {
+            Ok(segments[0].clone())
+        } else {
+            self.resolve_item_path(segments)
+        }
+    }
+
+    fn split_variant_path(path: String) -> Result<(String, String), String> {
+        let Some((enum_name, variant)) = path.rsplit_once("::") else {
+            return Err("match pattern must use `Enum::Variant` path syntax".into());
+        };
+        Ok((enum_name.to_string(), variant.to_string()))
+    }
+
     /// Parses a complete source file into `(structs, enums, functions, vectors)`.
     ///
     /// ## Grammar contract
     /// Top-level accepts only:
+    /// - `mod name { ... }`
     /// - `struct ...`
     /// - `impl ...`
     /// - `fn ...`
@@ -63,8 +148,29 @@ impl Parser {
         let mut enums = Vec::new();
         let mut fns = Vec::new();
         let mut vectors = Vec::new();
+        self.parse_items(false, &mut structs, &mut enums, &mut fns, &mut vectors)?;
+        Ok((structs, enums, fns, vectors))
+    }
+
+    fn parse_items(
+        &mut self,
+        stop_on_rbrace: bool,
+        structs: &mut Vec<StructDef>,
+        enums: &mut Vec<EnumDef>,
+        fns: &mut Vec<FnDef>,
+        vectors: &mut Vec<VectorDef>,
+    ) -> Result<(), String> {
         while !matches!(self.peek(), Token::Eof) {
+            if stop_on_rbrace && matches!(self.peek(), Token::RBrace) {
+                break;
+            }
+            if matches!(self.peek(), Token::Pub) {
+                self.bump();
+            }
             match self.peek().clone() {
+                Token::Mod => {
+                    self.parse_module(structs, enums, fns, vectors)?;
+                }
                 Token::Struct => {
                     structs.push(self.parse_struct()?);
                 }
@@ -86,7 +192,40 @@ impl Parser {
                 other => return Err(format!("unexpected token at top level: {other:?}")),
             }
         }
-        Ok((structs, enums, fns, vectors))
+        if stop_on_rbrace {
+            self.expect(&Token::RBrace)?;
+        }
+        Ok(())
+    }
+
+    fn parse_module(
+        &mut self,
+        structs: &mut Vec<StructDef>,
+        enums: &mut Vec<EnumDef>,
+        fns: &mut Vec<FnDef>,
+        vectors: &mut Vec<VectorDef>,
+    ) -> Result<(), String> {
+        self.expect(&Token::Mod)?;
+        let name = self.expect_ident()?;
+        let full_name = self.qualify_item_name(&name);
+        if !self.declared_modules.insert(full_name.clone()) {
+            return Err(format!("duplicate module `{full_name}`"));
+        }
+        match self.peek() {
+            Token::LBrace => {
+                self.bump();
+                self.module_path.push(name);
+                let parsed = self.parse_items(true, structs, enums, fns, vectors);
+                self.module_path.pop();
+                parsed
+            }
+            Token::Semi => Err(format!(
+                "external module `{full_name}` was not loaded; compile from a file path to use `mod {name};`"
+            )),
+            other => Err(format!(
+                "expected `{{` or `;` after module name, got {other:?}"
+            )),
+        }
     }
 
     fn parse_impl(&mut self) -> Result<Vec<FnDef>, String> {
@@ -95,6 +234,9 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut methods = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Pub) {
+                self.bump();
+            }
             if matches!(self.peek(), Token::Extern) {
                 return Err(
                     "extern methods are not supported; export a top-level extern fn instead".into(),
@@ -211,6 +353,7 @@ impl Parser {
     fn parse_enum(&mut self) -> Result<EnumDef, String> {
         self.expect(&Token::Enum)?;
         let name = self.expect_ident()?;
+        let name = self.qualify_item_name(&name);
         self.expect(&Token::LBrace)?;
         let mut variants = Vec::new();
         if !matches!(self.peek(), Token::RBrace) {
@@ -293,6 +436,7 @@ impl Parser {
     fn parse_struct(&mut self) -> Result<StructDef, String> {
         self.expect(&Token::Struct)?;
         let name = self.expect_ident()?;
+        let name = self.qualify_item_name(&name);
         if matches!(self.peek(), Token::LBrace) {
             self.bump();
             let mut fields = Vec::new();
@@ -349,6 +493,7 @@ impl Parser {
     fn parse_vector(&mut self) -> Result<VectorDef, String> {
         self.expect(&Token::Vector)?;
         let name = self.expect_ident()?;
+        let name = self.qualify_item_name(&name);
         let ty = self.parse_ty()?;
 
         let bracket = if matches!(self.peek(), Token::LBracket) {
@@ -409,6 +554,7 @@ impl Parser {
         };
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
+        let name = self.qualify_item_name(&name);
         self.expect(&Token::LParen)?;
         let mut params = Vec::new();
         if !matches!(self.peek(), Token::RParen) {
@@ -670,31 +816,38 @@ impl Parser {
             self.expect(&Token::RBracket)?;
             Ty::Array(Box::new(elem), len)
         } else {
-            match self.bump() {
-                Token::TyI8 => Ok(Ty::I8),
-                Token::TyU8 => Ok(Ty::U8),
-                Token::TyI16 => Ok(Ty::I16),
-                Token::TyU16 => Ok(Ty::U16),
-                Token::TyI32 => Ok(Ty::I32),
-                Token::TyI64 => Ok(Ty::I64),
-                Token::TyU64 => Ok(Ty::U64),
-                Token::TyI128 => Ok(Ty::I128),
-                Token::TyIsize => Ok(Ty::Isize),
-                Token::TyUsize => Ok(Ty::Usize),
-                Token::TyU128 => Ok(Ty::U128),
-                Token::TyBool => Ok(Ty::Bool),
-                Token::TyF16 => Ok(Ty::F16),
-                Token::TyF32 => Ok(Ty::F32),
-                Token::TyF64 => Ok(Ty::F64),
-                Token::TyString => Ok(Ty::String),
-                Token::Ident(n) if n == LIST_TYPE => {
-                    self.expect(&Token::LBracket)?;
-                    let elem = self.parse_ty()?;
-                    self.expect(&Token::RBracket)?;
-                    Ok(Ty::List(Box::new(elem)))
+            match self.peek() {
+                Token::Ident(_) => {
+                    let segments = self.parse_path_segments()?;
+                    let n = self.resolve_type_path(&segments)?;
+                    if n == LIST_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let elem = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::List(Box::new(elem)))
+                    } else {
+                        Ok(Ty::Struct(n))
+                    }
                 }
-                Token::Ident(n) => Ok(Ty::Struct(n)),
-                other => Err(format!("expected type, got {other:?}")),
+                _ => match self.bump() {
+                    Token::TyI8 => Ok(Ty::I8),
+                    Token::TyU8 => Ok(Ty::U8),
+                    Token::TyI16 => Ok(Ty::I16),
+                    Token::TyU16 => Ok(Ty::U16),
+                    Token::TyI32 => Ok(Ty::I32),
+                    Token::TyI64 => Ok(Ty::I64),
+                    Token::TyU64 => Ok(Ty::U64),
+                    Token::TyI128 => Ok(Ty::I128),
+                    Token::TyIsize => Ok(Ty::Isize),
+                    Token::TyUsize => Ok(Ty::Usize),
+                    Token::TyU128 => Ok(Ty::U128),
+                    Token::TyBool => Ok(Ty::Bool),
+                    Token::TyF16 => Ok(Ty::F16),
+                    Token::TyF32 => Ok(Ty::F32),
+                    Token::TyF64 => Ok(Ty::F64),
+                    Token::TyString => Ok(Ty::String),
+                    other => Err(format!("expected type, got {other:?}")),
+                },
             }?
         };
 
@@ -924,6 +1077,11 @@ impl Parser {
                     let Expr::Ident(name) = e else {
                         return Err("call requires identifier".into());
                     };
+                    let name = if name.contains("::") {
+                        name
+                    } else {
+                        self.resolve_call_path(&[name])?
+                    };
                     let args = self.parse_call_args()?;
                     e = Expr::Call { name, args };
                 }
@@ -1070,84 +1228,44 @@ impl Parser {
                 Token::Float(x) => Ok(Expr::Float(x)),
                 Token::Bool(b) => Ok(Expr::Bool(b)),
                 Token::StrLit(s) => Ok(Expr::String(s)),
-                Token::Ident(name) => {
-                    if matches!(self.peek(), Token::DoubleColon) {
+                Token::Ident(first) => {
+                    let mut segments = vec![first];
+                    while matches!(self.peek(), Token::DoubleColon) {
                         self.bump();
-                        let variant = self.expect_ident()?;
-                        if matches!(self.peek(), Token::LParen) {
-                            self.bump();
-                            let mut args = Vec::new();
-                            if !matches!(self.peek(), Token::RParen) {
-                                loop {
-                                    args.push(self.parse_expr()?);
-                                    match self.peek() {
-                                        Token::Comma => {
-                                            self.bump();
-                                            if matches!(self.peek(), Token::RParen) {
-                                                break;
-                                            }
-                                        }
-                                        Token::RParen => break,
-                                        _ => {
-                                            return Err(format!(
-                                                "expected , or ), got {:?}",
-                                                self.peek()
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            self.expect(&Token::RParen)?;
-                            return Ok(Expr::EnumTuple {
-                                enum_name: name,
-                                variant,
-                                args,
-                            });
-                        }
-                        if matches!(self.peek(), Token::LBrace) {
-                            self.bump();
-                            let mut fields = Vec::new();
-                            if !matches!(self.peek(), Token::RBrace) {
-                                loop {
-                                    let fname = self.expect_ident()?;
-                                    self.expect(&Token::Colon)?;
-                                    let fe = self.parse_expr()?;
-                                    fields.push((fname, fe));
-                                    match self.peek() {
-                                        Token::Comma => {
-                                            self.bump();
-                                            if matches!(self.peek(), Token::RBrace) {
-                                                break;
-                                            }
-                                        }
-                                        Token::RBrace => break,
-                                        _ => {
-                                            return Err(format!(
-                                                "expected , or }}, got {:?}",
-                                                self.peek()
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            self.expect(&Token::RBrace)?;
-                            return Ok(Expr::EnumStruct {
-                                enum_name: name,
-                                variant,
-                                fields,
-                            });
-                        }
-                        return Ok(Expr::EnumVariant {
-                            enum_name: name,
-                            variant,
+                        segments.push(self.expect_ident()?);
+                    }
+
+                    if self.looks_like_struct_lit_after_ident() {
+                        let name = self.resolve_item_path(&segments)?;
+                        return self.parse_struct_lit_tail(name);
+                    }
+                    if self.looks_like_vector_lit_after_ident() {
+                        let name = self.resolve_item_path(&segments)?;
+                        return self.parse_vector_lit_tail(name);
+                    }
+                    if matches!(self.peek(), Token::LParen) {
+                        let name = self.resolve_call_path(&segments)?;
+                        let args = self.parse_call_args()?;
+                        return Ok(Expr::Call { name, args });
+                    }
+                    if segments.len() == 1
+                        && (segments[0] == LIST_NEW || segments[0] == LIST_WITH_CAPACITY)
+                        && matches!(self.peek(), Token::LBracket)
+                    {
+                        let name = segments[0].clone();
+                        let ty_args = self.parse_generic_ty_args()?;
+                        let args = self.parse_call_args()?;
+                        return Ok(Expr::GenericCall {
+                            name,
+                            ty_args,
+                            args,
                         });
                     }
-                    if self.looks_like_struct_lit_after_ident() {
-                        self.parse_struct_lit_tail(name)
-                    } else if self.looks_like_vector_lit_after_ident() {
-                        self.parse_vector_lit_tail(name)
+
+                    if segments.len() == 1 {
+                        Ok(Expr::Ident(segments.remove(0)))
                     } else {
-                        Ok(Expr::Ident(name))
+                        Ok(Expr::Ident(self.resolve_item_path(&segments)?))
                     }
                 }
                 Token::LParen => {
@@ -1275,9 +1393,9 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
-            let enum_name = self.expect_ident()?;
-            self.expect(&Token::DoubleColon)?;
-            let variant = self.expect_ident()?;
+            let segments = self.parse_path_segments()?;
+            let path = self.resolve_item_path(&segments)?;
+            let (enum_name, variant) = Self::split_variant_path(path)?;
             let pat = if matches!(self.peek(), Token::LParen) {
                 self.bump();
                 let mut bindings = Vec::new();
