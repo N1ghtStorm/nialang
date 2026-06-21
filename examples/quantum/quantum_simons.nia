@@ -1,0 +1,98 @@
+fn bit0(value: i32) i32 {
+    value & 1
+}
+
+fn bit1(value: i32) i32 {
+    (value & 2) / 2
+}
+
+fn dot2_mod2(left: i32, right: i32) i32 {
+    ((bit0(left) * bit0(right)) + (bit1(left) * bit1(right))) % 2
+}
+
+fn recover_period2(sample_y: i32) i32 {
+    if sample_y == 1 {
+        return 2;
+    }
+    if sample_y == 2 {
+        return 1;
+    }
+    if sample_y == 3 {
+        return 3;
+    }
+    0
+}
+
+fn simon_f_s11(x: i32) i32 {
+    (bit0(x) ^ bit1(x)) * 2
+}
+
+fn oracle_has_period_s11() bool {
+    let ok = true;
+
+    for x in 0..4 {
+        if simon_f_s11(x) != simon_f_s11(x ^ 3) {
+            ok = false;
+        }
+    }
+
+    ok
+}
+
+fn oracle_matches_simon_promise_s11() bool {
+    let ok = oracle_has_period_s11();
+
+    if simon_f_s11(0) == simon_f_s11(1) {
+        ok = false;
+    }
+    if simon_f_s11(0) == simon_f_s11(2) {
+        ok = false;
+    }
+    if simon_f_s11(3) == simon_f_s11(1) {
+        ok = false;
+    }
+    if simon_f_s11(3) == simon_f_s11(2) {
+        ok = false;
+    }
+
+    ok
+}
+
+quant fn hadamard2(qs: [qubit; 2]) {
+    H(qs[0]);
+    H(qs[1]);
+}
+
+quant fn simon_oracle_s11(x: [qubit; 2], out: [qubit; 2]) {
+    CNOT(x[0], out[1]);
+    CNOT(x[1], out[1]);
+}
+
+quant fn simon_round_s11(x: [qubit; 2], out: [qubit; 2]) {
+    hadamard2(x);
+    simon_oracle_s11(x, out);
+    hadamard2(x);
+}
+
+quant fn record_simon_sample_s11() {
+    let x: [qubit; 2] = [qubit(), qubit()];
+    let out: [qubit; 2] = [qubit(), qubit()];
+
+    simon_round_s11(x, out);
+
+    let y0 = q_measure(x[0]);
+    let y1 = q_measure(x[1]);
+
+    q_record(y0);
+    q_record(y1);
+}
+
+fn main() i32 {
+    quant {
+        for _shot in 0..8 {
+            record_simon_sample_s11();
+        }
+    }
+
+    0
+}
