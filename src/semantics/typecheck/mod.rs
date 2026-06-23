@@ -6,14 +6,15 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
-    COS, DEALLOC, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ,
-    GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1,
-    GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y,
-    GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
-    MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_REFCOUNT,
-    MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, RESULT, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET,
-    VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX,
+    GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ,
+    GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T,
+    GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH,
+    LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW,
+    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH,
+    MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT,
+    READ, REALLOC, RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE,
+    VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -641,6 +642,111 @@ fn expect_arg_ty(
         ));
     }
     Ok(got)
+}
+
+fn digest_ty() -> Ty {
+    Ty::Array(Box::new(Ty::U8), 32)
+}
+
+fn expect_digest_arg(
+    name: &str,
+    args: &[Expr],
+    idx: usize,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<(), String> {
+    expect_arg_ty(
+        name,
+        args,
+        idx,
+        &digest_ty(),
+        env,
+        structs,
+        enums,
+        vectors,
+        fns,
+    )?;
+    Ok(())
+}
+
+fn expect_byte_array_arg(
+    name: &str,
+    args: &[Expr],
+    idx: usize,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<usize, String> {
+    let got = infer_expr(&args[idx], env, structs, enums, vectors, fns, None)?;
+    match got {
+        Ty::Array(elem, n) if types_equal(&elem, &Ty::U8) => Ok(n),
+        _ => Err(format!(
+            "`{name}` argument {} type mismatch: expected [u8; N], got {got:?}",
+            idx + 1
+        )),
+    }
+}
+
+fn expect_digest_array_arg(
+    name: &str,
+    args: &[Expr],
+    idx: usize,
+    allow_empty: bool,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<usize, String> {
+    let got = infer_expr(&args[idx], env, structs, enums, vectors, fns, None)?;
+    match got {
+        Ty::Array(elem, n) if types_equal(&elem, &digest_ty()) => {
+            if !allow_empty && n == 0 {
+                return Err(format!("`{name}` expects at least one digest"));
+            }
+            Ok(n)
+        }
+        _ => Err(format!(
+            "`{name}` argument {} type mismatch: expected [[u8; 32]; N], got {got:?}",
+            idx + 1
+        )),
+    }
+}
+
+fn expect_leaf_data_array_arg(
+    name: &str,
+    args: &[Expr],
+    idx: usize,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<(usize, usize), String> {
+    let got = infer_expr(&args[idx], env, structs, enums, vectors, fns, None)?;
+    match got {
+        Ty::Array(ref row_ty, leaves) => match row_ty.as_ref() {
+            Ty::Array(elem_ty, leaf_len) if types_equal(elem_ty, &Ty::U8) => {
+                if leaves == 0 {
+                    return Err(format!("`{name}` expects at least one leaf"));
+                }
+                Ok((leaves, *leaf_len))
+            }
+            _ => Err(format!(
+                "`{name}` argument {} type mismatch: expected [[u8; M]; N], got {got:?}",
+                idx + 1
+            )),
+        },
+        _ => Err(format!(
+            "`{name}` argument {} type mismatch: expected [[u8; M]; N], got {got:?}",
+            idx + 1
+        )),
+    }
 }
 
 fn infer_matrix_source(
@@ -1694,6 +1800,64 @@ fn infer_expr(
                         "`{LEN}` expects an array or heap vector, got {t:?}"
                     )),
                 };
+            }
+            if name == SHA256 || name == MERKLE_LEAF_HASH {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{name}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                expect_byte_array_arg(name, args, 0, env, structs, enums, vectors, fns)?;
+                return Ok(digest_ty());
+            }
+            if name == DIGEST_EQ || name == MERKLE_NODE_HASH {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "`{name}` expects exactly 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                expect_digest_arg(name, args, 0, env, structs, enums, vectors, fns)?;
+                expect_digest_arg(name, args, 1, env, structs, enums, vectors, fns)?;
+                return Ok(if name == DIGEST_EQ {
+                    Ty::Bool
+                } else {
+                    digest_ty()
+                });
+            }
+            if name == MERKLE_ROOT {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{MERKLE_ROOT}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                expect_digest_array_arg(name, args, 0, false, env, structs, enums, vectors, fns)?;
+                return Ok(digest_ty());
+            }
+            if name == MERKLE_ROOT_FROM_DATA {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{MERKLE_ROOT_FROM_DATA}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                expect_leaf_data_array_arg(name, args, 0, env, structs, enums, vectors, fns)?;
+                return Ok(digest_ty());
+            }
+            if name == MERKLE_VERIFY {
+                if args.len() != 4 {
+                    return Err(format!(
+                        "`{MERKLE_VERIFY}` expects exactly 4 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                expect_digest_arg(name, args, 0, env, structs, enums, vectors, fns)?;
+                expect_digest_arg(name, args, 1, env, structs, enums, vectors, fns)?;
+                expect_arg_ty(name, args, 2, &Ty::I32, env, structs, enums, vectors, fns)?;
+                expect_digest_array_arg(name, args, 3, true, env, structs, enums, vectors, fns)?;
+                return Ok(Ty::Bool);
             }
             if name == SIN || name == COS {
                 if args.len() != 1 {

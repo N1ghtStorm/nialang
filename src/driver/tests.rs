@@ -63,6 +63,7 @@ fn compile_fixtures_pipeline() {
         "examples/sample_dft_list.nia",
         "examples/sample_extern_fn.nia",
         "examples/sample_extern_lib.nia",
+        "examples/crypto/merkle_builtin.nia",
     ];
     for f in files {
         compile_fixture_ok(f);

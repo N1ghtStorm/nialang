@@ -7,14 +7,15 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
-    COS, DEALLOC, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ,
-    GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1,
-    GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y,
-    GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
-    MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_REFCOUNT,
-    MATRIX_ROWS, MATRIX_SET, MEASURE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SIN,
-    TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
-    VECTOR_REFCOUNT, VECTOR_SET,
+    COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX,
+    GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ,
+    GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T,
+    GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH,
+    LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW,
+    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH,
+    MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
+    RECORD, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET,
+    VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 use crate::semantics::typecheck::FnSig;
 
@@ -227,7 +228,7 @@ fn emit_module_with_mode(
     out.push_str("target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n");
     out.push_str("target triple = \"unknown-unknown-unknown\"\n\n");
     if mode == CodegenMode::Default {
-        out.push_str(crate::nia_std::llvm_prelude());
+        out.push_str(&crate::nia_std::llvm_prelude());
     } else {
         out.push_str(qir_runner_prelude());
     }
@@ -790,6 +791,10 @@ fn method_receiver_owner_ty(t: &Ty) -> &Ty {
     }
 }
 
+fn digest_ty() -> Ty {
+    Ty::Array(Box::new(Ty::U8), 32)
+}
+
 fn matrix_elem_size(t: &Ty) -> usize {
     match t {
         Ty::I8 | Ty::U8 => 1,
@@ -1217,6 +1222,144 @@ impl<'a> Gen<'a> {
         )
         .unwrap();
         format!("%{out}")
+    }
+
+    fn emit_value_ptr(&mut self, ty: &Ty, value: &str) -> String {
+        let slot = self.fresh();
+        let ll = llvm_ty(ty, self.structs);
+        writeln!(self.out, "  %{} = alloca {}", slot, ll).unwrap();
+        writeln!(self.out, "  store {} {}, ptr %{}", ll, value, slot).unwrap();
+        format!("%{slot}")
+    }
+
+    fn emit_digest_output_call(&mut self, callee: &str, args: &str) -> (Ty, String) {
+        let ty = digest_ty();
+        let ll = llvm_ty(&ty, self.structs);
+        let out_ptr = self.fresh();
+        writeln!(self.out, "  %{} = alloca {}", out_ptr, ll).unwrap();
+        writeln!(
+            self.out,
+            "  call void @{}({}, ptr %{})",
+            callee, args, out_ptr
+        )
+        .unwrap();
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", out, ll, out_ptr).unwrap();
+        (ty, format!("%{out}"))
+    }
+
+    fn emit_crypto_builtin_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> Option<(Ty, String)> {
+        if name == SHA256 || name == MERKLE_LEAF_HASH {
+            let (data_ty, data_val) = self.emit_expr(&args[0], locals, None);
+            let Ty::Array(elem_ty, len) = &data_ty else {
+                unreachable!("typechecked byte array crypto input")
+            };
+            debug_assert!(types_match(elem_ty, &Ty::U8));
+            let data_ptr = self.emit_value_ptr(&data_ty, &data_val);
+            let callee = if name == SHA256 {
+                "nialang.crypto.sha256"
+            } else {
+                "nialang.crypto.merkle_leaf_hash"
+            };
+            return Some(
+                self.emit_digest_output_call(callee, &format!("ptr {}, i64 {}", data_ptr, len)),
+            );
+        }
+
+        if name == DIGEST_EQ {
+            let expected = digest_ty();
+            let (lt, lv) = self.emit_expr(&args[0], locals, Some(&expected));
+            let (rt, rv) = self.emit_expr(&args[1], locals, Some(&expected));
+            debug_assert!(types_match(&lt, &expected));
+            debug_assert!(types_match(&rt, &expected));
+            let lp = self.emit_value_ptr(&lt, &lv);
+            let rp = self.emit_value_ptr(&rt, &rv);
+            let out = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = call i1 @nialang.crypto.digest_eq(ptr {}, ptr {})",
+                out, lp, rp
+            )
+            .unwrap();
+            return Some((Ty::Bool, format!("%{out}")));
+        }
+
+        if name == MERKLE_NODE_HASH {
+            let expected = digest_ty();
+            let (lt, lv) = self.emit_expr(&args[0], locals, Some(&expected));
+            let (rt, rv) = self.emit_expr(&args[1], locals, Some(&expected));
+            debug_assert!(types_match(&lt, &expected));
+            debug_assert!(types_match(&rt, &expected));
+            let lp = self.emit_value_ptr(&lt, &lv);
+            let rp = self.emit_value_ptr(&rt, &rv);
+            return Some(self.emit_digest_output_call(
+                "nialang.crypto.merkle_node_hash",
+                &format!("ptr {}, ptr {}", lp, rp),
+            ));
+        }
+
+        if name == MERKLE_ROOT {
+            let (digests_ty, digests_val) = self.emit_expr(&args[0], locals, None);
+            let Ty::Array(elem_ty, count) = &digests_ty else {
+                unreachable!("typechecked digest array")
+            };
+            debug_assert!(types_match(elem_ty, &digest_ty()));
+            let digests_ptr = self.emit_value_ptr(&digests_ty, &digests_val);
+            return Some(self.emit_digest_output_call(
+                "nialang.crypto.merkle_root",
+                &format!("ptr {}, i64 {}", digests_ptr, count),
+            ));
+        }
+
+        if name == MERKLE_ROOT_FROM_DATA {
+            let (data_ty, data_val) = self.emit_expr(&args[0], locals, None);
+            let Ty::Array(row_ty, leaves) = &data_ty else {
+                unreachable!("typechecked leaf data array")
+            };
+            let Ty::Array(elem_ty, leaf_len) = row_ty.as_ref() else {
+                unreachable!("typechecked leaf data rows")
+            };
+            debug_assert!(types_match(elem_ty, &Ty::U8));
+            let data_ptr = self.emit_value_ptr(&data_ty, &data_val);
+            return Some(self.emit_digest_output_call(
+                "nialang.crypto.merkle_root_from_data",
+                &format!("ptr {}, i64 {}, i64 {}", data_ptr, leaf_len, leaves),
+            ));
+        }
+
+        if name == MERKLE_VERIFY {
+            let expected = digest_ty();
+            let (root_ty, root_val) = self.emit_expr(&args[0], locals, Some(&expected));
+            let (leaf_ty, leaf_val) = self.emit_expr(&args[1], locals, Some(&expected));
+            let (_, index_val) = self.emit_expr(&args[2], locals, Some(&Ty::I32));
+            let (proof_ty, proof_val) = self.emit_expr(&args[3], locals, None);
+            let Ty::Array(proof_elem_ty, depth) = &proof_ty else {
+                unreachable!("typechecked proof array")
+            };
+            debug_assert!(types_match(&root_ty, &expected));
+            debug_assert!(types_match(&leaf_ty, &expected));
+            debug_assert!(types_match(proof_elem_ty, &expected));
+            let root_ptr = self.emit_value_ptr(&root_ty, &root_val);
+            let leaf_ptr = self.emit_value_ptr(&leaf_ty, &leaf_val);
+            let proof_ptr = self.emit_value_ptr(&proof_ty, &proof_val);
+            let index64 = self.fresh();
+            writeln!(self.out, "  %{} = sext i32 {} to i64", index64, index_val).unwrap();
+            let out = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = call i1 @nialang.crypto.merkle_verify(ptr {}, ptr {}, i64 %{}, ptr {}, i64 {})",
+                out, root_ptr, leaf_ptr, index64, proof_ptr, depth
+            )
+            .unwrap();
+            return Some((Ty::Bool, format!("%{out}")));
+        }
+
+        None
     }
 
     fn emit_complex_construct(&mut self, re: &str, im: &str) -> String {
@@ -6553,6 +6696,9 @@ impl<'a> Gen<'a> {
                 unreachable!("typechecked generic call")
             }
             Expr::Call { name, args } => {
+                if let Some(result) = self.emit_crypto_builtin_call(name, args, locals) {
+                    return result;
+                }
                 if let Some(result) = self.emit_qir_builtin_call(name, args, locals) {
                     return result;
                 }

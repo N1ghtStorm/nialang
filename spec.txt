@@ -113,6 +113,22 @@ cis(theta: f64) Complex
 PI: f64
 ```
 
+Crypto/Merkle builtins:
+
+```
+sha256(data: [u8; N]) [u8; 32]
+digest_eq(a: [u8; 32], b: [u8; 32]) bool
+merkle_leaf_hash(data: [u8; N]) [u8; 32]
+merkle_node_hash(left: [u8; 32], right: [u8; 32]) [u8; 32]
+merkle_root(leaves: [[u8; 32]; N]) [u8; 32]        // N must be > 0
+merkle_root_from_data(leaves: [[u8; M]; N]) [u8; 32] // N must be > 0
+merkle_verify(root: [u8; 32], leaf: [u8; 32], index: i32, proof: [[u8; 32]; D]) bool
+```
+
+Merkle hashing uses `SHA256(0x00 || data)` for leaves and
+`SHA256(0x01 || left || right)` for internal nodes. Odd leaf counts duplicate
+the last node at that level.
+
 ## Structs
 
 Named-field struct:

@@ -89,6 +89,40 @@ fn codegen_bitwise_shift_and_remainder_instructions() {
 }
 
 #[test]
+fn codegen_crypto_merkle_builtins_call_runtime_helpers() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let data: [[u8; 3]; 2] = [[1, 2, 3], [4, 5, 6]];
+    let root = merkle_root_from_data(data);
+    let left = merkle_leaf_hash(data[0]);
+    let right = merkle_leaf_hash(data[1]);
+    let expected = merkle_node_hash(left, right);
+    let proof: [[u8; 32]; 1] = [right];
+    let ok = digest_eq(root, expected);
+    let verified = merkle_verify(root, left, 0, proof);
+    if ok {
+        if verified {
+            return 0
+        }
+    }
+    1
+}
+"#,
+    );
+    for expected in [
+        "define void @nialang.crypto.sha256(",
+        "call void @nialang.crypto.merkle_root_from_data(",
+        "call void @nialang.crypto.merkle_leaf_hash(",
+        "call void @nialang.crypto.merkle_node_hash(",
+        "call i1 @nialang.crypto.digest_eq(",
+        "call i1 @nialang.crypto.merkle_verify(",
+    ] {
+        assert!(ll.contains(expected), "missing `{expected}` in IR:\n{ll}");
+    }
+}
+
+#[test]
 fn codegen_complex_std_surface() {
     let ll = emit(
         r#"

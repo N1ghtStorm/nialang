@@ -1,5 +1,7 @@
 //! Built-in "std" surface: `println`, `len`, heap helpers, matrix helpers (reserved names).
 
+mod crypto_llvm;
+
 use crate::ast::{StructDef, Ty};
 
 pub const PRINTLN: &str = "println";
@@ -80,6 +82,13 @@ pub const GATE_CR1: &str = "CR1";
 pub const MEASURE: &str = "q_measure";
 pub const READ: &str = "q_read";
 pub const RECORD: &str = "q_record";
+pub const SHA256: &str = "sha256";
+pub const DIGEST_EQ: &str = "digest_eq";
+pub const MERKLE_LEAF_HASH: &str = "merkle_leaf_hash";
+pub const MERKLE_NODE_HASH: &str = "merkle_node_hash";
+pub const MERKLE_ROOT: &str = "merkle_root";
+pub const MERKLE_ROOT_FROM_DATA: &str = "merkle_root_from_data";
+pub const MERKLE_VERIFY: &str = "merkle_verify";
 
 pub fn complex_ty() -> Ty {
     Ty::Struct(COMPLEX_TYPE.into())
@@ -170,6 +179,13 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | MEASURE
             | READ
             | RECORD
+            | SHA256
+            | DIGEST_EQ
+            | MERKLE_LEAF_HASH
+            | MERKLE_NODE_HASH
+            | MERKLE_ROOT
+            | MERKLE_ROOT_FROM_DATA
+            | MERKLE_VERIFY
     )
 }
 
@@ -179,8 +195,9 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
 /// - all static format strings/text fragments used by generated `printf` calls,
 /// - external declaration of `printf`.
 /// The returned string is embedded at the top of every generated module.
-pub fn llvm_prelude() -> &'static str {
-    r#"; --- nialang std ---
+pub fn llvm_prelude() -> String {
+    let mut prelude = String::from(
+        r#"; --- nialang std ---
 @nialang.std.fmt.i32 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 @nialang.std.fmt.u32 = private unnamed_addr constant [4 x i8] c"%u\0A\00", align 1
 @nialang.std.fmt.i64 = private unnamed_addr constant [6 x i8] c"%lld\0A\00", align 1
@@ -237,5 +254,8 @@ declare void @abort()
 declare double @sin(double)
 declare double @cos(double)
 
-"#
+"#,
+    );
+    prelude.push_str(crypto_llvm::CRYPTO_LLVM_PRELUDE);
+    prelude
 }

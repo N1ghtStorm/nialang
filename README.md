@@ -259,6 +259,35 @@ println(sin(PI) + cos(0.0));
 Available helpers: `complex`, `complex_add`, `complex_sub`, `complex_mul`,
 `complex_scale`, `complex_div`, `sin`, `cos`, `PI`, and `cis`.
 
+### Crypto And Merkle Builtins
+
+Nia exposes SHA-256 and Merkle tree helpers as compiler builtins, so no
+`import` or source prelude is required:
+
+```nia
+let data: [[u8; 3]; 2] = [[1, 2, 3], [4, 5, 6]];
+let root = merkle_root_from_data(data);
+let left = merkle_leaf_hash(data[0]);
+let right = merkle_leaf_hash(data[1]);
+let proof: [[u8; 32]; 1] = [right];
+
+println(digest_eq(root, merkle_node_hash(left, right)));
+println(merkle_verify(root, left, 0, proof));
+```
+
+The digest type is `[u8; 32]`. `sha256` and `merkle_leaf_hash` accept fixed
+byte arrays `[u8; N]`; `merkle_root` accepts `[[u8; 32]; N]`;
+`merkle_root_from_data` accepts fixed-size leaves `[[u8; M]; N]`; and
+`merkle_verify` accepts `(root, leaf, index, proof)` where `proof` is
+`[[u8; 32]; D]`.
+
+Merkle hashing uses domain separation:
+
+- leaf hash: `SHA256(0x00 || data)`
+- internal node hash: `SHA256(0x01 || left || right)`
+
+For odd leaf counts, the last node is duplicated at that level.
+
 ## Matrices
 
 Matrices are built with `matrix([...])`:

@@ -808,6 +808,64 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_accepts_crypto_merkle_builtins() {
+    let src = r#"
+fn main() i32 {
+    let data: [[u8; 3]; 2] = [[1, 2, 3], [4, 5, 6]];
+    let root = merkle_root_from_data(data);
+    let left = merkle_leaf_hash(data[0]);
+    let right = merkle_leaf_hash(data[1]);
+    let expected = merkle_node_hash(left, right);
+    let proof: [[u8; 32]; 1] = [right];
+    let ok = digest_eq(root, expected);
+    let verified = merkle_verify(root, left, 0, proof);
+    if ok {
+        if verified {
+            return 0
+        }
+    }
+    1
+}
+"#;
+    check_all(src).expect("crypto builtins typecheck");
+}
+
+#[test]
+fn typecheck_rejects_empty_merkle_root() {
+    let src = r#"
+fn main() i32 {
+    let leaves: [[u8; 32]; 0] = [];
+    let root = merkle_root(leaves);
+    println(root);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("empty merkle root must be rejected");
+    assert!(err.contains("expects at least one digest"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_merkle_verify_bad_proof_type() {
+    let src = r#"
+fn main() i32 {
+    let root: [u8; 32] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ];
+    let leaf: [u8; 32] = root;
+    let proof: [[u8; 31]; 1] = [[
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ]];
+    merkle_verify(root, leaf, 0, proof);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("proof must be digest array");
+    assert!(err.contains("expected [[u8; 32]; N]"), "{err}");
+}
+
+#[test]
 fn typecheck_rejects_q_read_non_result_argument() {
     let src = r#"
 fn main() i32 {
