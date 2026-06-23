@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
+use std::rc::Rc;
 
 use crate::ast::{
     Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
@@ -60,6 +62,15 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
             for a in args {
                 collect_string_literals_expr(a, out);
             }
+        }
+        Expr::CallExpr { callee, args } => {
+            collect_string_literals_expr(callee, out);
+            for a in args {
+                collect_string_literals_expr(a, out);
+            }
+        }
+        Expr::Closure { body, .. } => {
+            collect_string_literals_block(body, out);
         }
         Expr::MethodCall { receiver, args, .. } => {
             collect_string_literals_expr(receiver, out);
@@ -256,6 +267,7 @@ fn emit_module_with_mode(
         out.push('\n');
     }
 
+    let closures = Rc::new(RefCell::new(ClosureState::default()));
     for f in fns {
         out.push_str(&emit_fn(
             f,
@@ -265,7 +277,13 @@ fn emit_module_with_mode(
             fn_sigs,
             &str_lit_syms,
             mode,
+            closures.clone(),
         ));
+        out.push('\n');
+    }
+    let closure_defs = std::mem::take(&mut closures.borrow_mut().defs);
+    for def in closure_defs {
+        out.push_str(&def);
         out.push('\n');
     }
     out
@@ -275,6 +293,12 @@ fn emit_module_with_mode(
 enum CodegenMode {
     Default,
     QirRunner,
+}
+
+#[derive(Default)]
+struct ClosureState {
+    next_id: u32,
+    defs: Vec<String>,
 }
 
 fn qir_runner_prelude() -> &'static str {
@@ -483,6 +507,14 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::List(inner) => format!("List[{}]", ty_print_label(inner)),
         Ty::Matrix(inner, _) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
         Ty::Matrix(inner, _) => format!("Matrix<{}>", ty_print_label(inner)),
+        Ty::Fn(params, ret) => {
+            let params = params
+                .iter()
+                .map(ty_print_label)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("fn({params}) -> {}", ty_print_label(ret))
+        }
     }
 }
 
@@ -660,6 +692,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::HeapVector(_) => "ptr".into(),
         Ty::List(_) => "ptr".into(),
         Ty::Matrix(_, _) => "ptr".into(),
+        Ty::Fn(_, _) => "ptr".into(),
     }
 }
 
@@ -892,6 +925,7 @@ struct Gen<'a> {
     terminated: bool,
     /// Labels of `loop.exit` for nested `loop`; `break` branches to the top.
     loop_exit_stack: Vec<String>,
+    closures: Rc<RefCell<ClosureState>>,
 }
 
 impl<'a> Gen<'a> {
@@ -903,6 +937,7 @@ impl<'a> Gen<'a> {
         fn_sigs: &'a HashMap<String, FnSig>,
         str_lit_syms: &'a HashMap<String, String>,
         mode: CodegenMode,
+        closures: Rc<RefCell<ClosureState>>,
     ) -> Self {
         Self {
             structs,
@@ -917,6 +952,7 @@ impl<'a> Gen<'a> {
             qir_next_result: 0,
             terminated: false,
             loop_exit_stack: Vec::new(),
+            closures,
         }
     }
 
@@ -932,6 +968,106 @@ impl<'a> Gen<'a> {
         let n = self.lbl;
         self.lbl += 1;
         format!("{prefix}.{n}")
+    }
+
+    fn emit_fn_value_call(
+        &mut self,
+        callee: &str,
+        params: &[Ty],
+        ret: &Ty,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let mut arg_strs = Vec::new();
+        for (arg, param_ty) in args.iter().zip(params) {
+            let (arg_ty, arg_val) = self.emit_expr(arg, locals, Some(param_ty));
+            debug_assert!(types_match(&arg_ty, param_ty));
+            arg_strs.push(format!("{} {}", llvm_ty(param_ty, self.structs), arg_val));
+        }
+        if matches!(ret, Ty::Unit) {
+            writeln!(
+                self.out,
+                "  call void {}({})",
+                callee,
+                arg_strs.join(", ")
+            )
+            .unwrap();
+            (Ty::Unit, String::new())
+        } else {
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = call {} {}({})",
+                tmp,
+                llvm_ty(ret, self.structs),
+                callee,
+                arg_strs.join(", ")
+            )
+            .unwrap();
+            (ret.clone(), format!("%{tmp}"))
+        }
+    }
+
+    fn emit_closure_literal(
+        &mut self,
+        params: &[(String, Option<Ty>)],
+        explicit_ret: Option<&Ty>,
+        body: &Block,
+        hint: Option<&Ty>,
+    ) -> (Ty, String) {
+        let expected = match hint {
+            Some(Ty::Fn(params, ret)) => Some((params.as_slice(), ret.as_ref())),
+            _ => None,
+        };
+        let param_tys = params
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, ann))| match (ann, expected) {
+                (Some(ty), _) => ty.clone(),
+                (None, Some((expected_params, _))) => expected_params[idx].clone(),
+                (None, None) => unreachable!("typechecked closure parameter"),
+            })
+            .collect::<Vec<_>>();
+        let ret_ty = match (explicit_ret, expected) {
+            (Some(ty), _) => ty.clone(),
+            (None, Some((_, ret))) => ret.clone(),
+            (None, None) => unreachable!("typechecked closure return"),
+        };
+        let id = {
+            let mut state = self.closures.borrow_mut();
+            let id = state.next_id;
+            state.next_id += 1;
+            id
+        };
+        let name = format!("__nia_closure_{id}");
+        let f = FnDef {
+            name: name.clone(),
+            is_extern: false,
+            is_quantum: false,
+            params: params
+                .iter()
+                .zip(&param_tys)
+                .map(|((name, _), ty)| (name.clone(), ty.clone()))
+                .collect(),
+            ret: if matches!(ret_ty, Ty::Unit) {
+                None
+            } else {
+                Some(ret_ty.clone())
+            },
+            body: body.clone(),
+        };
+        let def = Gen::new(
+            self.structs,
+            self.enums,
+            self.vectors,
+            self.fn_sigs,
+            self.str_lit_syms,
+            self.mode,
+            self.closures.clone(),
+        )
+        .emit_fn(&f);
+        self.closures.borrow_mut().defs.push(def);
+        (Ty::Fn(param_tys, Box::new(ret_ty)), format!("@{}", sanitize(&name)))
     }
 
     /// Emits pointer to first byte of global string constant.
@@ -2004,7 +2140,8 @@ impl<'a> Gen<'a> {
             | Ty::AnonVector(_, _)
             | Ty::HeapVector(_)
             | Ty::List(_)
-            | Ty::Matrix(_, _) => unreachable!("typechecked"),
+            | Ty::Matrix(_, _)
+            | Ty::Fn(_, _) => unreachable!("typechecked"),
         }
     }
 
@@ -2117,7 +2254,8 @@ impl<'a> Gen<'a> {
             | Ty::AnonVector(_, _)
             | Ty::HeapVector(_)
             | Ty::List(_)
-            | Ty::Matrix(_, _) => unreachable!("typechecked"),
+            | Ty::Matrix(_, _)
+            | Ty::Fn(_, _) => unreachable!("typechecked"),
         }
     }
 
@@ -5587,7 +5725,17 @@ impl<'a> Gen<'a> {
     /// The function body is emitted in SSA-with-stack-slots style (simple and explicit).
     fn emit_fn(mut self, f: &FnDef) -> String {
         self.out.clear();
-        let sig = self.fn_sigs.get(&f.name).expect("typechecked sig");
+        let local_sig;
+        let sig = if let Some(sig) = self.fn_sigs.get(&f.name) {
+            sig
+        } else {
+            local_sig = FnSig {
+                params: f.params.iter().map(|(_, t)| t.clone()).collect(),
+                ret: f.ret.clone(),
+                is_quantum: f.is_quantum,
+            };
+            &local_sig
+        };
         let ret_ll = match &sig.ret {
             None => "void".into(),
             Some(t) => llvm_ty(t, self.structs),
@@ -5655,6 +5803,10 @@ impl<'a> Gen<'a> {
             debug_assert!(types_match(&t, ret_ty));
             writeln!(self.out, "  ret {} {}", llvm_ty(ret_ty, self.structs), v).unwrap();
         } else {
+            if let Some(tail) = &f.body.tail {
+                let (t, _) = self.emit_expr(tail, &local_ptr, Some(&Ty::Unit));
+                debug_assert!(types_match(&t, &Ty::Unit));
+            }
             writeln!(self.out, "  ret void").unwrap();
         }
 
@@ -5922,7 +6074,8 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
-                    | Ty::Matrix(_, _) => unreachable!("typechecked for range"),
+                    | Ty::Matrix(_, _)
+                    | Ty::Fn(_, _) => unreachable!("typechecked for range"),
                 }
                 writeln!(self.out, "  br label %{}", header).unwrap();
 
@@ -6017,7 +6170,8 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Result)
                 | Some(Ty::String)
                 | Some(Ty::Array(_, _))
-                | Some(Ty::Matrix(_, _)) => {
+                | Some(Ty::Matrix(_, _))
+                | Some(Ty::Fn(_, _)) => {
                     unreachable!("typechecked")
                 }
             },
@@ -6062,6 +6216,13 @@ impl<'a> Gen<'a> {
                 let Some((ty, ptr)) = locals.get(name) else {
                     if name == PI {
                         return (Ty::F64, self.emit_pi_value());
+                    }
+                    if let Some(sig) = self.fn_sigs.get(name) {
+                        let ret = sig.ret.clone().unwrap_or(Ty::Unit);
+                        return (
+                            Ty::Fn(sig.params.clone(), Box::new(ret)),
+                            format!("@{}", sanitize(name)),
+                        );
                     }
                     if let Some((enum_name, variant)) = split_variant_path(name) {
                         return self.emit_enum_unit_variant(enum_name, variant);
@@ -6115,7 +6276,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
+                    | Ty::Matrix(_, _)
+                    | Ty::Fn(_, _) => {
                         unreachable!("typechecked neg")
                     }
                 }
@@ -6186,7 +6348,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
+                    | Ty::Matrix(_, _)
+                    | Ty::Fn(_, _) => {
                         unreachable!("add on non-numeric")
                     }
                 }
@@ -6244,7 +6407,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
+                    | Ty::Matrix(_, _)
+                    | Ty::Fn(_, _) => {
                         unreachable!("sub on non-numeric")
                     }
                 }
@@ -6366,7 +6530,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
+                    | Ty::Matrix(_, _)
+                    | Ty::Fn(_, _) => {
                         unreachable!("mul on non-numeric")
                     }
                 }
@@ -6510,7 +6675,8 @@ impl<'a> Gen<'a> {
                     | Ty::Qubit
                     | Ty::Result
                     | Ty::String
-                    | Ty::Matrix(_, _) => {
+                    | Ty::Matrix(_, _)
+                    | Ty::Fn(_, _) => {
                         unreachable!("div on non-numeric")
                     }
                 }
@@ -6695,7 +6861,31 @@ impl<'a> Gen<'a> {
                 }
                 unreachable!("typechecked generic call")
             }
+            Expr::Closure { params, ret, body } => {
+                self.emit_closure_literal(params, ret.as_ref(), body, hint)
+            }
+            Expr::CallExpr { callee, args } => {
+                let (callee_ty, callee_val) = self.emit_expr(callee, locals, None);
+                let Ty::Fn(params, ret) = callee_ty else {
+                    unreachable!("typechecked function value call")
+                };
+                self.emit_fn_value_call(&callee_val, &params, &ret, args, locals)
+            }
             Expr::Call { name, args } => {
+                if let Some((Ty::Fn(params, ret), ptr)) = locals.get(name) {
+                    let params = params.clone();
+                    let ret = ret.as_ref().clone();
+                    let ptr = ptr.clone();
+                    let callee = self.fresh();
+                    writeln!(self.out, "  %{} = load ptr, ptr {}", callee, ptr).unwrap();
+                    return self.emit_fn_value_call(
+                        &format!("%{callee}"),
+                        &params,
+                        &ret,
+                        args,
+                        locals,
+                    );
+                }
                 if let Some(result) = self.emit_crypto_builtin_call(name, args, locals) {
                     return result;
                 }
@@ -7839,6 +8029,11 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Matrix(x, _), Ty::Matrix(y, _)) => {
             matches!(x.as_ref(), Ty::Unit) || matches!(y.as_ref(), Ty::Unit) || types_match(x, y)
         }
+        (Ty::Fn(xp, xr), Ty::Fn(yp, yr)) => {
+            xp.len() == yp.len()
+                && xp.iter().zip(yp).all(|(x, y)| types_match(x, y))
+                && types_match(xr, yr)
+        }
         _ => false,
     }
 }
@@ -7852,8 +8047,9 @@ fn emit_fn(
     fn_sigs: &HashMap<String, FnSig>,
     str_lit_syms: &HashMap<String, String>,
     mode: CodegenMode,
+    closures: Rc<RefCell<ClosureState>>,
 ) -> String {
-    Gen::new(structs, enums, vectors, fn_sigs, str_lit_syms, mode).emit_fn(f)
+    Gen::new(structs, enums, vectors, fn_sigs, str_lit_syms, mode, closures).emit_fn(f)
 }
 
 #[cfg(test)]

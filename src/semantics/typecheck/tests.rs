@@ -91,6 +91,46 @@ fn main() i32 {{
 }
 
 #[test]
+fn typecheck_allows_non_capturing_closure_values() {
+    let src = r#"
+fn apply(x: i32, f: fn(i32) -> i32) i32 {
+    f(x)
+}
+
+fn main() i32 {
+    let add1: fn(i32) -> i32 = |x| x + 1;
+    apply(41, add1)
+}
+"#;
+    check_all(src).expect("closures should typecheck");
+}
+
+#[test]
+fn typecheck_allows_unit_return_function_values() {
+    let src = r#"
+fn main() i32 {
+    let print_i32: fn(i32) -> () = |x| println(x);
+    print_i32(7);
+    0
+}
+"#;
+    check_all(src).expect("unit-return closure should typecheck");
+}
+
+#[test]
+fn typecheck_rejects_closure_captures_for_now() {
+    let src = r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let add_base: fn(i32) -> i32 = |x| x + base;
+    add_base(1)
+}
+"#;
+    let err = check_all(src).expect_err("captures are not supported yet");
+    assert!(err.contains("unknown variable `base`"), "{err}");
+}
+
+#[test]
 fn typecheck_logical_not_requires_bool() {
     check_all(
         r#"

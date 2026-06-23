@@ -380,6 +380,10 @@ fn expr_contains_quantum(e: &Expr) -> bool {
         Expr::Call { args, .. } | Expr::GenericCall { args, .. } => {
             args.iter().any(expr_contains_quantum)
         }
+        Expr::CallExpr { callee, args } => {
+            expr_contains_quantum(callee) || args.iter().any(expr_contains_quantum)
+        }
+        Expr::Closure { body, .. } => block_contains_quantum(body),
         Expr::MethodCall { receiver, args, .. } => {
             expr_contains_quantum(receiver) || args.iter().any(expr_contains_quantum)
         }

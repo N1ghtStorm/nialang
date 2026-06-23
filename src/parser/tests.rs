@@ -534,6 +534,18 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_function_type_and_closure_literals() {
+    let src = r#"
+fn main() i32 {
+    let add1: fn(i32) -> i32 = |x| x + 1;
+    let print_i32: fn(i32) -> () = |x| println(x);
+    add1(41)
+}
+"#;
+    parse_ok(src);
+}
+
+#[test]
 fn parse_inline_if_return_bool() {
     let src = r#"
 fn bar(foo: bool) i32 {

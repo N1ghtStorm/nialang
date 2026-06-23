@@ -1,0 +1,19 @@
+fn apply(x: i32, f: fn(i32) -> i32) i32 {
+    f(x)
+}
+
+fn double(x: i32) i32 {
+    x * 2
+}
+
+fn main() i32 {
+    let add1: fn(i32) -> i32 = |x| x + 1;
+    let print_i32: fn(i32) -> () = |x| println(x);
+    let doubled: fn(i32) -> i32 = double;
+
+    println(apply(41, add1));
+    println(doubled(21));
+    print_i32(7);
+
+    0
+}

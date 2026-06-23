@@ -72,6 +72,13 @@ fn normalize_ty(
         Ty::Ptr(inner) => Ok(Ty::Ptr(Box::new(normalize_ty(
             inner, structs, enums, vectors,
         )?))),
+        Ty::Fn(params, ret) => Ok(Ty::Fn(
+            params
+                .iter()
+                .map(|t| normalize_ty(t, structs, enums, vectors))
+                .collect::<Result<Vec<_>, _>>()?,
+            Box::new(normalize_ty(ret, structs, enums, vectors)?),
+        )),
         Ty::Array(elem, n) => Ok(Ty::Array(
             Box::new(normalize_ty(elem, structs, enums, vectors)?),
             *n,
@@ -177,6 +184,7 @@ fn contains_quantum_ty(t: &Ty) -> bool {
         | Ty::HeapVector(inner)
         | Ty::List(inner)
         | Ty::Matrix(inner, _) => contains_quantum_ty(inner),
+        Ty::Fn(params, ret) => params.iter().any(contains_quantum_ty) || contains_quantum_ty(ret),
         _ => false,
     }
 }
@@ -466,6 +474,11 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::Enum(x), Ty::Enum(y)) => x == y,
         (Ty::Ptr(x), Ty::Ptr(y)) => types_equal(x, y),
         (Ty::Matrix(x, _), Ty::Matrix(y, _)) => types_equal(x, y),
+        (Ty::Fn(xp, xr), Ty::Fn(yp, yr)) => {
+            xp.len() == yp.len()
+                && xp.iter().zip(yp).all(|(x, y)| types_equal(x, y))
+                && types_equal(xr, yr)
+        }
         _ => false,
     }
 }
@@ -1419,6 +1432,134 @@ fn infer_comparison_bin(
     Ok(Ty::Bool)
 }
 
+fn fn_value_ty(sig: &FnSig) -> Ty {
+    Ty::Fn(
+        sig.params.clone(),
+        Box::new(sig.ret.clone().unwrap_or(Ty::Unit)),
+    )
+}
+
+fn infer_fn_value_call(
+    callee_ty: &Ty,
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    let Ty::Fn(params, ret) = callee_ty else {
+        return Err(format!("call requires a function value, got {callee_ty:?}"));
+    };
+    if args.len() != params.len() {
+        return Err(format!(
+            "function value call: expected {} args, got {}",
+            params.len(),
+            args.len()
+        ));
+    }
+    for (a, pt) in args.iter().zip(params) {
+        let at = infer_expr(a, env, structs, enums, vectors, fns, Some(pt))?;
+        if !types_equal(&at, pt) {
+            return Err(format!(
+                "function value call: arg type mismatch: expected {pt:?}, got {at:?}"
+            ));
+        }
+    }
+    Ok(ret.as_ref().clone())
+}
+
+fn infer_closure_expr(
+    params: &[(String, Option<Ty>)],
+    explicit_ret: Option<&Ty>,
+    body: &Block,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+    hint: Option<&Ty>,
+) -> Result<Ty, String> {
+    let expected = match hint {
+        Some(Ty::Fn(params, ret)) => Some((params.as_slice(), ret.as_ref())),
+        Some(other) => return Err(format!("closure cannot satisfy {other:?}")),
+        None => None,
+    };
+    if let Some((expected_params, _)) = expected {
+        if expected_params.len() != params.len() {
+            return Err(format!(
+                "closure parameter count mismatch: expected {}, got {}",
+                expected_params.len(),
+                params.len()
+            ));
+        }
+    }
+
+    let mut closure_params = Vec::with_capacity(params.len());
+    let mut closure_env = HashMap::new();
+    for (idx, (name, ann)) in params.iter().enumerate() {
+        let ty = match (ann, expected) {
+            (Some(t), _) => normalize_ty(t, structs, enums, vectors)?,
+            (None, Some((expected_params, _))) => expected_params[idx].clone(),
+            (None, None) => {
+                return Err(format!(
+                    "closure parameter `{name}` needs a type annotation or contextual `fn(...) -> ...` type"
+                ));
+            }
+        };
+        if closure_env.insert(name.clone(), ty.clone()).is_some() {
+            return Err(format!("duplicate closure parameter `{name}`"));
+        }
+        closure_params.push(ty);
+    }
+
+    let ret_ty = match (explicit_ret, expected) {
+        (Some(t), _) => normalize_ty(t, structs, enums, vectors)?,
+        (None, Some((_, ret))) => ret.clone(),
+        (None, None) => {
+            return Err(
+                "closure needs an explicit `-> T` return type or contextual `fn(...) -> T` type"
+                    .into(),
+            );
+        }
+    };
+
+    if contains_quantum_ty(&Ty::Fn(closure_params.clone(), Box::new(ret_ty.clone()))) {
+        return Err("closures cannot use quantum types".into());
+    }
+    if is_in_quant_scope(env) {
+        return Err("closures are not supported inside `quant` blocks yet".into());
+    }
+
+    for st in &body.stmts {
+        check_stmt(
+            st,
+            &mut closure_env,
+            structs,
+            enums,
+            vectors,
+            fns,
+            Some(&ret_ty),
+            0,
+            false,
+        )?;
+    }
+    if let Some(tail) = &body.tail {
+        let tail_ty = infer_expr(tail, &closure_env, structs, enums, vectors, fns, Some(&ret_ty))?;
+        if !types_equal(&tail_ty, &ret_ty) {
+            return Err(format!(
+                "closure return type mismatch: expected {ret_ty:?}, got {tail_ty:?}"
+            ));
+        }
+    } else if !types_equal(&ret_ty, &Ty::Unit) {
+        return Err(format!(
+            "closure returning {ret_ty:?} must end with an expression"
+        ));
+    }
+
+    Ok(Ty::Fn(closure_params, Box::new(ret_ty)))
+}
+
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -1473,6 +1614,14 @@ fn infer_expr(
             }
             if name == PI {
                 return Ok(Ty::F64);
+            }
+            if let Some(sig) = fns.get(name) {
+                if sig.is_quantum {
+                    return Err(format!(
+                        "quantum function `{name}` cannot be used as a function value"
+                    ));
+                }
+                return Ok(fn_value_ty(sig));
             }
             if let Some((enum_name, variant)) = split_variant_path(name) {
                 if let Some(edef) = enums.get(enum_name) {
@@ -1551,7 +1700,29 @@ fn infer_expr(
         Expr::Le(l, r) => infer_comparison_bin(l, r, env, structs, enums, vectors, fns, "<=", true),
         Expr::Gt(l, r) => infer_comparison_bin(l, r, env, structs, enums, vectors, fns, ">", true),
         Expr::Ge(l, r) => infer_comparison_bin(l, r, env, structs, enums, vectors, fns, ">=", true),
+        Expr::Closure { params, ret, body } => infer_closure_expr(
+            params,
+            ret.as_ref(),
+            body,
+            env,
+            structs,
+            enums,
+            vectors,
+            fns,
+            hint,
+        ),
+        Expr::CallExpr { callee, args } => {
+            let callee_ty = infer_expr(callee, env, structs, enums, vectors, fns, None)?;
+            infer_fn_value_call(&callee_ty, args, env, structs, enums, vectors, fns)
+        }
         Expr::Call { name, args } => {
+            if let Some(local_ty) = env.get(name) {
+                if matches!(local_ty, Ty::Fn(_, _)) {
+                    return infer_fn_value_call(
+                        local_ty, args, env, structs, enums, vectors, fns,
+                    );
+                }
+            }
             if name == QUBIT {
                 if args.len() != 0 {
                     return Err(format!(

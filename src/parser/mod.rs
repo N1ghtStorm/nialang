@@ -805,6 +805,12 @@ impl Parser {
             self.bump();
             let inner = self.parse_ty()?;
             Ty::Ptr(Box::new(inner))
+        } else if matches!(self.peek(), Token::Fn) {
+            self.parse_fn_ty()?
+        } else if matches!(self.peek(), Token::LParen) && matches!(self.peek_n(1), Token::RParen) {
+            self.bump();
+            self.bump();
+            Ty::Unit
         } else if matches!(self.peek(), Token::LBracket) {
             self.bump();
             let elem = self.parse_ty()?;
@@ -883,10 +889,80 @@ impl Parser {
         Ok(ty)
     }
 
+    fn parse_fn_ty(&mut self) -> Result<Ty, String> {
+        self.expect(&Token::Fn)?;
+        self.expect(&Token::LParen)?;
+        let mut params = Vec::new();
+        if !matches!(self.peek(), Token::RParen) {
+            loop {
+                params.push(self.parse_ty()?);
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                    }
+                    Token::RParen => break,
+                    _ => return Err(format!("expected , or ), got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::ThinArrow)?;
+        let ret = self.parse_ty()?;
+        Ok(Ty::Fn(params, Box::new(ret)))
+    }
+
     /// Expression entrypoint. Bitwise operators follow conventional precedence:
     /// comparisons bind tighter than `&`, then `^`, then `|`.
     fn parse_expr(&mut self) -> Result<Expr, String> {
+        if matches!(self.peek(), Token::Pipe) {
+            return self.parse_closure_expr();
+        }
         self.parse_bit_or()
+    }
+
+    fn parse_closure_expr(&mut self) -> Result<Expr, String> {
+        self.expect(&Token::Pipe)?;
+        let mut params = Vec::new();
+        if !matches!(self.peek(), Token::Pipe) {
+            loop {
+                let name = self.expect_ident()?;
+                let ty = if matches!(self.peek(), Token::Colon) {
+                    self.bump();
+                    Some(self.parse_ty()?)
+                } else {
+                    None
+                };
+                params.push((name, ty));
+                match self.peek() {
+                    Token::Comma => {
+                        self.bump();
+                    }
+                    Token::Pipe => break,
+                    _ => return Err(format!("expected , or |, got {:?}", self.peek())),
+                }
+            }
+        }
+        self.expect(&Token::Pipe)?;
+        let ret = if matches!(self.peek(), Token::ThinArrow) {
+            self.bump();
+            Some(self.parse_ty()?)
+        } else {
+            None
+        };
+        let body = if matches!(self.peek(), Token::LBrace) {
+            self.parse_block()?
+        } else {
+            let tail = self.parse_expr()?;
+            Block {
+                stmts: Vec::new(),
+                tail: Some(tail),
+            }
+        };
+        Ok(Expr::Closure {
+            params,
+            ret,
+            body: Box::new(body),
+        })
     }
 
     fn parse_bit_or(&mut self) -> Result<Expr, String> {
@@ -1074,16 +1150,11 @@ impl Parser {
         loop {
             match self.peek().clone() {
                 Token::LParen => {
-                    let Expr::Ident(name) = e else {
-                        return Err("call requires identifier".into());
-                    };
-                    let name = if name.contains("::") {
-                        name
-                    } else {
-                        self.resolve_call_path(&[name])?
-                    };
                     let args = self.parse_call_args()?;
-                    e = Expr::Call { name, args };
+                    e = Expr::CallExpr {
+                        callee: Box::new(e),
+                        args,
+                    };
                 }
                 Token::Dot => {
                     self.bump();

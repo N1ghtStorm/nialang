@@ -859,6 +859,7 @@ Good places to start:
 | `examples/sample_dft_list.nia` | list-backed discrete Fourier transform |
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
+| `examples/sample_closures.nia` | non-capturing closure/function-value smoke test |
 | `examples/sample_extern_lib.nia` | C ABI exports and shared-library mode |
 | `examples/quantum/qubit_create.nia` | QIR gates, rotations, measurement, and result recording |
 | `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |

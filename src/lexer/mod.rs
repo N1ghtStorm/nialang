@@ -65,6 +65,7 @@ pub enum Token {
     DotDot,
     DoubleColon,
     FatArrow,
+    ThinArrow,
     Eq,
     EqEq,
     NotEq,
@@ -224,6 +225,10 @@ impl<'a> Lexer<'a> {
             '-' if matches!(self.src.peek(), Some('=')) => {
                 self.src.next();
                 Token::MinusEq
+            }
+            '-' if matches!(self.src.peek(), Some('>')) => {
+                self.src.next();
+                Token::ThinArrow
             }
             '-' => Token::Minus,
             '*' if matches!(self.src.peek(), Some('=')) => {

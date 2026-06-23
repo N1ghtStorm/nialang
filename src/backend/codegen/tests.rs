@@ -69,6 +69,42 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_non_capturing_closure_function_value() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let add1: fn(i32) -> i32 = |x| x + 1;
+    add1(41)
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal i32 @__nia_closure_0(i32 %x)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("store ptr @__nia_closure_0"), "IR:\n{ll}");
+    assert!(ll.contains("call i32 %"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_unit_return_closure_function_value() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let print_i32: fn(i32) -> () = |x| println(x);
+    print_i32(7);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal void @__nia_closure_0(i32 %x)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call void %"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_bitwise_shift_and_remainder_instructions() {
     let ll = emit(include_str!("../../../examples/tests/ok_bitwise.nia"));
     for instruction in [

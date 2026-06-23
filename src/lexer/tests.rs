@@ -135,6 +135,23 @@ fn lex_arithmetic_and_compound() {
 }
 
 #[test]
+fn lex_thin_arrow_for_function_types() {
+    let toks = collect("fn(i32) -> ()");
+    assert_eq!(
+        toks,
+        vec![
+            Token::Fn,
+            Token::LParen,
+            Token::TyI32,
+            Token::RParen,
+            Token::ThinArrow,
+            Token::LParen,
+            Token::RParen,
+        ]
+    );
+}
+
+#[test]
 fn lex_bitwise_remainder_and_compound() {
     let toks = collect("a % b & c | d ^ ~e << f >> g %= h &= i |= j ^= k <<= l >>= m");
     assert_eq!(

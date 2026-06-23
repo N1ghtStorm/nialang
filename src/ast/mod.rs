@@ -68,6 +68,8 @@ pub enum Ty {
     /// The optional `(rows, cols)` shape is known for matrix literals and derived
     /// matrix expressions. A plain source annotation `Matrix` keeps it as `None`.
     Matrix(Box<Ty>, Option<(usize, usize)>),
+    /// Function value type, written as `fn(T1, T2) -> Ret`.
+    Fn(Vec<Ty>, Box<Ty>),
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +129,14 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
         Ty::Matrix(_, _) => "Matrix".into(),
+        Ty::Fn(params, ret) => {
+            let params = params
+                .iter()
+                .map(ty_symbol_fragment)
+                .collect::<Vec<_>>()
+                .join("_");
+            format!("fn_{}_to_{}", params, ty_symbol_fragment(ret))
+        }
     }
 }
 
@@ -266,6 +276,15 @@ pub enum Expr {
         receiver: Box<Expr>,
         name: String,
         args: Vec<Expr>,
+    },
+    CallExpr {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    Closure {
+        params: Vec<(String, Option<Ty>)>,
+        ret: Option<Ty>,
+        body: Box<Block>,
     },
     StructLit {
         name: String,
