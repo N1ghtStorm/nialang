@@ -259,10 +259,12 @@ println(sin(PI) + cos(0.0));
 Available helpers: `complex`, `complex_add`, `complex_sub`, `complex_mul`,
 `complex_scale`, `complex_div`, `sin`, `cos`, `PI`, and `cis`.
 
-### Crypto And Merkle Builtins
+### Crypto And Merkle Tree Primitives
 
-Nia exposes SHA-256 and Merkle tree helpers as compiler builtins, so no
-`import` or source prelude is required:
+Merkle trees are a first-class language primitive in Nia. SHA-256 and Merkle
+tree helpers are exposed as compiler builtins, so ordinary `.nia` programs can
+build roots, proofs, and verification checks without `import`, `include`, or a
+manually copied source prelude:
 
 ```nia
 let data: [[u8; 3]; 2] = [[1, 2, 3], [4, 5, 6]];
