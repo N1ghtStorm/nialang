@@ -1080,6 +1080,141 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_accepts_phase2_ability_declarations() {
+    let src = r#"
+struct Token has copy, clone {
+    id: i32,
+}
+
+struct Handle has deref, drop {
+    ptr: &i32,
+}
+
+impl Handle {
+    fn deref(&self) &i32 {
+        self.ptr
+    }
+
+    fn drop(self) {
+    }
+}
+
+enum Maybe has copy, clone, drop {
+    Some(i32),
+    None,
+}
+
+vector Point i32 [X, Y] has copy, clone, drop
+
+fn main() i32 {
+    0
+}
+"#;
+    check_all(src).expect("phase 2 ability declarations");
+}
+
+#[test]
+fn typecheck_rejects_copy_without_clone_ability() {
+    let src = r#"
+struct Bad has copy {
+    x: i32,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("copy implies clone");
+    assert!(err.contains("missing required `clone` ability"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_struct_ability_when_field_lacks_it() {
+    let src = r#"
+struct Inner {
+    x: i32,
+}
+
+struct Bad has clone {
+    inner: Inner,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("field lacks clone");
+    assert!(err.contains("field `inner` does not support it"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_drop_without_custom_drop_method() {
+    let src = r#"
+struct Handle has drop {
+    fd: i32,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("drop requires custom method");
+    assert!(err.contains("does not define `fn drop(self)`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_deref_without_pointer_return() {
+    let src = r#"
+struct BoxI32 has deref {
+    ptr: &i32,
+}
+
+impl BoxI32 {
+    fn deref(&self) i32 {
+        1
+    }
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("deref must return pointer");
+    assert!(err.contains("custom deref must return"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_enum_and_vector_deref_abilities() {
+    let enum_src = r#"
+enum Bad has deref {
+    Unit,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let enum_err = check_all(enum_src).expect_err("enum deref rejected");
+    assert!(
+        enum_err.contains("enum deref is not supported yet"),
+        "{enum_err}"
+    );
+
+    let vector_src = r#"
+vector Bad i32 [X] has deref
+
+fn main() i32 {
+    0
+}
+"#;
+    let vector_err = check_all(vector_src).expect_err("vector deref rejected");
+    assert!(
+        vector_err.contains("vector deref is not supported yet"),
+        "{vector_err}"
+    );
+}
+
+#[test]
 fn typecheck_reserves_new_single_qubit_gate_function_names() {
     for gate in ["I", "Y", "Z", "S", "Sdg", "T", "Tdg"] {
         let src = format!(

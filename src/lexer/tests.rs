@@ -55,6 +55,20 @@ fn lex_keywords_and_types() {
 }
 
 #[test]
+fn lex_ability_keywords() {
+    assert_eq!(
+        collect("has copy clone drop deref"),
+        vec![
+            Token::Has,
+            Token::Copy,
+            Token::Clone,
+            Token::Drop,
+            Token::Deref,
+        ]
+    );
+}
+
+#[test]
 fn lex_float_literals_fraction_and_exponent() {
     let toks = collect("1.5 0.25 1.0e3 2.5e-2");
     assert_eq!(

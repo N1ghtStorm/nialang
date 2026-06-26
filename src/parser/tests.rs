@@ -28,6 +28,48 @@ fn parse_fixture_named_struct() {
 }
 
 #[test]
+fn parse_struct_enum_and_vector_abilities() {
+    let src = r#"
+struct BoxI32 has deref, drop {
+    ptr: &i32,
+}
+
+struct Pair has copy, clone (i32, i32)
+
+enum Maybe has copy, clone, drop {
+    Some(i32),
+    None,
+}
+
+vector Point i32 [ X, Y ] has copy, clone, drop
+
+fn main() i32 { 0 }
+"#;
+    let toks = tokenize(src);
+    let (structs, enums, _fns, vectors) = Parser::new(toks).parse_file().unwrap();
+
+    assert_eq!(structs[0].abilities, vec![Ability::Deref, Ability::Drop]);
+    assert_eq!(structs[1].abilities, vec![Ability::Copy, Ability::Clone]);
+    assert_eq!(
+        enums[0].abilities,
+        vec![Ability::Copy, Ability::Clone, Ability::Drop]
+    );
+    assert_eq!(
+        vectors[0].abilities,
+        vec![Ability::Copy, Ability::Clone, Ability::Drop]
+    );
+}
+
+#[test]
+fn parse_rejects_duplicate_ability() {
+    let toks = tokenize("struct Bad has copy, copy { x: i32 }");
+    let err = Parser::new(toks)
+        .parse_file()
+        .expect_err("duplicate ability should be rejected");
+    assert!(err.contains("duplicate ability"), "{err}");
+}
+
+#[test]
 fn parse_fixture_impl_methods() {
     parse_ok(include_str!("../../examples/tests/ok_impl_methods.nia"));
 }

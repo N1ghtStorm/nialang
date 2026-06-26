@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use crate::ast::{
-    Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef,
-    Ty, VectorDef, method_symbol,
+    Ability, Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt,
+    StructDef, Ty, VectorDef, method_symbol,
 };
 use crate::lexer::Token;
 use crate::nia_std::{LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY};
@@ -275,7 +275,7 @@ impl Parser {
 
     fn parse_method(&mut self, owner: &Ty) -> Result<FnDef, String> {
         self.expect(&Token::Fn)?;
-        let name = self.expect_ident()?;
+        let name = self.expect_method_name()?;
         self.expect(&Token::LParen)?;
         let mut params = Vec::new();
         if !matches!(self.peek(), Token::RParen) {
@@ -306,6 +306,16 @@ impl Parser {
             ret,
             body,
         })
+    }
+
+    fn expect_method_name(&mut self) -> Result<String, String> {
+        match self.bump() {
+            Token::Ident(s) => Ok(s),
+            Token::Clone => Ok("clone".into()),
+            Token::Drop => Ok("drop".into()),
+            Token::Deref => Ok("deref".into()),
+            other => Err(format!("expected method name, got {other:?}")),
+        }
     }
 
     fn parse_method_param(
@@ -350,10 +360,56 @@ impl Parser {
         Ok((pname, pty))
     }
 
+    fn parse_ability(&mut self) -> Result<Ability, String> {
+        match self.bump() {
+            Token::Copy => Ok(Ability::Copy),
+            Token::Clone => Ok(Ability::Clone),
+            Token::Drop => Ok(Ability::Drop),
+            Token::Deref => Ok(Ability::Deref),
+            other => Err(format!("expected ability after `has`, got {other:?}")),
+        }
+    }
+
+    fn ability_label(ability: Ability) -> &'static str {
+        match ability {
+            Ability::Copy => "copy",
+            Ability::Clone => "clone",
+            Ability::Drop => "drop",
+            Ability::Deref => "deref",
+        }
+    }
+
+    fn parse_abilities_opt(&mut self) -> Result<Vec<Ability>, String> {
+        if !matches!(self.peek(), Token::Has) {
+            return Ok(Vec::new());
+        }
+        self.bump();
+
+        let mut abilities = Vec::new();
+        let mut seen = HashSet::new();
+        loop {
+            let ability = self.parse_ability()?;
+            if !seen.insert(ability) {
+                return Err(format!(
+                    "duplicate ability `{}`",
+                    Self::ability_label(ability)
+                ));
+            }
+            abilities.push(ability);
+            if matches!(self.peek(), Token::Comma) {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        Ok(abilities)
+    }
+
     fn parse_enum(&mut self) -> Result<EnumDef, String> {
         self.expect(&Token::Enum)?;
         let name = self.expect_ident()?;
         let name = self.qualify_item_name(&name);
+        let abilities = self.parse_abilities_opt()?;
         self.expect(&Token::LBrace)?;
         let mut variants = Vec::new();
         if !matches!(self.peek(), Token::RBrace) {
@@ -424,7 +480,11 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(EnumDef { name, variants })
+        Ok(EnumDef {
+            name,
+            abilities,
+            variants,
+        })
     }
 
     /// Parses struct declaration in one of two forms:
@@ -437,6 +497,7 @@ impl Parser {
         self.expect(&Token::Struct)?;
         let name = self.expect_ident()?;
         let name = self.qualify_item_name(&name);
+        let abilities = self.parse_abilities_opt()?;
         if matches!(self.peek(), Token::LBrace) {
             self.bump();
             let mut fields = Vec::new();
@@ -452,6 +513,7 @@ impl Parser {
             self.expect(&Token::RBrace)?;
             Ok(StructDef {
                 name,
+                abilities,
                 is_tuple: false,
                 fields,
             })
@@ -479,6 +541,7 @@ impl Parser {
             self.expect(&Token::RParen)?;
             Ok(StructDef {
                 name,
+                abilities,
                 is_tuple: true,
                 fields,
             })
@@ -526,7 +589,13 @@ impl Parser {
         } else {
             self.expect(&Token::RBrace)?;
         }
-        Ok(VectorDef { name, ty, fields })
+        let abilities = self.parse_abilities_opt()?;
+        Ok(VectorDef {
+            name,
+            abilities,
+            ty,
+            fields,
+        })
     }
 
     /// Parses function declaration: name, params, optional return type, and body.

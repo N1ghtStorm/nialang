@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
-    method_symbol,
+    Ability, Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty,
+    VectorDef, method_symbol,
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
@@ -129,6 +129,244 @@ fn split_variant_path(path: &str) -> Option<(&str, &str)> {
 
 fn path_leaf(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path)
+}
+
+fn has_declared_ability(abilities: &[Ability], ability: Ability) -> bool {
+    abilities.contains(&ability)
+}
+
+fn ability_label(ability: Ability) -> &'static str {
+    match ability {
+        Ability::Copy => "copy",
+        Ability::Clone => "clone",
+        Ability::Drop => "drop",
+        Ability::Deref => "deref",
+    }
+}
+
+fn is_legacy_scalar_ability_carveout(t: &Ty, ability: Ability) -> bool {
+    if matches!(ability, Ability::Deref) {
+        return false;
+    }
+    matches!(
+        t,
+        Ty::Unit
+            | Ty::Bool
+            | Ty::I8
+            | Ty::U8
+            | Ty::I16
+            | Ty::U16
+            | Ty::I32
+            | Ty::I64
+            | Ty::U64
+            | Ty::I128
+            | Ty::Isize
+            | Ty::Usize
+            | Ty::U128
+            | Ty::F16
+            | Ty::F32
+            | Ty::F64
+    )
+}
+
+fn has_formal_ability(
+    t: &Ty,
+    ability: Ability,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    match t {
+        Ty::Struct(name) => structs
+            .get(name)
+            .is_some_and(|s| has_declared_ability(&s.abilities, ability)),
+        Ty::Enum(name) => enums
+            .get(name)
+            .is_some_and(|e| has_declared_ability(&e.abilities, ability)),
+        Ty::Vector(name, _) => vectors
+            .get(name)
+            .is_some_and(|v| has_declared_ability(&v.abilities, ability)),
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
+            !matches!(ability, Ability::Deref)
+                && has_formal_ability(elem, ability, structs, enums, vectors)
+        }
+        _ => false,
+    }
+}
+
+fn supports_decl_ability(
+    t: &Ty,
+    ability: Ability,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    if has_formal_ability(t, ability, structs, enums, vectors)
+        || is_legacy_scalar_ability_carveout(t, ability)
+    {
+        return true;
+    }
+    match t {
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) if !matches!(ability, Ability::Deref) => {
+            supports_decl_ability(elem, ability, structs, enums, vectors)
+        }
+        _ => false,
+    }
+}
+
+fn validate_copy_implies_clone(owner: &str, abilities: &[Ability]) -> Result<(), String> {
+    if has_declared_ability(abilities, Ability::Copy)
+        && !has_declared_ability(abilities, Ability::Clone)
+    {
+        return Err(format!(
+            "`{owner}` has `copy` but is missing required `clone` ability"
+        ));
+    }
+    Ok(())
+}
+
+fn custom_method_name(owner: &str, method: &str) -> String {
+    method_symbol(&Ty::Struct(owner.into()), method)
+}
+
+fn validate_custom_drop_sig(s: &StructDef, fn_sigs: &HashMap<String, FnSig>) -> Result<(), String> {
+    let method = custom_method_name(&s.name, "drop");
+    let Some(sig) = fn_sigs.get(&method) else {
+        return Err(format!(
+            "struct `{}` has `drop` but does not define `fn drop(self)`",
+            s.name
+        ));
+    };
+    if sig.params.len() != 1 || sig.params[0] != Ty::Struct(s.name.clone()) {
+        return Err(format!(
+            "struct `{}` custom drop must have signature `fn drop(self) ()`",
+            s.name
+        ));
+    }
+    if !matches!(sig.ret, None | Some(Ty::Unit)) {
+        return Err(format!("struct `{}` custom drop must return `()`", s.name));
+    }
+    Ok(())
+}
+
+fn validate_custom_deref_sig(
+    s: &StructDef,
+    fn_sigs: &HashMap<String, FnSig>,
+) -> Result<(), String> {
+    let method = custom_method_name(&s.name, "deref");
+    let Some(sig) = fn_sigs.get(&method) else {
+        return Err(format!(
+            "struct `{}` has `deref` but does not define `fn deref(&self) &Target`",
+            s.name
+        ));
+    };
+    if sig.params.len() != 1 || sig.params[0] != Ty::Ptr(Box::new(Ty::Struct(s.name.clone()))) {
+        return Err(format!(
+            "struct `{}` custom deref must have signature `fn deref(&self) &Target`",
+            s.name
+        ));
+    }
+    if !matches!(sig.ret, Some(Ty::Ptr(_))) {
+        return Err(format!(
+            "struct `{}` custom deref must return a pointer/reference type",
+            s.name
+        ));
+    }
+    Ok(())
+}
+
+fn validate_abilities(
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fn_sigs: &HashMap<String, FnSig>,
+) -> Result<(), String> {
+    for s in structs.values() {
+        validate_copy_implies_clone(&format!("struct `{}`", s.name), &s.abilities)?;
+        for ability in s.abilities.clone() {
+            match ability {
+                Ability::Copy | Ability::Clone => {
+                    for (field, ty) in &s.fields {
+                        if !supports_decl_ability(ty, ability, structs, enums, vectors) {
+                            let ability = ability_label(ability);
+                            return Err(format!(
+                                "struct `{}` has `{ability}` but field `{field}` does not support it",
+                                s.name
+                            ));
+                        }
+                    }
+                }
+                Ability::Drop => validate_custom_drop_sig(s, fn_sigs)?,
+                Ability::Deref => validate_custom_deref_sig(s, fn_sigs)?,
+            }
+        }
+    }
+
+    for e in enums.values() {
+        validate_copy_implies_clone(&format!("enum `{}`", e.name), &e.abilities)?;
+        if has_declared_ability(&e.abilities, Ability::Deref) {
+            return Err(format!(
+                "enum `{}` declares `deref`, but enum deref is not supported yet",
+                e.name
+            ));
+        }
+        for ability in e.abilities.clone() {
+            if matches!(ability, Ability::Deref) {
+                continue;
+            }
+            for variant in &e.variants {
+                match &variant.fields {
+                    EnumVariantFields::Unit => {}
+                    EnumVariantFields::Tuple(fields) => {
+                        for (idx, ty) in fields.iter().enumerate() {
+                            if !supports_decl_ability(ty, ability, structs, enums, vectors) {
+                                let ability = ability_label(ability);
+                                return Err(format!(
+                                    "enum `{}` has `{ability}` but variant `{}` field `{idx}` does not support it",
+                                    e.name, variant.name
+                                ));
+                            }
+                        }
+                    }
+                    EnumVariantFields::Struct(fields) => {
+                        for (field, ty) in fields {
+                            if !supports_decl_ability(ty, ability, structs, enums, vectors) {
+                                let ability = ability_label(ability);
+                                return Err(format!(
+                                    "enum `{}` has `{ability}` but variant `{}` field `{field}` does not support it",
+                                    e.name, variant.name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for v in vectors.values() {
+        validate_copy_implies_clone(&format!("vector `{}`", v.name), &v.abilities)?;
+        if has_declared_ability(&v.abilities, Ability::Deref) {
+            return Err(format!(
+                "vector `{}` declares `deref`, but vector deref is not supported yet",
+                v.name
+            ));
+        }
+        for ability in v.abilities.clone() {
+            if matches!(ability, Ability::Deref) {
+                continue;
+            }
+            if !supports_decl_ability(&v.ty, ability, structs, enums, vectors) {
+                let ability = ability_label(ability);
+                return Err(format!(
+                    "vector `{}` has `{ability}` but element type does not support it",
+                    v.name
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn is_in_quant_scope(env: &HashMap<String, Ty>) -> bool {
@@ -350,6 +588,12 @@ pub fn collect_sigs(
             return Err(format!("duplicate function {}", f.name));
         }
     }
+    validate_abilities(
+        &normalized_structs,
+        &normalized_enums,
+        &normalized_vectors,
+        &fn_sigs,
+    )?;
     Ok((
         normalized_structs,
         normalized_enums,
@@ -1545,7 +1789,15 @@ fn infer_closure_expr(
         )?;
     }
     if let Some(tail) = &body.tail {
-        let tail_ty = infer_expr(tail, &closure_env, structs, enums, vectors, fns, Some(&ret_ty))?;
+        let tail_ty = infer_expr(
+            tail,
+            &closure_env,
+            structs,
+            enums,
+            vectors,
+            fns,
+            Some(&ret_ty),
+        )?;
         if !types_equal(&tail_ty, &ret_ty) {
             return Err(format!(
                 "closure return type mismatch: expected {ret_ty:?}, got {tail_ty:?}"
@@ -1718,9 +1970,7 @@ fn infer_expr(
         Expr::Call { name, args } => {
             if let Some(local_ty) = env.get(name) {
                 if matches!(local_ty, Ty::Fn(_, _)) {
-                    return infer_fn_value_call(
-                        local_ty, args, env, structs, enums, vectors, fns,
-                    );
+                    return infer_fn_value_call(local_ty, args, env, structs, enums, vectors, fns);
                 }
             }
             if name == QUBIT {

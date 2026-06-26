@@ -97,6 +97,7 @@ pub fn complex_ty() -> Ty {
 pub fn builtin_structs() -> Vec<StructDef> {
     vec![StructDef {
         name: COMPLEX_TYPE.into(),
+        abilities: Vec::new(),
         is_tuple: false,
         fields: vec![("re".into(), Ty::F64), ("im".into(), Ty::F64)],
     }]

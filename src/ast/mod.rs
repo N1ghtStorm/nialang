@@ -72,15 +72,25 @@ pub enum Ty {
     Fn(Vec<Ty>, Box<Ty>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Ability {
+    Copy,
+    Clone,
+    Drop,
+    Deref,
+}
+
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
+    pub abilities: Vec<Ability>,
     pub is_tuple: bool,
     pub fields: Vec<(String, Ty)>,
 }
 #[derive(Debug, Clone)]
 pub struct VectorDef {
     pub name: String,
+    pub abilities: Vec<Ability>,
     pub ty: Ty,
     pub fields: Vec<String>,
 }
@@ -143,6 +153,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
+    pub abilities: Vec<Ability>,
     pub variants: Vec<EnumVariantDef>,
 }
 

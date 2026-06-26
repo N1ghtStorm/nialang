@@ -985,13 +985,7 @@ impl<'a> Gen<'a> {
             arg_strs.push(format!("{} {}", llvm_ty(param_ty, self.structs), arg_val));
         }
         if matches!(ret, Ty::Unit) {
-            writeln!(
-                self.out,
-                "  call void {}({})",
-                callee,
-                arg_strs.join(", ")
-            )
-            .unwrap();
+            writeln!(self.out, "  call void {}({})", callee, arg_strs.join(", ")).unwrap();
             (Ty::Unit, String::new())
         } else {
             let tmp = self.fresh();
@@ -1067,7 +1061,10 @@ impl<'a> Gen<'a> {
         )
         .emit_fn(&f);
         self.closures.borrow_mut().defs.push(def);
-        (Ty::Fn(param_tys, Box::new(ret_ty)), format!("@{}", sanitize(&name)))
+        (
+            Ty::Fn(param_tys, Box::new(ret_ty)),
+            format!("@{}", sanitize(&name)),
+        )
     }
 
     /// Emits pointer to first byte of global string constant.
@@ -8049,7 +8046,16 @@ fn emit_fn(
     mode: CodegenMode,
     closures: Rc<RefCell<ClosureState>>,
 ) -> String {
-    Gen::new(structs, enums, vectors, fn_sigs, str_lit_syms, mode, closures).emit_fn(f)
+    Gen::new(
+        structs,
+        enums,
+        vectors,
+        fn_sigs,
+        str_lit_syms,
+        mode,
+        closures,
+    )
+    .emit_fn(f)
 }
 
 #[cfg(test)]

@@ -215,6 +215,8 @@ Deliverables:
 
 ## Phase 1: lexer, parser, and AST surface
 
+Status: complete.
+
 Add the keywords:
 
 ```text
@@ -272,6 +274,8 @@ Deliverables:
 - no ownership behavior changes yet
 
 ## Phase 2: ability database in type checking
+
+Status: complete.
 
 Build an ability environment during type checking:
 
