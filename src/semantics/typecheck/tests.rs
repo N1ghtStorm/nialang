@@ -1215,6 +1215,120 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_rejects_use_after_move() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+fn main() i32 {
+    let a = Token { id: 1 };
+    let b = a;
+    a.id + b.id
+}
+"#;
+    let err = check_all(src).expect_err("non-copy local should move");
+    assert!(err.contains("use of moved local `a`"), "{err}");
+}
+
+#[test]
+fn typecheck_copy_ability_keeps_local_available_after_assignment() {
+    let src = r#"
+struct Token has copy, clone {
+    id: i32,
+}
+
+fn main() i32 {
+    let a = Token { id: 1 };
+    let b = a;
+    a.id + b.id
+}
+"#;
+    check_all(src).expect("copy values should not move on assignment");
+}
+
+#[test]
+fn typecheck_rejects_function_argument_use_after_move() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+fn take(t: Token) i32 {
+    t.id
+}
+
+fn main() i32 {
+    let a = Token { id: 1 };
+    let first = take(a);
+    let second = take(a);
+    first + second
+}
+"#;
+    let err = check_all(src).expect_err("by-value argument should move");
+    assert!(err.contains("use of moved local `a`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_returned_local_use_after_move() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+fn consume(t: Token) Token {
+    return t
+    t
+}
+
+fn main() i32 {
+    let value = consume(Token { id: 1 });
+    value.id
+}
+"#;
+    let err = check_all(src).expect_err("returning a non-copy local should move it");
+    assert!(err.contains("use of moved local `t`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_partial_move_out_of_struct() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+struct Boxed {
+    token: Token,
+}
+
+fn main() i32 {
+    let boxed = Boxed { token: Token { id: 1 } };
+    let token = boxed.token;
+    token.id
+}
+"#;
+    let err = check_all(src).expect_err("partial moves are not supported yet");
+    assert!(err.contains("partial moves are not supported yet"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_indexed_move() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+fn main() i32 {
+    let tokens: [Token; 1] = [Token { id: 1 }];
+    let token = tokens[0];
+    token.id
+}
+"#;
+    let err = check_all(src).expect_err("indexed moves are not supported yet");
+    assert!(err.contains("indexed moves are not supported yet"), "{err}");
+}
+
+#[test]
 fn typecheck_reserves_new_single_qubit_gate_function_names() {
     for gate in ["I", "Y", "Z", "S", "Sdg", "T", "Tdg"] {
         let src = format!(

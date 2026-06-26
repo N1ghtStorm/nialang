@@ -338,6 +338,8 @@ Deliverables:
 
 ## Phase 3: move checking for non-copy values
 
+Status: complete.
+
 Add a local ownership state during type checking:
 
 ```text
@@ -374,6 +376,21 @@ Deliverables:
 - return move tests
 - existing scalar by-value behavior remains backwards-compatible while formal
   primitive `copy` ability waits for the final integration phase
+
+Implemented notes:
+
+- the first move checker tracks local states as `available` / `moved`;
+  `maybe_initialized` remains a future extension for uninitialized locals and
+  finer control-flow merges
+- `println` and `len` are checked as read-only builtin operations
+- `&self` methods read their receiver; by-value methods move non-copy
+  receivers
+- partial moves out of struct fields and moves out of indexed values are
+  rejected for now
+- scalar primitives, strings, references, function values, quantum handles,
+  matrices, heap vectors, lists, Complex, and scalar named vectors keep
+  backwards-compatible copy-like move behavior until primitive ability
+  integration
 
 ## Phase 4: explicit clone glue
 
@@ -968,7 +985,7 @@ Deliverables:
 1. Parse `has copy, clone, drop, deref`.
 2. Add `AbilitySet` and typechecker queries.
 3. Validate declared abilities structurally.
-4. Add move checking for non-copy locals.
+4. Add move checking for non-copy locals. (complete)
 5. Add `clone(x)`.
 6. Add custom struct clone methods.
 7. Add custom struct deref methods and explicit `*x` lowering through deref

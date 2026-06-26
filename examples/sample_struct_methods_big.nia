@@ -7,22 +7,22 @@
 // - nested method calls through fields,
 // - simple boolean methods built from early returns.
 
-struct Point2 {
+struct Point2 has copy, clone {
     x: i32,
     y: i32
 }
 
-struct Size2 {
+struct Size2 has copy, clone {
     w: i32,
     h: i32
 }
 
-struct Rect {
+struct Rect has copy, clone {
     origin: Point2,
     size: Size2
 }
 
-struct Widget {
+struct Widget has copy, clone {
     frame: Rect,
     padding: i32,
     weight: i32

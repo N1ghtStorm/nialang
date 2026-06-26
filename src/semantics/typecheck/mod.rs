@@ -6,12 +6,12 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
-    COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX,
-    GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ,
-    GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T,
-    GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH,
-    LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW,
-    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH,
+    COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1,
+    GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY,
+    GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP,
+    GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW,
+    LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
+    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH,
     MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT,
     READ, REALLOC, RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE,
     VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
@@ -681,7 +681,795 @@ pub fn check_fn(
             f.name
         ));
     }
+    check_fn_moves(f, struct_fields, enums, vectors, fn_sigs)?;
     Ok(env)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalMoveState {
+    Available,
+    Moved,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExprMoveMode {
+    Consume,
+    ReadOnly,
+}
+
+struct MoveCtx<'a> {
+    structs: &'a HashMap<String, StructDef>,
+    enums: &'a HashMap<String, EnumDef>,
+    vectors: &'a HashMap<String, VectorDef>,
+    fns: &'a HashMap<String, FnSig>,
+}
+
+type MoveStates = HashMap<String, LocalMoveState>;
+
+fn check_fn_moves(
+    f: &FnDef,
+    struct_fields: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fn_sigs: &HashMap<String, FnSig>,
+) -> Result<(), String> {
+    let sig = fn_sigs
+        .get(&f.name)
+        .ok_or_else(|| format!("missing sig for {}", f.name))?;
+    let ctx = MoveCtx {
+        structs: struct_fields,
+        enums,
+        vectors,
+        fns: fn_sigs,
+    };
+    let mut env: HashMap<String, Ty> = if f.is_quantum {
+        enter_quant_scope(&HashMap::new())
+    } else {
+        HashMap::new()
+    };
+    let mut states = MoveStates::new();
+    for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
+        env.insert(pname.clone(), pty.clone());
+        states.insert(pname.clone(), LocalMoveState::Available);
+    }
+    check_moves_block(
+        &f.body,
+        &mut env,
+        &mut states,
+        &ctx,
+        sig.ret.as_ref(),
+        sig.ret.as_ref(),
+    )
+}
+
+fn check_moves_block(
+    block: &Block,
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+    fn_ret: Option<&Ty>,
+    tail_hint: Option<&Ty>,
+) -> Result<(), String> {
+    for st in &block.stmts {
+        check_moves_stmt(st, env, states, ctx, fn_ret)?;
+    }
+    if let Some(tail) = &block.tail {
+        check_moves_expr(tail, env, states, ctx, tail_hint, ExprMoveMode::Consume)?;
+    }
+    Ok(())
+}
+
+fn merge_moved_from_child(parent: &mut MoveStates, child: &MoveStates) {
+    let names = parent.keys().cloned().collect::<Vec<_>>();
+    for name in names {
+        if matches!(child.get(&name), Some(LocalMoveState::Moved)) {
+            parent.insert(name, LocalMoveState::Moved);
+        }
+    }
+}
+
+fn check_moves_stmt(
+    st: &Stmt,
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+    fn_ret: Option<&Ty>,
+) -> Result<(), String> {
+    match st {
+        Stmt::Let {
+            name,
+            ty: ann,
+            init,
+        } => {
+            let ann_norm = match ann {
+                Some(t) => Some(normalize_ty(t, ctx.structs, ctx.enums, ctx.vectors)?),
+                None => None,
+            };
+            check_moves_expr(
+                init,
+                env,
+                states,
+                ctx,
+                ann_norm.as_ref(),
+                ExprMoveMode::Consume,
+            )?;
+            let t = infer_expr(
+                init,
+                env,
+                ctx.structs,
+                ctx.enums,
+                ctx.vectors,
+                ctx.fns,
+                ann_norm.as_ref(),
+            )?;
+            env.insert(name.clone(), t);
+            states.insert(name.clone(), LocalMoveState::Available);
+        }
+        Stmt::Expr(e) => {
+            check_moves_expr(e, env, states, ctx, None, ExprMoveMode::Consume)?;
+        }
+        Stmt::Assign { target, value } => {
+            let target_ty = infer_expr(
+                target,
+                env,
+                ctx.structs,
+                ctx.enums,
+                ctx.vectors,
+                ctx.fns,
+                None,
+            )?;
+            check_moves_lvalue(target, env, states, ctx, true)?;
+            check_moves_expr(
+                value,
+                env,
+                states,
+                ctx,
+                Some(&target_ty),
+                ExprMoveMode::Consume,
+            )?;
+            if let Expr::Ident(name) = target {
+                if env.contains_key(name) {
+                    states.insert(name.clone(), LocalMoveState::Available);
+                }
+            }
+        }
+        Stmt::Return(e) => {
+            check_moves_expr(e, env, states, ctx, fn_ret, ExprMoveMode::Consume)?;
+        }
+        Stmt::Break => {}
+        Stmt::If { cond, then_block } => {
+            check_moves_expr(
+                cond,
+                env,
+                states,
+                ctx,
+                Some(&Ty::Bool),
+                ExprMoveMode::Consume,
+            )?;
+            let mut then_env = env.clone();
+            let mut then_states = states.clone();
+            check_moves_block(
+                then_block,
+                &mut then_env,
+                &mut then_states,
+                ctx,
+                fn_ret,
+                None,
+            )?;
+            merge_moved_from_child(states, &then_states);
+        }
+        Stmt::While { cond, body } => {
+            check_moves_expr(
+                cond,
+                env,
+                states,
+                ctx,
+                Some(&Ty::Bool),
+                ExprMoveMode::Consume,
+            )?;
+            let mut body_env = env.clone();
+            let mut body_states = states.clone();
+            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            merge_moved_from_child(states, &body_states);
+        }
+        Stmt::Loop { body } => {
+            let mut body_env = env.clone();
+            let mut body_states = states.clone();
+            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            merge_moved_from_child(states, &body_states);
+        }
+        Stmt::For {
+            var,
+            start,
+            end,
+            body,
+        } => {
+            let start_ty = check_moves_expr(start, env, states, ctx, None, ExprMoveMode::Consume)?;
+            check_moves_expr(
+                end,
+                env,
+                states,
+                ctx,
+                Some(&start_ty),
+                ExprMoveMode::Consume,
+            )?;
+            let mut body_env = env.clone();
+            let mut body_states = states.clone();
+            body_env.insert(var.clone(), start_ty);
+            body_states.insert(var.clone(), LocalMoveState::Available);
+            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            merge_moved_from_child(states, &body_states);
+        }
+        Stmt::Quant { body } => {
+            let mut body_env = enter_quant_scope(env);
+            let mut body_states = states.clone();
+            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            merge_moved_from_child(states, &body_states);
+        }
+        Stmt::Gpu { body } => {
+            let mut body_env = env.clone();
+            let mut body_states = states.clone();
+            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            merge_moved_from_child(states, &body_states);
+        }
+    }
+    Ok(())
+}
+
+fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
+    match t {
+        Ty::Unit
+        | Ty::Bool
+        | Ty::I8
+        | Ty::U8
+        | Ty::I16
+        | Ty::U16
+        | Ty::I32
+        | Ty::I64
+        | Ty::U64
+        | Ty::I128
+        | Ty::Isize
+        | Ty::Usize
+        | Ty::U128
+        | Ty::F16
+        | Ty::F32
+        | Ty::F64
+        | Ty::String
+        | Ty::Qubit
+        | Ty::Result
+        | Ty::Ptr(_)
+        | Ty::Fn(_, _) => true,
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
+        Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => true,
+        Ty::Struct(name) if name == COMPLEX_TYPE => true,
+        Ty::Struct(name) if ctx.vectors.contains_key(name) => {
+            let vector = ctx.vectors.get(name).expect("checked vector existence");
+            has_declared_ability(&vector.abilities, Ability::Copy)
+                || is_copy_for_moves(&vector.ty, ctx)
+        }
+        Ty::Struct(name) => ctx
+            .structs
+            .get(name)
+            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Copy)),
+        Ty::Enum(name) => ctx
+            .enums
+            .get(name)
+            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Copy)),
+        Ty::Vector(name, elem) => {
+            ctx.vectors
+                .get(name)
+                .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Copy))
+                || is_copy_for_moves(elem, ctx)
+        }
+    }
+}
+
+fn ensure_local_available(name: &str, states: &MoveStates) -> Result<(), String> {
+    if matches!(states.get(name), Some(LocalMoveState::Moved)) {
+        return Err(format!("use of moved local `{name}`"));
+    }
+    Ok(())
+}
+
+fn consume_ident_if_needed(
+    name: &str,
+    ty: &Ty,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+    mode: ExprMoveMode,
+) -> Result<(), String> {
+    if !states.contains_key(name) {
+        return Ok(());
+    }
+    ensure_local_available(name, states)?;
+    if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(ty, ctx) {
+        states.insert(name.to_string(), LocalMoveState::Moved);
+    }
+    Ok(())
+}
+
+fn check_moves_args_with_params(
+    args: &[Expr],
+    params: &[Ty],
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    for (arg, param) in args.iter().zip(params) {
+        check_moves_expr(arg, env, states, ctx, Some(param), ExprMoveMode::Consume)?;
+    }
+    Ok(())
+}
+
+fn check_moves_args_fallback(
+    args: &[Expr],
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    for arg in args {
+        check_moves_expr(arg, env, states, ctx, None, ExprMoveMode::Consume)?;
+    }
+    Ok(())
+}
+
+fn check_moves_call(
+    name: &str,
+    args: &[Expr],
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    if let Some(local_ty) = env.get(name).cloned() {
+        if matches!(local_ty, Ty::Fn(_, _)) {
+            ensure_local_available(name, states)?;
+            if let Ty::Fn(params, _) = local_ty {
+                return check_moves_args_with_params(args, &params, env, states, ctx);
+            }
+        }
+    }
+
+    if name == PRINTLN || name == LEN {
+        for arg in args {
+            check_moves_expr(arg, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        }
+        return Ok(());
+    }
+
+    if let Some(def) = ctx.structs.get(name) {
+        if def.is_tuple {
+            let params = def
+                .fields
+                .iter()
+                .map(|(_, ty)| ty.clone())
+                .collect::<Vec<_>>();
+            return check_moves_args_with_params(args, &params, env, states, ctx);
+        }
+    }
+
+    if let Some((enum_name, variant)) = split_variant_path(name) {
+        if let Some(edef) = ctx.enums.get(enum_name) {
+            if let Some(EnumVariantFields::Tuple(params)) = enum_variant(edef, variant) {
+                return check_moves_args_with_params(args, params, env, states, ctx);
+            }
+        }
+    }
+
+    if let Some(sig) = ctx.fns.get(name) {
+        return check_moves_args_with_params(args, &sig.params, env, states, ctx);
+    }
+
+    check_moves_args_fallback(args, env, states, ctx)
+}
+
+fn check_moves_generic_call(
+    name: &str,
+    args: &[Expr],
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    if name == LIST_WITH_CAPACITY && args.len() == 1 {
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            ctx,
+            Some(&Ty::I32),
+            ExprMoveMode::Consume,
+        )?;
+        return Ok(());
+    }
+    check_moves_args_fallback(args, env, states, ctx)
+}
+
+fn check_moves_method_call(
+    receiver: &Expr,
+    name: &str,
+    args: &[Expr],
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    let recv_ty = infer_expr(
+        receiver,
+        env,
+        ctx.structs,
+        ctx.enums,
+        ctx.vectors,
+        ctx.fns,
+        None,
+    )?;
+
+    if name == TO_MATRIX || name == TO_ARRAY || name == TO_VEC || name == "det" {
+        check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        return check_moves_args_fallback(args, env, states, ctx);
+    }
+
+    if matches!(recv_ty, Ty::List(_)) {
+        check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        if (name == LIST_LEN || name == LIST_CAPACITY) && args.is_empty() {
+            return Ok(());
+        }
+        if name == LIST_PUSH && args.len() == 1 {
+            let Ty::List(elem_ty) = recv_ty else {
+                unreachable!("guarded above")
+            };
+            check_moves_expr(
+                &args[0],
+                env,
+                states,
+                ctx,
+                Some(elem_ty.as_ref()),
+                ExprMoveMode::Consume,
+            )?;
+            return Ok(());
+        }
+        if name == LIST_GET && args.len() == 1 {
+            check_moves_expr(
+                &args[0],
+                env,
+                states,
+                ctx,
+                Some(&Ty::I32),
+                ExprMoveMode::Consume,
+            )?;
+            return Ok(());
+        }
+        return check_moves_args_fallback(args, env, states, ctx);
+    }
+
+    let owner_ty = method_receiver_owner_ty(&recv_ty);
+    let symbol = method_symbol(owner_ty, name);
+    if let Some(sig) = ctx.fns.get(&symbol) {
+        let receiver_mode = match sig.params.first() {
+            Some(Ty::Ptr(_)) => ExprMoveMode::ReadOnly,
+            Some(_) if matches!(recv_ty, Ty::Ptr(_)) => ExprMoveMode::ReadOnly,
+            Some(_) => ExprMoveMode::Consume,
+            None => ExprMoveMode::ReadOnly,
+        };
+        check_moves_expr(receiver, env, states, ctx, None, receiver_mode)?;
+        return check_moves_args_with_params(args, &sig.params[1..], env, states, ctx);
+    }
+
+    check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::Consume)?;
+    check_moves_args_fallback(args, env, states, ctx)
+}
+
+fn check_moves_struct_literal_fields(
+    fields: &[(String, Expr)],
+    def_fields: &[(String, Ty)],
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    for (field_name, field_ty) in def_fields {
+        if let Some((_, expr)) = fields.iter().find(|(name, _)| name == field_name) {
+            check_moves_expr(
+                expr,
+                env,
+                states,
+                ctx,
+                Some(field_ty),
+                ExprMoveMode::Consume,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn check_moves_literal_elems(
+    elems: &[Expr],
+    elem_hint: Option<Ty>,
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    let inferred_first;
+    let hint = if let Some(hint) = elem_hint.as_ref() {
+        Some(hint)
+    } else if let Some(first) = elems.first() {
+        inferred_first = Some(infer_expr(
+            first,
+            env,
+            ctx.structs,
+            ctx.enums,
+            ctx.vectors,
+            ctx.fns,
+            None,
+        )?);
+        inferred_first.as_ref()
+    } else {
+        None
+    };
+    for elem in elems {
+        check_moves_expr(elem, env, states, ctx, hint, ExprMoveMode::Consume)?;
+    }
+    Ok(())
+}
+
+fn check_moves_match_arm_bindings(
+    pattern: &MatchPattern,
+    edef: &EnumDef,
+    arm_env: &mut HashMap<String, Ty>,
+    arm_states: &mut MoveStates,
+) {
+    match pattern {
+        MatchPattern::Unit { .. } => {}
+        MatchPattern::Tuple {
+            variant, bindings, ..
+        } => {
+            if let Some(EnumVariantFields::Tuple(fields)) = enum_variant(edef, variant) {
+                for (binding, ty) in bindings.iter().zip(fields) {
+                    arm_env.insert(binding.clone(), ty.clone());
+                    arm_states.insert(binding.clone(), LocalMoveState::Available);
+                }
+            }
+        }
+        MatchPattern::Struct {
+            variant, bindings, ..
+        } => {
+            if let Some(EnumVariantFields::Struct(fields)) = enum_variant(edef, variant) {
+                for binding in bindings {
+                    if let Some((_, ty)) = fields.iter().find(|(name, _)| name == binding) {
+                        arm_env.insert(binding.clone(), ty.clone());
+                        arm_states.insert(binding.clone(), LocalMoveState::Available);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn check_moves_closure(
+    params: &[(String, Option<Ty>)],
+    body: &Block,
+    closure_ty: &Ty,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    let Ty::Fn(param_tys, ret_ty) = closure_ty else {
+        return Ok(());
+    };
+    let mut closure_env = HashMap::new();
+    let mut closure_states = MoveStates::new();
+    for ((name, _), ty) in params.iter().zip(param_tys) {
+        closure_env.insert(name.clone(), ty.clone());
+        closure_states.insert(name.clone(), LocalMoveState::Available);
+    }
+    check_moves_block(
+        body,
+        &mut closure_env,
+        &mut closure_states,
+        ctx,
+        Some(ret_ty.as_ref()),
+        Some(ret_ty.as_ref()),
+    )
+}
+
+fn check_moves_expr(
+    e: &Expr,
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+    hint: Option<&Ty>,
+    mode: ExprMoveMode,
+) -> Result<Ty, String> {
+    let inferred = infer_expr(e, env, ctx.structs, ctx.enums, ctx.vectors, ctx.fns, hint)?;
+    match e {
+        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) => {}
+        Expr::Ident(name) => consume_ident_if_needed(name, &inferred, states, ctx, mode)?,
+        Expr::Neg(inner) | Expr::Not(inner) | Expr::BitNot(inner) => {
+            check_moves_expr(inner, env, states, ctx, None, ExprMoveMode::Consume)?;
+        }
+        Expr::Add(l, r)
+        | Expr::Sub(l, r)
+        | Expr::Mul(l, r)
+        | Expr::VecDot(l, r)
+        | Expr::Div(l, r)
+        | Expr::Rem(l, r)
+        | Expr::BitAnd(l, r)
+        | Expr::BitOr(l, r)
+        | Expr::BitXor(l, r)
+        | Expr::Shl(l, r)
+        | Expr::Shr(l, r)
+        | Expr::Eq(l, r)
+        | Expr::Ne(l, r)
+        | Expr::Lt(l, r)
+        | Expr::Le(l, r)
+        | Expr::Gt(l, r)
+        | Expr::Ge(l, r) => {
+            check_moves_expr(l, env, states, ctx, None, ExprMoveMode::Consume)?;
+            check_moves_expr(r, env, states, ctx, None, ExprMoveMode::Consume)?;
+        }
+        Expr::Call { name, args } => check_moves_call(name, args, env, states, ctx)?,
+        Expr::GenericCall { name, args, .. } => {
+            check_moves_generic_call(name, args, env, states, ctx)?
+        }
+        Expr::MethodCall {
+            receiver,
+            name,
+            args,
+        } => check_moves_method_call(receiver, name, args, env, states, ctx)?,
+        Expr::CallExpr { callee, args } => {
+            let callee_ty =
+                check_moves_expr(callee, env, states, ctx, None, ExprMoveMode::Consume)?;
+            if let Ty::Fn(params, _) = callee_ty {
+                check_moves_args_with_params(args, &params, env, states, ctx)?;
+            } else {
+                check_moves_args_fallback(args, env, states, ctx)?;
+            }
+        }
+        Expr::Closure { params, body, .. } => check_moves_closure(params, body, &inferred, ctx)?,
+        Expr::StructLit { name, fields } => {
+            if let Some(def) = ctx.structs.get(name) {
+                check_moves_struct_literal_fields(fields, &def.fields, env, states, ctx)?;
+            } else if let Some((enum_name, variant)) = split_variant_path(name) {
+                if let Some(edef) = ctx.enums.get(enum_name) {
+                    if let Some(EnumVariantFields::Struct(def_fields)) = enum_variant(edef, variant)
+                    {
+                        check_moves_struct_literal_fields(fields, def_fields, env, states, ctx)?;
+                    }
+                }
+            }
+        }
+        Expr::VectorLit { name, fields } => {
+            if let Some(def) = ctx.vectors.get(name) {
+                let def_fields = def
+                    .fields
+                    .iter()
+                    .map(|name| (name.clone(), def.ty.clone()))
+                    .collect::<Vec<_>>();
+                check_moves_struct_literal_fields(fields, &def_fields, env, states, ctx)?;
+            }
+        }
+        Expr::AnonVectorLit(elems) => {
+            let elem_hint = match hint {
+                Some(Ty::AnonVector(elem, _)) | Some(Ty::HeapVector(elem)) => {
+                    Some(elem.as_ref().clone())
+                }
+                _ => None,
+            };
+            check_moves_literal_elems(elems, elem_hint, env, states, ctx)?;
+        }
+        Expr::ArrayLit(elems) => {
+            let elem_hint = match hint {
+                Some(Ty::Array(elem, _)) => Some(elem.as_ref().clone()),
+                _ => None,
+            };
+            check_moves_literal_elems(elems, elem_hint, env, states, ctx)?;
+        }
+        Expr::EnumVariant { .. } => {}
+        Expr::EnumTuple {
+            enum_name,
+            variant,
+            args,
+        } => {
+            if let Some(edef) = ctx.enums.get(enum_name) {
+                if let Some(EnumVariantFields::Tuple(params)) = enum_variant(edef, variant) {
+                    check_moves_args_with_params(args, params, env, states, ctx)?;
+                }
+            }
+        }
+        Expr::EnumStruct {
+            enum_name,
+            variant,
+            fields,
+        } => {
+            if let Some(edef) = ctx.enums.get(enum_name) {
+                if let Some(EnumVariantFields::Struct(def_fields)) = enum_variant(edef, variant) {
+                    check_moves_struct_literal_fields(fields, def_fields, env, states, ctx)?;
+                }
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            let scrutinee_ty =
+                check_moves_expr(scrutinee, env, states, ctx, None, ExprMoveMode::Consume)?;
+            let Ty::Enum(enum_name) = scrutinee_ty else {
+                return Ok(inferred);
+            };
+            let Some(edef) = ctx.enums.get(&enum_name) else {
+                return Ok(inferred);
+            };
+            let mut merged_states = states.clone();
+            for (pattern, arm_expr) in arms {
+                let mut arm_env = env.clone();
+                let mut arm_states = states.clone();
+                check_moves_match_arm_bindings(pattern, edef, &mut arm_env, &mut arm_states);
+                check_moves_expr(
+                    arm_expr,
+                    &mut arm_env,
+                    &mut arm_states,
+                    ctx,
+                    hint,
+                    ExprMoveMode::Consume,
+                )?;
+                merge_moved_from_child(&mut merged_states, &arm_states);
+            }
+            *states = merged_states;
+        }
+        Expr::Quant { body } => {
+            let mut body_env = enter_quant_scope(env);
+            let mut body_states = states.clone();
+            check_moves_block(body, &mut body_env, &mut body_states, ctx, None, hint)?;
+            merge_moved_from_child(states, &body_states);
+        }
+        Expr::Gpu { body } => {
+            let mut body_env = env.clone();
+            let mut body_states = states.clone();
+            check_moves_block(body, &mut body_env, &mut body_states, ctx, None, hint)?;
+            merge_moved_from_child(states, &body_states);
+        }
+        Expr::Field(obj, field_name) => {
+            check_moves_expr(obj, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+            if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
+                return Err(format!(
+                    "cannot move field `{field_name}` out of a non-copy value; partial moves are not supported yet"
+                ));
+            }
+        }
+        Expr::Index(arr, idx) => {
+            check_moves_expr(arr, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+            check_moves_expr(idx, env, states, ctx, Some(&Ty::I32), ExprMoveMode::Consume)?;
+            if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
+                return Err(
+                    "cannot move out of an indexed value; indexed moves are not supported yet"
+                        .into(),
+                );
+            }
+        }
+        Expr::AddrOf(inner) => check_moves_lvalue(inner, env, states, ctx, false)?,
+        Expr::Deref(inner) => {
+            check_moves_expr(inner, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        }
+    }
+    Ok(inferred)
+}
+
+fn check_moves_lvalue(
+    target: &Expr,
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+    allow_reinit_ident: bool,
+) -> Result<(), String> {
+    match target {
+        Expr::Ident(name) => {
+            if !allow_reinit_ident && states.contains_key(name) {
+                ensure_local_available(name, states)?;
+            }
+        }
+        Expr::Deref(inner) => {
+            check_moves_expr(inner, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        }
+        Expr::Index(base, idx) => {
+            check_moves_lvalue(base, env, states, ctx, false)?;
+            check_moves_expr(idx, env, states, ctx, Some(&Ty::I32), ExprMoveMode::Consume)?;
+        }
+        _ => {
+            check_moves_expr(target, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        }
+    }
+    Ok(())
 }
 
 /// Structural type equality used by semantic checks and assertions.
