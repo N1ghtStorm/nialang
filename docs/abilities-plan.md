@@ -193,12 +193,15 @@ implementation, a struct supports it by providing a valid custom deref method.
 
 ## Phase 0: document the current ownership model
 
+Status: complete in [current-ownership-model.md](current-ownership-model.md).
+
 Current Nia has reference-counted heap handles, but lifetime management is still
 explicit in many places:
 
 - `matrix_clone`, `matrix_drop`
 - `vector_clone`, `vector_drop`
-- list runtime helpers
+- list allocation/method helpers; public list clone/drop helpers are not exposed
+  yet
 
 Before changing semantics, add a short implementation note describing which
 types are heap handles, which drop/clone builtin currently owns them, and which
@@ -206,7 +209,7 @@ pointer/reference forms currently support `*p` without going through abilities.
 
 Deliverables:
 
-- README update, or a new ownership note in `docs/`
+- [current-ownership-model.md](current-ownership-model.md)
 - no compiler behavior changes
 - no syntax changes
 
