@@ -210,6 +210,11 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("move capture should move the source local");
     assert!(err.contains("use of moved local `handle`"), "{err}");
+    assert!(err.contains("captured by a `move` closure"), "{err}");
+    assert!(
+        err.contains("struct `FileHandle` does not declare `copy`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -302,6 +307,12 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("capturing closure values are move-only unless cloned");
     assert!(err.contains("use of moved local `f`"), "{err}");
+    assert!(err.contains("bound into another local"), "{err}");
+    assert!(
+        err.contains("function value may own a closure environment"),
+        "{err}"
+    );
+    assert!(err.contains("use `.clone()`"), "{err}");
 }
 
 #[test]
@@ -1377,6 +1388,37 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("field lacks clone");
     assert!(err.contains("field `inner` does not support it"), "{err}");
+    assert!(
+        err.contains("struct `Inner` does not declare `clone`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rejects_enum_ability_with_variant_payload_diagnostic() {
+    let src = r#"
+struct Inner {
+    x: i32,
+}
+
+enum Bad has clone {
+    Full(Inner),
+    Empty,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("variant payload lacks clone");
+    assert!(
+        err.contains("variant `Full` field `0` does not support it"),
+        "{err}"
+    );
+    assert!(
+        err.contains("struct `Inner` does not declare `clone`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -1515,6 +1557,11 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("non-copy local should move");
     assert!(err.contains("use of moved local `a`"), "{err}");
+    assert!(err.contains("bound into another local"), "{err}");
+    assert!(
+        err.contains("struct `Token` does not declare `copy`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -1553,6 +1600,11 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("by-value argument should move");
     assert!(err.contains("use of moved local `a`"), "{err}");
+    assert!(err.contains("passed by value"), "{err}");
+    assert!(
+        err.contains("struct `Token` does not declare `copy`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -1574,6 +1626,11 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("returning a non-copy local should move it");
     assert!(err.contains("use of moved local `t`"), "{err}");
+    assert!(err.contains("returned from the function"), "{err}");
+    assert!(
+        err.contains("struct `Token` does not declare `copy`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -2075,6 +2132,11 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("drop should move the local");
     assert!(err.contains("use of moved local `h`"), "{err}");
+    assert!(err.contains("passed to `drop(...)`"), "{err}");
+    assert!(
+        err.contains("struct `FileHandle` does not declare `copy`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -2124,6 +2186,9 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("Matrix moves should make the source unavailable");
     assert!(err.contains("use of moved local `m`"), "{err}");
+    assert!(err.contains("bound into another local"), "{err}");
+    assert!(err.contains("Matrix is a runtime owner"), "{err}");
+    assert!(err.contains("use `.clone()`"), "{err}");
 }
 
 #[test]

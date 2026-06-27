@@ -267,6 +267,152 @@ fn supports_decl_ability(
     }
 }
 
+fn ty_diag_label(t: &Ty) -> String {
+    match t {
+        Ty::Unit => "()".into(),
+        Ty::Bool => "bool".into(),
+        Ty::I8 => "i8".into(),
+        Ty::U8 => "u8".into(),
+        Ty::I16 => "i16".into(),
+        Ty::U16 => "u16".into(),
+        Ty::I32 => "i32".into(),
+        Ty::I64 => "i64".into(),
+        Ty::U64 => "u64".into(),
+        Ty::I128 => "i128".into(),
+        Ty::Isize => "isize".into(),
+        Ty::Usize => "usize".into(),
+        Ty::U128 => "u128".into(),
+        Ty::F16 => "f16".into(),
+        Ty::F32 => "f32".into(),
+        Ty::F64 => "f64".into(),
+        Ty::String => "String".into(),
+        Ty::Qubit => "Qubit".into(),
+        Ty::Result => "Result".into(),
+        Ty::Struct(name) => format!("struct `{name}`"),
+        Ty::Enum(name) => format!("enum `{name}`"),
+        Ty::Vector(name, _) => format!("vector `{name}`"),
+        Ty::Ptr(inner) => format!("&{}", ty_diag_label(inner)),
+        Ty::Array(elem, n) => format!("[{}; {n}]", ty_diag_label(elem)),
+        Ty::AnonVector(elem, n) => format!("{}<{n}>", ty_diag_label(elem)),
+        Ty::HeapVector(elem) => format!("{}<>", ty_diag_label(elem)),
+        Ty::List(elem) => format!("List[{}]", ty_diag_label(elem)),
+        Ty::Matrix(elem, Some((rows, cols))) => {
+            format!("Matrix[{}; {rows}x{cols}]", ty_diag_label(elem))
+        }
+        Ty::Matrix(elem, None) => format!("Matrix[{}]", ty_diag_label(elem)),
+        Ty::Fn(params, ret) => {
+            let params = params
+                .iter()
+                .map(ty_diag_label)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("fn({params}) -> {}", ty_diag_label(ret))
+        }
+    }
+}
+
+fn ability_failure_reason(
+    t: &Ty,
+    ability: Ability,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> String {
+    let ability_name = ability_label(ability);
+    match t {
+        Ty::Struct(name) if vectors.contains_key(name) => {
+            let vector = vectors.get(name).expect("checked vector existence");
+            if !has_declared_ability(&vector.abilities, ability) {
+                return format!("vector `{name}` does not declare `{ability_name}`");
+            }
+            if !supports_decl_ability(&vector.ty, ability, structs, enums, vectors) {
+                return format!(
+                    "vector `{name}` element type {} is missing `{ability_name}`: {}",
+                    ty_diag_label(&vector.ty),
+                    ability_failure_reason(&vector.ty, ability, structs, enums, vectors)
+                );
+            }
+            format!(
+                "vector `{name}` declares `{ability_name}`, but it is not available in this context"
+            )
+        }
+        Ty::Struct(name) => match structs.get(name) {
+            Some(s) if !has_declared_ability(&s.abilities, ability) => {
+                format!("struct `{name}` does not declare `{ability_name}`")
+            }
+            Some(_) => format!(
+                "struct `{name}` declares `{ability_name}`, but one of its fields is not eligible"
+            ),
+            None => format!("unknown struct `{name}`"),
+        },
+        Ty::Enum(name) => match enums.get(name) {
+            Some(e) if !has_declared_ability(&e.abilities, ability) => {
+                format!("enum `{name}` does not declare `{ability_name}`")
+            }
+            Some(_) => format!(
+                "enum `{name}` declares `{ability_name}`, but one of its variants is not eligible"
+            ),
+            None => format!("unknown enum `{name}`"),
+        },
+        Ty::Vector(name, elem) => match vectors.get(name) {
+            Some(v) if !has_declared_ability(&v.abilities, ability) => {
+                format!("vector `{name}` does not declare `{ability_name}`")
+            }
+            Some(_) if !supports_decl_ability(elem, ability, structs, enums, vectors) => format!(
+                "vector `{name}` element type {} is missing `{ability_name}`: {}",
+                ty_diag_label(elem),
+                ability_failure_reason(elem, ability, structs, enums, vectors)
+            ),
+            Some(_) => format!(
+                "vector `{name}` declares `{ability_name}`, but it is not available in this context"
+            ),
+            None => format!("unknown vector `{name}`"),
+        },
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => format!(
+            "element type {} is missing `{ability_name}`: {}",
+            ty_diag_label(elem),
+            ability_failure_reason(elem, ability, structs, enums, vectors)
+        ),
+        Ty::HeapVector(_) if matches!(ability, Ability::Copy) => format!(
+            "heap vector {} is a runtime owner and is not `copy`; use `.clone()` to share it",
+            ty_diag_label(t)
+        ),
+        Ty::List(_) if matches!(ability, Ability::Copy) => {
+            "List values are runtime owners and are not `copy`; use `.clone()` when the element type supports it".into()
+        }
+        Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
+            "Matrix is a runtime owner and is not `copy`; use `.clone()` to share it".into()
+        }
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _)
+            if matches!(ability, Ability::Clone | Ability::Drop) =>
+        {
+            format!(
+                "runtime owner {} requires element type {} to support `{ability_name}`: {}",
+                ty_diag_label(t),
+                ty_diag_label(elem),
+                ability_failure_reason(elem, ability, structs, enums, vectors)
+            )
+        }
+        Ty::Fn(_, _) if matches!(ability, Ability::Copy) => {
+            "capturing function values are move-only; use `.clone()` when the closure environment supports it".into()
+        }
+        Ty::Fn(_, _) if matches!(ability, Ability::Clone) => {
+            "function value clone requires a cloneable closure environment".into()
+        }
+        Ty::Ptr(_) if matches!(ability, Ability::Deref) => {
+            "references support `deref` directly".into()
+        }
+        Ty::Ptr(_) => format!(
+            "reference type {} does not currently declare `{ability_name}`",
+            ty_diag_label(t)
+        ),
+        _ => format!(
+            "type {} does not support `{ability_name}`",
+            ty_diag_label(t)
+        ),
+    }
+}
+
 fn validate_copy_implies_clone(owner: &str, abilities: &[Ability]) -> Result<(), String> {
     if has_declared_ability(abilities, Ability::Copy)
         && !has_declared_ability(abilities, Ability::Clone)
@@ -547,8 +693,10 @@ fn validate_abilities(
                     for (field, ty) in &s.fields {
                         if !supports_decl_ability(ty, ability, structs, enums, vectors) {
                             let ability = ability_label(ability);
+                            let reason =
+                                ability_failure_reason(ty, Ability::Copy, structs, enums, vectors);
                             return Err(format!(
-                                "struct `{}` has `{ability}` but field `{field}` does not support it",
+                                "struct `{}` has `{ability}` but field `{field}` does not support it: {reason}",
                                 s.name
                             ));
                         }
@@ -558,8 +706,10 @@ fn validate_abilities(
                     for (field, ty) in &s.fields {
                         if !supports_decl_ability(ty, ability, structs, enums, vectors) {
                             let ability = ability_label(ability);
+                            let reason =
+                                ability_failure_reason(ty, Ability::Clone, structs, enums, vectors);
                             return Err(format!(
-                                "struct `{}` has `{ability}` but field `{field}` does not support it",
+                                "struct `{}` has `{ability}` but field `{field}` does not support it: {reason}",
                                 s.name
                             ));
                         }
@@ -571,8 +721,10 @@ fn validate_abilities(
                     for (field, ty) in &s.fields {
                         if !supports_decl_ability(ty, ability, structs, enums, vectors) {
                             let ability = ability_label(ability);
+                            let reason =
+                                ability_failure_reason(ty, Ability::Drop, structs, enums, vectors);
                             return Err(format!(
-                                "struct `{}` has `{ability}` but field `{field}` does not support it",
+                                "struct `{}` has `{ability}` but field `{field}` does not support it: {reason}",
                                 s.name
                             ));
                         }
@@ -619,9 +771,11 @@ fn validate_abilities(
                     EnumVariantFields::Tuple(fields) => {
                         for (idx, ty) in fields.iter().enumerate() {
                             if !supports_decl_ability(ty, ability, structs, enums, vectors) {
-                                let ability = ability_label(ability);
+                                let ability_name = ability_label(ability);
+                                let reason =
+                                    ability_failure_reason(ty, ability, structs, enums, vectors);
                                 return Err(format!(
-                                    "enum `{}` has `{ability}` but variant `{}` field `{idx}` does not support it",
+                                    "enum `{}` has `{ability_name}` but variant `{}` field `{idx}` does not support it: {reason}",
                                     e.name, variant.name
                                 ));
                             }
@@ -630,9 +784,11 @@ fn validate_abilities(
                     EnumVariantFields::Struct(fields) => {
                         for (field, ty) in fields {
                             if !supports_decl_ability(ty, ability, structs, enums, vectors) {
-                                let ability = ability_label(ability);
+                                let ability_name = ability_label(ability);
+                                let reason =
+                                    ability_failure_reason(ty, ability, structs, enums, vectors);
                                 return Err(format!(
-                                    "enum `{}` has `{ability}` but variant `{}` field `{field}` does not support it",
+                                    "enum `{}` has `{ability_name}` but variant `{}` field `{field}` does not support it: {reason}",
                                     e.name, variant.name
                                 ));
                             }
@@ -674,9 +830,10 @@ fn validate_abilities(
                 continue;
             }
             if !supports_decl_ability(&v.ty, ability, structs, enums, vectors) {
-                let ability = ability_label(ability);
+                let ability_name = ability_label(ability);
+                let reason = ability_failure_reason(&v.ty, ability, structs, enums, vectors);
                 return Err(format!(
-                    "vector `{}` has `{ability}` but element type does not support it",
+                    "vector `{}` has `{ability_name}` but element type does not support it: {reason}",
                     v.name
                 ));
             }
@@ -1008,12 +1165,43 @@ enum LocalMoveState {
     Uninitialized,
     Available,
     MaybeInitialized,
-    Moved,
+    Moved(MoveReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MoveReason {
+    BoundToLocal,
+    Assigned,
+    PassedByValue,
+    Returned,
+    ExpressionResult,
+    MovedIntoAggregate,
+    Dropped,
+    MethodReceiver,
+    CallCallee,
+    MoveClosureCapture,
+}
+
+impl MoveReason {
+    fn label(self) -> &'static str {
+        match self {
+            MoveReason::BoundToLocal => "bound into another local",
+            MoveReason::Assigned => "assigned into another place",
+            MoveReason::PassedByValue => "passed by value",
+            MoveReason::Returned => "returned from the function",
+            MoveReason::ExpressionResult => "consumed as an expression result",
+            MoveReason::MovedIntoAggregate => "stored into an aggregate value",
+            MoveReason::Dropped => "passed to `drop(...)`",
+            MoveReason::MethodReceiver => "passed as a by-value method receiver",
+            MoveReason::CallCallee => "used as a function value callee",
+            MoveReason::MoveClosureCapture => "captured by a `move` closure",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExprMoveMode {
-    Consume,
+    Consume(MoveReason),
     ReadOnly,
 }
 
@@ -1112,7 +1300,7 @@ fn check_moves_block(
             fn_values,
             ctx,
             tail_hint,
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::Returned),
         )?;
     }
     Ok(())
@@ -1128,7 +1316,9 @@ fn merge_moved_from_child(parent: &mut MoveStates, child: &MoveStates) {
             continue;
         };
         let merged = match (parent_state, child_state) {
-            (LocalMoveState::Moved, _) | (_, LocalMoveState::Moved) => LocalMoveState::Moved,
+            (LocalMoveState::Moved(reason), _) | (_, LocalMoveState::Moved(reason)) => {
+                LocalMoveState::Moved(reason)
+            }
             (LocalMoveState::MaybeInitialized, _) | (_, LocalMoveState::MaybeInitialized) => {
                 LocalMoveState::MaybeInitialized
             }
@@ -1171,7 +1361,7 @@ fn check_moves_stmt(
                     fn_values,
                     ctx,
                     ann_norm.as_ref(),
-                    ExprMoveMode::Consume,
+                    ExprMoveMode::Consume(MoveReason::BoundToLocal),
                 )?;
                 let t = infer_expr(
                     init,
@@ -1210,7 +1400,15 @@ fn check_moves_stmt(
             states.insert(name.clone(), state);
         }
         Stmt::Expr(e) => {
-            check_moves_expr(e, env, states, fn_values, ctx, None, ExprMoveMode::Consume)?;
+            check_moves_expr(
+                e,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
+            )?;
         }
         Stmt::Assign { target, value } => {
             let target_ty = infer_expr(
@@ -1230,7 +1428,7 @@ fn check_moves_stmt(
                 fn_values,
                 ctx,
                 Some(&target_ty),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::Assigned),
             )?;
             if let Expr::Ident(name) = target {
                 if env.contains_key(name) {
@@ -1252,7 +1450,7 @@ fn check_moves_stmt(
                 fn_values,
                 ctx,
                 fn_ret,
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::Returned),
             )?;
         }
         Stmt::Break => {}
@@ -1264,7 +1462,7 @@ fn check_moves_stmt(
                 fn_values,
                 ctx,
                 Some(&Ty::Bool),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
             )?;
             let mut then_env = env.clone();
             let mut then_states = states.clone();
@@ -1288,7 +1486,7 @@ fn check_moves_stmt(
                 fn_values,
                 ctx,
                 Some(&Ty::Bool),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
             )?;
             let mut body_env = env.clone();
             let mut body_states = states.clone();
@@ -1332,7 +1530,7 @@ fn check_moves_stmt(
                 fn_values,
                 ctx,
                 None,
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
             )?;
             check_moves_expr(
                 end,
@@ -1341,7 +1539,7 @@ fn check_moves_stmt(
                 fn_values,
                 ctx,
                 Some(&start_ty),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
             )?;
             let mut body_env = env.clone();
             let mut body_states = states.clone();
@@ -1522,9 +1720,59 @@ fn fn_value_info_for_expr(
     }
 }
 
-fn ensure_local_available(name: &str, states: &MoveStates) -> Result<(), String> {
+fn copy_failure_for_local(
+    name: &str,
+    ty: &Ty,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> String {
+    if matches!(ty, Ty::Fn(_, _)) {
+        let info = fn_values
+            .get(name)
+            .copied()
+            .unwrap_or_else(FnValueInfo::owning_unknown);
+        if info.cloneable {
+            return "function value may own a closure environment and is not `copy`; use `.clone()` to duplicate it".into();
+        }
+        return "function value may own a non-cloneable closure environment and is not `copy`"
+            .into();
+    }
+    format!(
+        "type {} is not `copy`: {}",
+        ty_diag_label(ty),
+        ability_failure_reason(ty, Ability::Copy, ctx.structs, ctx.enums, ctx.vectors)
+    )
+}
+
+fn moved_local_error(
+    name: &str,
+    reason: MoveReason,
+    ty: Option<&Ty>,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> String {
+    let mut msg = format!(
+        "use of moved local `{name}` (previous move: {})",
+        reason.label()
+    );
+    if let Some(ty) = ty {
+        msg.push_str("; ");
+        msg.push_str(&copy_failure_for_local(name, ty, fn_values, ctx));
+    }
+    msg
+}
+
+fn ensure_local_available(
+    name: &str,
+    ty: Option<&Ty>,
+    states: &MoveStates,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
     match states.get(name) {
-        Some(LocalMoveState::Moved) => return Err(format!("use of moved local `{name}`")),
+        Some(LocalMoveState::Moved(reason)) => {
+            return Err(moved_local_error(name, *reason, ty, fn_values, ctx));
+        }
         Some(LocalMoveState::Uninitialized) => {
             return Err(format!("use of uninitialized local `{name}`"));
         }
@@ -1547,14 +1795,17 @@ fn consume_ident_if_needed(
     if !states.contains_key(name) {
         return Ok(());
     }
-    ensure_local_available(name, states)?;
-    if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_local_move(name, ty, fn_values, ctx) {
+    ensure_local_available(name, Some(ty), states, fn_values, ctx)?;
+    if let ExprMoveMode::Consume(reason) = mode {
+        if is_copy_for_local_move(name, ty, fn_values, ctx) {
+            return Ok(());
+        }
         if ctx.captured_locals.contains(name) {
             return Err(format!(
                 "cannot move captured variable `{name}` out of a closure environment"
             ));
         }
-        states.insert(name.to_string(), LocalMoveState::Moved);
+        states.insert(name.to_string(), LocalMoveState::Moved(reason));
     }
     Ok(())
 }
@@ -1575,7 +1826,7 @@ fn check_moves_args_with_params(
             fn_values,
             ctx,
             Some(param),
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
     }
     Ok(())
@@ -1596,7 +1847,7 @@ fn check_moves_args_fallback(
             fn_values,
             ctx,
             None,
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
     }
     Ok(())
@@ -1625,7 +1876,7 @@ fn check_moves_runtime_read_or_consume(
     let mode = if is_runtime_owner_ty(&ty) {
         ExprMoveMode::ReadOnly
     } else {
-        ExprMoveMode::Consume
+        ExprMoveMode::Consume(MoveReason::ExpressionResult)
     };
     check_moves_expr(expr, env, states, fn_values, ctx, Some(&ty), mode).map(|_| ())
 }
@@ -1639,14 +1890,14 @@ fn check_moves_language_drop_arg(
 ) -> Result<(), String> {
     if let Expr::Ident(name) = arg {
         if let Some(ty) = env.get(name).cloned() {
-            ensure_local_available(name, states)?;
+            ensure_local_available(name, Some(&ty), states, fn_values, ctx)?;
             if !is_copy_for_local_move(name, &ty, fn_values, ctx) {
                 if ctx.captured_locals.contains(name) {
                     return Err(format!(
                         "cannot move captured variable `{name}` out of a closure environment"
                     ));
                 }
-                states.insert(name.clone(), LocalMoveState::Moved);
+                states.insert(name.clone(), LocalMoveState::Moved(MoveReason::Dropped));
             }
             return Ok(());
         }
@@ -1658,7 +1909,7 @@ fn check_moves_language_drop_arg(
         fn_values,
         ctx,
         None,
-        ExprMoveMode::Consume,
+        ExprMoveMode::Consume(MoveReason::Dropped),
     )
     .map(|_| ())
 }
@@ -1673,7 +1924,7 @@ fn check_moves_call(
 ) -> Result<(), String> {
     if let Some(local_ty) = env.get(name).cloned() {
         if matches!(local_ty, Ty::Fn(_, _)) {
-            ensure_local_available(name, states)?;
+            ensure_local_available(name, Some(&local_ty), states, fn_values, ctx)?;
             if let Ty::Fn(params, _) = local_ty {
                 return check_moves_args_with_params(args, &params, env, states, fn_values, ctx);
             }
@@ -1745,7 +1996,7 @@ fn check_moves_call(
             fn_values,
             ctx,
             Some(&Ty::I32),
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         check_moves_expr(
             &args[2],
@@ -1754,7 +2005,7 @@ fn check_moves_call(
             fn_values,
             ctx,
             Some(&Ty::I32),
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         return Ok(());
     }
@@ -1776,7 +2027,7 @@ fn check_moves_call(
             fn_values,
             ctx,
             Some(&Ty::I32),
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         check_moves_expr(
             &args[2],
@@ -1785,7 +2036,7 @@ fn check_moves_call(
             fn_values,
             ctx,
             Some(&Ty::I32),
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         check_moves_expr(
             &args[3],
@@ -1794,7 +2045,7 @@ fn check_moves_call(
             fn_values,
             ctx,
             None,
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         return Ok(());
     }
@@ -1816,7 +2067,7 @@ fn check_moves_call(
             fn_values,
             ctx,
             Some(&Ty::I32),
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         return Ok(());
     }
@@ -1838,7 +2089,7 @@ fn check_moves_call(
             fn_values,
             ctx,
             Some(&Ty::I32),
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         check_moves_expr(
             &args[2],
@@ -1847,7 +2098,7 @@ fn check_moves_call(
             fn_values,
             ctx,
             None,
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         return Ok(());
     }
@@ -1916,7 +2167,7 @@ fn check_moves_generic_call(
             fn_values,
             ctx,
             Some(&Ty::I32),
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         return Ok(());
     }
@@ -1998,7 +2249,7 @@ fn check_moves_method_call(
                 fn_values,
                 ctx,
                 Some(elem_ty.as_ref()),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::PassedByValue),
             )?;
             return Ok(());
         }
@@ -2010,7 +2261,7 @@ fn check_moves_method_call(
                 fn_values,
                 ctx,
                 Some(&Ty::I32),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::PassedByValue),
             )?;
             return Ok(());
         }
@@ -2023,7 +2274,7 @@ fn check_moves_method_call(
         let receiver_mode = match sig.params.first() {
             Some(Ty::Ptr(_)) => ExprMoveMode::ReadOnly,
             Some(_) if matches!(recv_ty, Ty::Ptr(_)) => ExprMoveMode::ReadOnly,
-            Some(_) => ExprMoveMode::Consume,
+            Some(_) => ExprMoveMode::Consume(MoveReason::MethodReceiver),
             None => ExprMoveMode::ReadOnly,
         };
         check_moves_expr(receiver, env, states, fn_values, ctx, None, receiver_mode)?;
@@ -2037,7 +2288,7 @@ fn check_moves_method_call(
         fn_values,
         ctx,
         None,
-        ExprMoveMode::Consume,
+        ExprMoveMode::Consume(MoveReason::MethodReceiver),
     )?;
     check_moves_args_fallback(args, env, states, fn_values, ctx)
 }
@@ -2059,7 +2310,7 @@ fn check_moves_struct_literal_fields(
                 fn_values,
                 ctx,
                 Some(field_ty),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::MovedIntoAggregate),
             )?;
         }
     }
@@ -2099,7 +2350,7 @@ fn check_moves_literal_elems(
             fn_values,
             ctx,
             hint,
-            ExprMoveMode::Consume,
+            ExprMoveMode::Consume(MoveReason::MovedIntoAggregate),
         )?;
     }
     Ok(())
@@ -2159,7 +2410,7 @@ fn check_moves_closure(
     for name in &captures {
         if let Some(ty) = outer_env.get(name) {
             if outer_states.contains_key(name) {
-                ensure_local_available(name, outer_states)?;
+                ensure_local_available(name, Some(ty), outer_states, outer_fn_values, ctx)?;
             }
             closure_env.insert(name.clone(), ty.clone());
             closure_states.insert(name.clone(), LocalMoveState::Available);
@@ -2203,7 +2454,7 @@ fn check_moves_closure(
             if outer_states.contains_key(&name)
                 && !is_copy_for_local_move(&name, ty, outer_fn_values, ctx)
             {
-                outer_states.insert(name, LocalMoveState::Moved);
+                outer_states.insert(name, LocalMoveState::Moved(MoveReason::MoveClosureCapture));
             }
         }
     }
@@ -2233,7 +2484,7 @@ fn check_moves_expr(
                 fn_values,
                 ctx,
                 None,
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
             )?;
         }
         Expr::Add(l, r) | Expr::Sub(l, r) | Expr::Mul(l, r) | Expr::VecDot(l, r) => {
@@ -2253,8 +2504,24 @@ fn check_moves_expr(
         | Expr::Le(l, r)
         | Expr::Gt(l, r)
         | Expr::Ge(l, r) => {
-            check_moves_expr(l, env, states, fn_values, ctx, None, ExprMoveMode::Consume)?;
-            check_moves_expr(r, env, states, fn_values, ctx, None, ExprMoveMode::Consume)?;
+            check_moves_expr(
+                l,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
+            )?;
+            check_moves_expr(
+                r,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
+            )?;
         }
         Expr::Call { name, args } => check_moves_call(name, args, env, states, fn_values, ctx)?,
         Expr::GenericCall { name, args, .. } => {
@@ -2273,7 +2540,7 @@ fn check_moves_expr(
                 fn_values,
                 ctx,
                 None,
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::CallCallee),
             )?;
             if let Ty::Fn(params, _) = callee_ty {
                 check_moves_args_with_params(args, &params, env, states, fn_values, ctx)?;
@@ -2376,7 +2643,7 @@ fn check_moves_expr(
                 fn_values,
                 ctx,
                 None,
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::ExpressionResult),
             )?;
             let Ty::Enum(enum_name) = scrutinee_ty else {
                 return Ok(inferred);
@@ -2397,7 +2664,7 @@ fn check_moves_expr(
                     &mut arm_fn_values,
                     ctx,
                     hint,
-                    ExprMoveMode::Consume,
+                    ExprMoveMode::Consume(MoveReason::ExpressionResult),
                 )?;
                 merge_moved_from_child(&mut merged_states, &arm_states);
             }
@@ -2443,7 +2710,7 @@ fn check_moves_expr(
                 None,
                 ExprMoveMode::ReadOnly,
             )?;
-            if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
+            if matches!(mode, ExprMoveMode::Consume(_)) && !is_copy_for_moves(&inferred, ctx) {
                 return Err(format!(
                     "cannot move field `{field_name}` out of a non-copy value; partial moves are not supported yet"
                 ));
@@ -2466,9 +2733,9 @@ fn check_moves_expr(
                 fn_values,
                 ctx,
                 Some(&Ty::I32),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::PassedByValue),
             )?;
-            if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
+            if matches!(mode, ExprMoveMode::Consume(_)) && !is_copy_for_moves(&inferred, ctx) {
                 return Err(
                     "cannot move out of an indexed value; indexed moves are not supported yet"
                         .into(),
@@ -2486,7 +2753,7 @@ fn check_moves_expr(
                 None,
                 ExprMoveMode::ReadOnly,
             )?;
-            if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
+            if matches!(mode, ExprMoveMode::Consume(_)) && !is_copy_for_moves(&inferred, ctx) {
                 return Err(
                     "cannot move out through dereference; deref moves are not supported yet".into(),
                 );
@@ -2507,7 +2774,8 @@ fn check_moves_lvalue(
     match target {
         Expr::Ident(name) => {
             if !allow_reinit_ident && states.contains_key(name) {
-                ensure_local_available(name, states)?;
+                let ty = env.get(name);
+                ensure_local_available(name, ty, states, fn_values, ctx)?;
             }
         }
         Expr::Deref(inner) => {
@@ -2530,7 +2798,7 @@ fn check_moves_lvalue(
                 fn_values,
                 ctx,
                 Some(&Ty::I32),
-                ExprMoveMode::Consume,
+                ExprMoveMode::Consume(MoveReason::PassedByValue),
             )?;
         }
         _ => {
@@ -3865,13 +4133,20 @@ fn infer_closure_expr(
             .expect("capture collection only uses outer env names");
         if is_move {
             if !supports_move_closure_capture_ty(ty, structs, enums, vectors) {
+                let copy_reason =
+                    ability_failure_reason(ty, Ability::Copy, structs, enums, vectors);
+                let drop_reason =
+                    ability_failure_reason(ty, Ability::Drop, structs, enums, vectors);
                 return Err(format!(
-                    "move closure capture `{name}` requires `copy`, `drop`, or function-value ownership"
+                    "move closure capture `{name}` requires `copy`, `drop`, or function-value ownership; type {} is not eligible: missing `copy` ({copy_reason}); missing `drop` ({drop_reason})",
+                    ty_diag_label(ty)
                 ));
             }
         } else if !supports_closure_capture_ty(ty, structs, enums, vectors) {
+            let reason = ability_failure_reason(ty, Ability::Copy, structs, enums, vectors);
             return Err(format!(
-                "closure capture `{name}` requires `copy`; use `move ||` to capture non-copy values by value"
+                "closure capture `{name}` requires `copy`; type {} is not `copy`: {reason}; use `move ||` to capture non-copy values by value",
+                ty_diag_label(ty)
             ));
         }
     }

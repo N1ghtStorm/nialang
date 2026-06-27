@@ -1149,6 +1149,8 @@ Deliverables:
 
 ## Phase 17: diagnostics and migration mode
 
+Status: complete for diagnostics; compatibility remains the default mode.
+
 Abilities affect common code paths, so diagnostics matter.
 
 Good errors should say:
@@ -1167,6 +1169,20 @@ During migration, consider a temporary compatibility mode:
 
 Once examples and tests are migrated, strict mode can require explicit abilities
 for user-defined resource-like types.
+
+Implemented notes:
+
+- move diagnostics keep the old `use of moved local` prefix, but now include the
+  previous move category such as by-value argument passing, binding into another
+  local, explicit `drop(...)`, return, or `move` closure capture
+- moved-local diagnostics explain why the local's type is not `copy`
+- declared ability validation now reports the missing ability reason for the
+  offending struct field, enum variant payload, or vector element
+- closure capture diagnostics explain why a non-`move` capture lacks `copy`, or
+  why a `move ||` capture is not eligible for copy/drop/function ownership
+- no separate strict-mode CLI flag is introduced yet; the current compiler keeps
+  the existing compatibility behavior while tests and examples use explicit
+  abilities
 
 ## Suggested implementation order
 
@@ -1192,7 +1208,7 @@ for user-defined resource-like types.
 17. Add formal `copy`, `clone`, and `drop` rules for `fn(...) -> ...` values.
     (complete)
 18. Update docs and examples. (complete)
-19. Improve diagnostics and optional migration mode.
+19. Improve diagnostics and optional migration mode. (complete for diagnostics)
 
 The key design rule is simple: codegen should not guess ownership or access
 semantics. Ownership, moves, clone permissions, deref permissions, and drop
