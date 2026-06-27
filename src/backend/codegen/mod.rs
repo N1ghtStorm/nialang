@@ -7201,6 +7201,51 @@ impl<'a> Gen<'a> {
                         self.enums,
                         self.vectors
                     ));
+                    let symbol = method_symbol(method_receiver_owner_ty(&recv_ty), CLONE_METHOD);
+                    if let Some((params, Some(ret_ty))) = self
+                        .fn_sigs
+                        .get(&symbol)
+                        .map(|sig| (sig.params.clone(), sig.ret.clone()))
+                    {
+                        debug_assert_eq!(params.len(), 1);
+                        let self_param = &params[0];
+                        let (self_arg_ty, self_arg_val) = if types_match(&recv_ty, self_param) {
+                            (self_param.clone(), recv_val)
+                        } else if let Ty::Ptr(pointee) = self_param {
+                            debug_assert!(types_match(&recv_ty, pointee));
+                            let slot = self.fresh();
+                            writeln!(
+                                self.out,
+                                "  %{} = alloca {}",
+                                slot,
+                                llvm_ty(pointee, self.structs)
+                            )
+                            .unwrap();
+                            writeln!(
+                                self.out,
+                                "  store {} {}, ptr %{}",
+                                llvm_ty(pointee, self.structs),
+                                recv_val,
+                                slot
+                            )
+                            .unwrap();
+                            (self_param.clone(), format!("%{slot}"))
+                        } else {
+                            unreachable!("typechecked clone receiver")
+                        };
+                        let tmp = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = call {} @{}({} {})",
+                            tmp,
+                            llvm_ty(&ret_ty, self.structs),
+                            sanitize(&symbol),
+                            llvm_ty(&self_arg_ty, self.structs),
+                            self_arg_val
+                        )
+                        .unwrap();
+                        return (ret_ty, format!("%{tmp}"));
+                    }
                     return (recv_ty, recv_val);
                 }
                 if let Ty::List(elem_ty) = &recv_ty {

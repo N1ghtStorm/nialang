@@ -226,6 +226,37 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_clone_method_calls_custom_struct_clone() {
+    let ll = emit(
+        r#"
+struct Token has clone {
+    id: i32,
+}
+
+impl Token {
+    fn clone(&self) Token {
+        Token { id: self.id + 1 }
+    }
+}
+
+fn main() i32 {
+    let token = Token { id: 7 };
+    let cloned = token.clone();
+    cloned.id
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal %struct.Token @Token__clone(ptr %self)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call %struct.Token @Token__clone(ptr %"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_contains_if_branching() {
     let ll = emit(include_str!("../../../examples/tests/ok_if_return.nia"));
     assert!(ll.contains("br i1"));

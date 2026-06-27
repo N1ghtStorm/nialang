@@ -1361,6 +1361,118 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_custom_clone_for_struct_with_non_clone_field() {
+    let src = r#"
+struct Handle {
+    fd: i32,
+}
+
+struct Token has clone {
+    handle: Handle,
+}
+
+impl Token {
+    fn clone(&self) Token {
+        Token {
+            handle: Handle { fd: self.handle.fd + 1 }
+        }
+    }
+}
+
+fn main() i32 {
+    let token = Token { handle: Handle { fd: 7 } };
+    let cloned = token.clone();
+    token.handle.fd + cloned.handle.fd
+}
+"#;
+    check_all(src).expect("custom clone should override structural clone");
+}
+
+#[test]
+fn typecheck_rejects_custom_clone_without_clone_ability() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+impl Token {
+    fn clone(&self) Token {
+        Token { id: self.id }
+    }
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("custom clone requires clone ability");
+    assert!(err.contains("does not declare `clone` ability"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_custom_clone_with_by_value_self() {
+    let src = r#"
+struct Token has clone {
+    id: i32,
+}
+
+impl Token {
+    fn clone(self) Token {
+        Token { id: self.id }
+    }
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("custom clone must borrow self");
+    assert!(err.contains("custom clone must have signature"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_custom_clone_with_wrong_return_type() {
+    let src = r#"
+struct Token has clone {
+    id: i32,
+}
+
+impl Token {
+    fn clone(&self) i32 {
+        self.id
+    }
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("custom clone must return owner");
+    assert!(err.contains("custom clone must return `Token`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_direct_recursive_custom_clone() {
+    let src = r#"
+struct Token has clone {
+    id: i32,
+}
+
+impl Token {
+    fn clone(&self) Token {
+        self.clone()
+    }
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("direct recursive clone should be rejected");
+    assert!(err.contains("recursively calls `self.clone()`"), "{err}");
+}
+
+#[test]
 fn typecheck_rejects_clone_method_without_clone_ability() {
     let src = r#"
 struct Token {

@@ -438,6 +438,8 @@ Deliverables:
 
 ## Phase 5: custom struct clone methods
 
+Status: complete.
+
 Allow structs with `clone` ability to override their clone logic.
 
 Preferred surface spelling:
@@ -500,6 +502,14 @@ Deliverables:
 - codegen tests showing `x.clone()` calls custom clone glue
 - tests that `x.clone()` does not move `x`
 - recursive fallback tests for structs without custom clone
+
+Implemented notes:
+
+- custom clone is currently supported for structs only
+- custom clone overrides structural clone validation for `clone`; `copy` still
+  requires structurally copyable fields
+- a direct `self.clone()` inside the custom clone body is rejected as obvious
+  recursion
 
 ## Phase 6: custom struct deref methods
 

@@ -259,6 +259,152 @@ fn custom_method_name(owner: &str, method: &str) -> String {
     method_symbol(&Ty::Struct(owner.into()), method)
 }
 
+fn expr_contains_direct_self_clone(e: &Expr) -> bool {
+    match e {
+        Expr::MethodCall {
+            receiver,
+            name,
+            args,
+        } if name == CLONE_METHOD && args.is_empty() => {
+            matches!(receiver.as_ref(), Expr::Ident(name) if name == "self")
+                || expr_contains_direct_self_clone(receiver)
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Ident(_)
+        | Expr::EnumVariant { .. } => false,
+        Expr::Neg(inner)
+        | Expr::Not(inner)
+        | Expr::BitNot(inner)
+        | Expr::AddrOf(inner)
+        | Expr::Deref(inner)
+        | Expr::Field(inner, _) => expr_contains_direct_self_clone(inner),
+        Expr::Add(l, r)
+        | Expr::Sub(l, r)
+        | Expr::Mul(l, r)
+        | Expr::VecDot(l, r)
+        | Expr::Div(l, r)
+        | Expr::Rem(l, r)
+        | Expr::BitAnd(l, r)
+        | Expr::BitOr(l, r)
+        | Expr::BitXor(l, r)
+        | Expr::Shl(l, r)
+        | Expr::Shr(l, r)
+        | Expr::Eq(l, r)
+        | Expr::Ne(l, r)
+        | Expr::Lt(l, r)
+        | Expr::Le(l, r)
+        | Expr::Gt(l, r)
+        | Expr::Ge(l, r)
+        | Expr::Index(l, r) => {
+            expr_contains_direct_self_clone(l) || expr_contains_direct_self_clone(r)
+        }
+        Expr::Call { args, .. } | Expr::GenericCall { args, .. } | Expr::EnumTuple { args, .. } => {
+            args.iter().any(expr_contains_direct_self_clone)
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_contains_direct_self_clone(receiver)
+                || args.iter().any(expr_contains_direct_self_clone)
+        }
+        Expr::CallExpr { callee, args } => {
+            expr_contains_direct_self_clone(callee)
+                || args.iter().any(expr_contains_direct_self_clone)
+        }
+        Expr::Closure { body, .. } | Expr::Quant { body } | Expr::Gpu { body } => {
+            block_contains_direct_self_clone(body)
+        }
+        Expr::StructLit { fields, .. }
+        | Expr::VectorLit { fields, .. }
+        | Expr::EnumStruct { fields, .. } => fields
+            .iter()
+            .any(|(_, expr)| expr_contains_direct_self_clone(expr)),
+        Expr::AnonVectorLit(elems) | Expr::ArrayLit(elems) => {
+            elems.iter().any(expr_contains_direct_self_clone)
+        }
+        Expr::Match { scrutinee, arms } => {
+            expr_contains_direct_self_clone(scrutinee)
+                || arms
+                    .iter()
+                    .any(|(_, arm)| expr_contains_direct_self_clone(arm))
+        }
+    }
+}
+
+fn stmt_contains_direct_self_clone(st: &Stmt) -> bool {
+    match st {
+        Stmt::Let { init, .. } | Stmt::Expr(init) | Stmt::Return(init) => {
+            expr_contains_direct_self_clone(init)
+        }
+        Stmt::Assign { target, value } => {
+            expr_contains_direct_self_clone(target) || expr_contains_direct_self_clone(value)
+        }
+        Stmt::If { cond, then_block }
+        | Stmt::While {
+            cond,
+            body: then_block,
+        } => expr_contains_direct_self_clone(cond) || block_contains_direct_self_clone(then_block),
+        Stmt::Loop { body }
+        | Stmt::For { body, .. }
+        | Stmt::Quant { body }
+        | Stmt::Gpu { body } => block_contains_direct_self_clone(body),
+        Stmt::Break => false,
+    }
+}
+
+fn block_contains_direct_self_clone(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_contains_direct_self_clone)
+        || block
+            .tail
+            .as_ref()
+            .is_some_and(expr_contains_direct_self_clone)
+}
+
+fn validate_custom_clone_sig(
+    s: &StructDef,
+    fn_sigs: &HashMap<String, FnSig>,
+    fns: &[FnDef],
+) -> Result<(), String> {
+    let method = custom_method_name(&s.name, CLONE_METHOD);
+    let Some(sig) = fn_sigs.get(&method) else {
+        return Ok(());
+    };
+    if !has_declared_ability(&s.abilities, Ability::Clone) {
+        return Err(format!(
+            "struct `{}` defines `clone` but does not declare `clone` ability",
+            s.name
+        ));
+    }
+    if sig.is_quantum {
+        return Err(format!(
+            "struct `{}` custom clone cannot be quantum",
+            s.name
+        ));
+    }
+    if sig.params.len() != 1 || sig.params[0] != Ty::Ptr(Box::new(Ty::Struct(s.name.clone()))) {
+        return Err(format!(
+            "struct `{}` custom clone must have signature `fn clone(&self) {}`",
+            s.name, s.name
+        ));
+    }
+    if sig.ret != Some(Ty::Struct(s.name.clone())) {
+        return Err(format!(
+            "struct `{}` custom clone must return `{}`",
+            s.name, s.name
+        ));
+    }
+    if let Some(def) = fns.iter().find(|f| f.name == method) {
+        if block_contains_direct_self_clone(&def.body) {
+            return Err(format!(
+                "struct `{}` custom clone recursively calls `self.clone()`",
+                s.name
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_custom_drop_sig(s: &StructDef, fn_sigs: &HashMap<String, FnSig>) -> Result<(), String> {
     let method = custom_method_name(&s.name, "drop");
     let Some(sig) = fn_sigs.get(&method) else {
@@ -310,12 +456,17 @@ fn validate_abilities(
     enums: &HashMap<String, EnumDef>,
     vectors: &HashMap<String, VectorDef>,
     fn_sigs: &HashMap<String, FnSig>,
+    fns: &[FnDef],
 ) -> Result<(), String> {
     for s in structs.values() {
         validate_copy_implies_clone(&format!("struct `{}`", s.name), &s.abilities)?;
+        let has_custom_clone = fn_sigs.contains_key(&custom_method_name(&s.name, CLONE_METHOD));
+        if has_custom_clone {
+            validate_custom_clone_sig(s, fn_sigs, fns)?;
+        }
         for ability in s.abilities.clone() {
             match ability {
-                Ability::Copy | Ability::Clone => {
+                Ability::Copy => {
                     for (field, ty) in &s.fields {
                         if !supports_decl_ability(ty, ability, structs, enums, vectors) {
                             let ability = ability_label(ability);
@@ -326,6 +477,18 @@ fn validate_abilities(
                         }
                     }
                 }
+                Ability::Clone if !has_custom_clone => {
+                    for (field, ty) in &s.fields {
+                        if !supports_decl_ability(ty, ability, structs, enums, vectors) {
+                            let ability = ability_label(ability);
+                            return Err(format!(
+                                "struct `{}` has `{ability}` but field `{field}` does not support it",
+                                s.name
+                            ));
+                        }
+                    }
+                }
+                Ability::Clone => {}
                 Ability::Drop => validate_custom_drop_sig(s, fn_sigs)?,
                 Ability::Deref => validate_custom_deref_sig(s, fn_sigs)?,
             }
@@ -334,6 +497,12 @@ fn validate_abilities(
 
     for e in enums.values() {
         validate_copy_implies_clone(&format!("enum `{}`", e.name), &e.abilities)?;
+        if fn_sigs.contains_key(&custom_method_name(&e.name, CLONE_METHOD)) {
+            return Err(format!(
+                "enum `{}` defines `clone`, but custom enum clone is not supported yet",
+                e.name
+            ));
+        }
         if has_declared_ability(&e.abilities, Ability::Deref) {
             return Err(format!(
                 "enum `{}` declares `deref`, but enum deref is not supported yet",
@@ -376,6 +545,12 @@ fn validate_abilities(
 
     for v in vectors.values() {
         validate_copy_implies_clone(&format!("vector `{}`", v.name), &v.abilities)?;
+        if fn_sigs.contains_key(&custom_method_name(&v.name, CLONE_METHOD)) {
+            return Err(format!(
+                "vector `{}` defines `clone`, but custom vector clone is not supported yet",
+                v.name
+            ));
+        }
         if has_declared_ability(&v.abilities, Ability::Deref) {
             return Err(format!(
                 "vector `{}` declares `deref`, but vector deref is not supported yet",
@@ -623,6 +798,7 @@ pub fn collect_sigs(
         &normalized_enums,
         &normalized_vectors,
         &fn_sigs,
+        fns,
     )?;
     Ok((
         normalized_structs,
