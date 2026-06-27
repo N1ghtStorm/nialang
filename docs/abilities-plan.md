@@ -884,41 +884,7 @@ Implemented notes:
   primitive/runtime phase
 - partial moves out of structs remain rejected
 
-## Phase 12: ability constraints for generics
-
-When Nia grows more generic syntax, add ability bounds:
-
-```nia
-fn dup[T: clone](x: T) T {
-    x.clone()
-}
-
-fn ignore[T: drop](x: T) () {
-    drop(x)
-}
-
-fn read_ref[T: deref](x: T) () {
-    println(*x)
-}
-```
-
-Possible spelling alternatives:
-
-```nia
-fn dup[T has clone](x: T) T
-fn dup[T: clone](x: T) T
-fn read_ref[T: deref](x: T) ()
-```
-
-Do not block the non-generic MVP on this phase.
-
-Deliverables:
-
-- parser support for ability bounds
-- typechecker support for generic ability obligations
-- diagnostics for missing bounds
-
-## Phase 13: closures and captured environments
+## Phase 12: closures and captured environments
 
 Abilities become important for closure captures.
 
@@ -957,7 +923,7 @@ Deliverables:
 - closure env drop glue
 - closure clone glue if closure values are cloneable
 
-## Phase 14: diagnostics and migration mode
+## Phase 13: diagnostics and migration mode
 
 Abilities affect common code paths, so diagnostics matter.
 
@@ -978,7 +944,7 @@ During migration, consider a temporary compatibility mode:
 Once examples and tests are migrated, strict mode can require explicit abilities
 for user-defined resource-like types.
 
-## Phase 15: primitive ability integration
+## Phase 14: primitive ability integration
 
 Only after custom clone/deref/drop methods, auto-drop, drop flags, aggregate
 drop, and closure environment cleanup are working, add formal language-level
@@ -997,8 +963,8 @@ This phase grants `copy` / `clone` / `drop` / `deref` where appropriate:
 - non-capturing function pointers receive formal `copy, clone, drop`
 - `Matrix` receives `clone, drop`, but not `copy`
 - heap anonymous vectors `T<>` receive `clone, drop`, but not `copy`
-- dynamic lists `List[T]` receive `clone` / `drop` according to their element
-  ability constraints, but not `copy`
+- dynamic lists `List[T]` receive `clone` / `drop` when their element type
+  supports the same ability, but not `copy`
 - future built-in smart pointer handles may receive `deref` here if they expose
   a well-defined target type
 - any other future reference-counted runtime handle receives explicit ability
@@ -1046,7 +1012,7 @@ Deliverables:
 - closure capture drop tests for runtime primitives
 - README update that marks primitive abilities as stable
 
-## Phase 16: deprecate low-level manual RC builtins in user docs
+## Phase 15: deprecate low-level manual RC builtins in user docs
 
 Keep these builtins available for internal lowering and compatibility:
 
