@@ -1123,6 +1123,8 @@ Deliverables:
 
 ## Phase 16: deprecate low-level manual RC builtins in user docs
 
+Status: complete.
+
 Keep these builtins available for internal lowering and compatibility:
 
 - `matrix_clone`
@@ -1141,9 +1143,9 @@ and automatic scope cleanup.
 
 Deliverables:
 
-- README ownership section update
-- examples rewritten to rely on auto-drop where appropriate
-- old manual-drop examples moved to low-level/runtime docs
+- README ownership section updated to prefer `.clone()` / `drop(x)`
+- user-facing examples rewritten to rely on abilities where appropriate
+- low-level manual-RC examples kept only as compatibility/runtime docs
 
 ## Phase 17: diagnostics and migration mode
 
@@ -1189,7 +1191,7 @@ for user-defined resource-like types.
 16. Add closure move captures and closure environment drop cleanup. (complete)
 17. Add formal `copy`, `clone`, and `drop` rules for `fn(...) -> ...` values.
     (complete)
-18. Update docs and examples.
+18. Update docs and examples. (complete)
 19. Improve diagnostics and optional migration mode.
 
 The key design rule is simple: codegen should not guess ownership or access

@@ -1,4 +1,7 @@
-// Built-in ref-counted matrix handle.
+// Low-level compatibility sample for the built-in ref-counted matrix handle.
+//
+// New user code should usually prefer `m.clone()` and `drop(m)`. This fixture
+// intentionally keeps the runtime helper surface visible.
 //
 // Matrix is a compiler-known heap object:
 // - reference counter,

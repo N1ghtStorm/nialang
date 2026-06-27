@@ -180,10 +180,10 @@ fn main() i32 {
     println(mat);
     matrix_set(mat, 0, 1, 12.25);
     println(matrix_get(mat, 0, 1));
-    let mat2: f64[] = matrix_clone(mat);
+    let mat2: f64[] = mat.clone();
     println(matrix_refcount(mat));
-    matrix_drop(mat2);
-    matrix_drop(mat);
+    drop(mat2);
+    drop(mat);
 
     let u: Vec2 = Vec2 [X: 3, Y: 4];
     let v: Vec2 = Vec2 [X: 1, Y: 2];

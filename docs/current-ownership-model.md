@@ -1,72 +1,78 @@
 # Current ownership model
 
-Status: implementation note for abilities Phase 0.
+Status: current implementation note for the abilities rollout.
 
-This document records the ownership and cleanup behavior that exists before
-language-level abilities (`copy`, `clone`, `drop`, `deref`) are implemented.
-It is descriptive only: Phase 0 does not change compiler behavior, syntax, or
-runtime lowering.
+Nia now has language-level ownership checks for non-copy values and automatic
+cleanup for values with `drop`. The low-level runtime helpers are still present
+for compatibility and compiler lowering, but ordinary user code should prefer
+abilities syntax.
 
 ## Summary
 
-Nia currently has several heap-backed values, but lifetime management is mostly
-manual and implemented through reserved builtins or methods. The compiler does
-not yet run an ownership pass, does not insert automatic drops, and does not
-track moved locals for ordinary native values.
+Preferred user-facing forms:
 
-The future abilities work should preserve this behavior until the relevant
-staged phase explicitly changes it.
+```nia
+let y = x.clone();
+drop(x);
+```
+
+`drop(x)` moves `x`, so using `x` afterwards is a type error. If a live
+droppable local reaches an ordinary scope exit, the compiler emits cleanup.
 
 ## Plain values
 
-Primitive scalar values, fixed arrays, structs, enums, and fixed-size vectors
-currently behave like ordinary by-value values in the existing typechecker and
-codegen. There is no formal `copy` ability yet, and there is no use-after-move
-diagnostic for non-copy user-defined values.
+Scalar primitives, strings, fixed arrays, fixed anonymous vectors, and `Complex`
+support language-level `copy`, `clone`, and `drop` behavior where appropriate.
+Copy values can be reused after assignment or argument passing. Non-copy owners
+must be moved, cloned, or explicitly dropped.
 
-This means the abilities rollout needs a compatibility path: existing scalar
-and aggregate examples should keep compiling until formal `copy` rules are
-introduced.
+User-defined structs, enums, and named vectors declare abilities with
+`has copy, clone, drop, deref`. A `copy` declaration requires `clone`.
 
 ## Matrix handles
 
-`Matrix` is a built-in heap-backed runtime handle. Matrix values are reference
-counted by the runtime representation, and user code currently manages sharing
-and cleanup explicitly.
+`Matrix` is a built-in heap-backed runtime handle. It is not `copy`, because a
+bitwise copy would duplicate ownership of the same heap allocation. It supports:
 
-Reserved matrix helpers include:
+- `m.clone()` - share the matrix handle by incrementing the runtime reference
+  count
+- `drop(m)` - release one owner and free matrix storage when the reference count
+  reaches zero
+- automatic cleanup at scope exit for live matrix owners
 
-- `matrix(...)` - allocate/build a matrix value
-- `matrix_clone(m)` - increment the matrix reference count and return the same
-  handle
-- `matrix_refcount(m)` - inspect the current reference count
-- `matrix_drop(m)` - decrement the reference count and free matrix storage when
-  it reaches zero
+Shape and element helpers remain available:
+
+- `matrix(...)`
+- `matrix_refcount(m)`
 - `matrix_get`, `matrix_set`, `matrix_rows`, `matrix_cols`, `matrix_len`
 
-There is no automatic `matrix_drop` insertion at scope exit yet.
+Compatibility helpers `matrix_clone(m)` and `matrix_drop(m)` still compile, but
+new user code should prefer `m.clone()` and `drop(m)`.
 
 ## Heap anonymous vectors
 
 `T<>` is a reference-counted heap anonymous vector with dynamic length. It is
 distinct from fixed-size anonymous vectors `T<N>`.
 
-Reserved heap-vector helpers include:
+Preferred ownership operations:
 
-- `vector_clone(v)` - increment the vector reference count and return the same
-  handle
-- `vector_refcount(v)` - inspect the current reference count
-- `vector_drop(v)` - decrement the reference count and free vector storage when
-  it reaches zero
+- `v.clone()` - share the vector handle by incrementing the runtime reference
+  count
+- `drop(v)` - release one owner
+- automatic cleanup at scope exit for live vector owners
+
+Other public helpers:
+
+- `vector_refcount(v)`
 - `vector_get`, `vector_set`, `vector_len`
-- `len(v)` - length helper for heap vectors
+- `len(v)`
 
-There is no automatic `vector_drop` insertion at scope exit yet.
+Compatibility helpers `vector_clone(v)` and `vector_drop(v)` still compile, but
+new user code should prefer `v.clone()` and `drop(v)`.
 
 ## Dynamic lists
 
-`List[T]` is a growable heap-backed list value. The current public surface is
-intentionally small:
+`List[T]` is a growable heap-backed list value:
 
 - `list_new[T]()`
 - `list_with_capacity[T](capacity)`
@@ -74,40 +80,45 @@ intentionally small:
 - `xs.capacity()`
 - `xs.push(value)`
 - `xs.get(index)`
+- `xs.clone()`
+- `drop(xs)`
 
-Unlike matrices and heap vectors, lists do not currently expose public
-`list_clone` or `list_drop` helpers. Index syntax and explicit list cleanup are
-also not part of the current surface.
+Lists do not expose public low-level `list_clone` or `list_drop` helpers.
 
-This is important for the abilities rollout: list `clone` / `drop` glue should
-not be assumed to exist until the primitive integration phase adds or defines
-it.
+## Function values
+
+Function values are lowered as `{ code, env, drop, clone }`.
+
+Top-level function values and non-capturing closures behave like cheap function
+pointers. Capturing closures own their environment:
+
+- capturing closures are not shallow-copyable
+- cloneable captured environments can be duplicated with `.clone()`
+- non-cloneable captured environments reject `.clone()`
+- `drop(f)` releases the captured environment
 
 ## Raw allocation and dereference
 
-Nia currently has low-level pointer allocation helpers:
+Nia still has low-level pointer allocation helpers:
 
 - `alloc(value)` - allocate storage and return a pointer/reference value
 - `realloc(ptr, value)` - reallocate storage for a new value
 - `dealloc(ptr)` - explicitly free storage
 
-Pointer/reference values can already be dereferenced with `*p`, and assignment
-through a pointer is supported with `*p = value`.
+Pointer/reference values can be dereferenced with `*p`, and assignment through a
+pointer is supported with `*p = value`. This surface remains low-level; automatic
+smart-pointer ownership is a later design step.
 
-This dereference behavior is built into the current expression/typechecking and
-codegen paths. It does not go through a formal `deref` ability yet.
+## Low-Level Runtime Helpers
 
-## What Phase 0 guarantees
+The following helpers are retained for compatibility, tests, and internal
+lowering:
 
-Phase 0 is documentation only.
+- `matrix_clone`
+- `matrix_drop`
+- `vector_clone`
+- `vector_drop`
 
-It does not:
-
-- add `has`
-- add `copy`, `clone`, `drop`, or `deref` keywords
-- add move checking
-- add automatic drop insertion
-- change matrix, heap-vector, list, or pointer lowering
-- replace existing helpers such as `matrix_drop`, `vector_drop`, or `dealloc`
-
-Later phases can use this document as the compatibility baseline.
+They are not the preferred public style. New examples and docs should use
+`.clone()`, `drop(x)`, and automatic scope cleanup unless they are explicitly
+demonstrating runtime internals.

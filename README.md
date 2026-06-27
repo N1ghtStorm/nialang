@@ -208,7 +208,6 @@ Use `T<>` for a reference-counted heap anonymous vector:
 
 ```nia
 let v: f64<> = <1.0, 2.0, 3.0>;
-println(vector_len(v));
 println(len(v));
 println(vector_refcount(v));
 
@@ -222,7 +221,8 @@ drop(v);
 `Matrix`, heap anonymous vectors `T<>`, and dynamic lists `List[T]` support
 language-level `.clone()` and `drop(x)`. The older low-level helpers such as
 `matrix_clone`, `matrix_drop`, `vector_clone`, and `vector_drop` remain
-available for compatibility and internal lowering.
+available for compatibility and internal lowering, but new user code should
+prefer `.clone()`, `drop(x)`, and automatic scope cleanup.
 
 ### Dynamic Lists
 
@@ -336,8 +336,8 @@ fn main() i32 {
     println(a * b);     // [[10, 40], [90, 160]]
     println(a * 3);     // [[3, 6], [9, 12]]
 
-    matrix_drop(a);
-    matrix_drop(b);
+    drop(a);
+    drop(b);
     0
 }
 ```
@@ -362,9 +362,9 @@ fn main() i32 {
     let c = a @ b;
     println(c);         // [[58, 64], [139, 154]]
 
-    matrix_drop(a);
-    matrix_drop(b);
-    matrix_drop(c);
+    drop(c);
+    drop(b);
+    drop(a);
     0
 }
 ```
@@ -398,7 +398,7 @@ fn main() i32 {
     println(ax);        // (i32 {"R": 140, "S": 320})
     println(ya);        // (i32 {"X": 39, "Y": 54, "Z": 69})
 
-    matrix_drop(a);
+    drop(a);
     0
 }
 ```
@@ -438,7 +438,7 @@ let v = <10, 20>;
 let m = outer(u, v);
 println(m);             // [[10, 20], [20, 40], [30, 60]]
 
-matrix_drop(m);
+drop(m);
 ```
 
 ### Determinant
@@ -457,7 +457,7 @@ fn main() i32 {
 
     println(m.det());
 
-    matrix_drop(m);
+    drop(m);
     0
 }
 ```
@@ -477,8 +477,8 @@ It is useful as a smoke test for generated loops and larger dense values.
 
 ## Matrix Ownership
 
-`Matrix` values are reference-counted heap handles in the runtime. For now,
-matrix lifetime management is explicit:
+`Matrix` values are reference-counted heap handles in the runtime. They support
+language-level clone/drop:
 
 ```nia
 let m = matrix([
@@ -486,9 +486,17 @@ let m = matrix([
     [3, 4],
 ]);
 
+let shared = m.clone();
 println(m.det());
-matrix_drop(m);
+drop(shared);
+drop(m);
 ```
+
+If a live `Matrix`, `T<>`, or `List[T]` local is left in scope, the compiler
+inserts cleanup at ordinary scope exits. Use explicit `drop(x)` when you want to
+release an owner earlier. The low-level `matrix_clone`, `matrix_drop`,
+`vector_clone`, and `vector_drop` helpers are kept for compatibility and runtime
+tests, not as the preferred user-facing API.
 
 This is intentionally simple while the language is young. Long term, this is
 one of the areas where the compiler can grow more ownership and lifetime help.
@@ -864,7 +872,7 @@ Good places to start:
 | `examples/tests/ok_bitwise.nia` | remainder, bitwise operators, shifts, and compound assignment |
 | `examples/sample_list.nia` | dynamic `List[T]` constructors and methods |
 | `examples/sample_dft_list.nia` | list-backed discrete Fourier transform |
-| `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
+| `examples/sample_matrix_rc.nia` | low-level matrix RC compatibility helpers |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
 | `examples/sample_closures.nia` | non-capturing closure/function-value smoke test |
 | `examples/abilities/copy_move_basics.nia` | `has copy, clone` and copy-preserving moves |
