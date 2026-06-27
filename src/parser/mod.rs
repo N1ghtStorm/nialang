@@ -305,6 +305,7 @@ impl Parser {
             params,
             ret,
             body,
+            closure_captures: Vec::new(),
         })
     }
 
@@ -654,6 +655,7 @@ impl Parser {
             params,
             ret,
             body,
+            closure_captures: Vec::new(),
         })
     }
 

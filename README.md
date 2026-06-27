@@ -869,6 +869,7 @@ Good places to start:
 | `examples/abilities/auto_drop_scope.nia` | automatic custom-drop at scope exit |
 | `examples/abilities/drop_flags.nia` | uninitialized locals, overwrites, and drop flags |
 | `examples/abilities/aggregate_drop.nia` | derived struct/enum drop for user-defined values |
+| `examples/abilities/closure_captures.nia` | copy-safe closure captures and function values |
 | `examples/sample_extern_lib.nia` | C ABI exports and shared-library mode |
 | `examples/quantum/qubit_create.nia` | QIR gates, rotations, measurement, and result recording |
 | `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |

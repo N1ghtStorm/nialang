@@ -1,0 +1,26 @@
+// Abilities phase 12 sample:
+// - closures can capture copy-safe values by value,
+// - function values are passed through the regular `fn(...) -> ...` type,
+// - non-copy resource captures are still delayed until move-capture/drop-env support.
+
+struct Offset has copy, clone {
+    value: i32
+}
+
+fn apply(x: i32, f: fn(i32) -> i32) i32 {
+    f(x)
+}
+
+fn main() i32 {
+    let base: i32 = 10;
+    let scale: i32 = 2;
+    let add_scaled: fn(i32) -> i32 = |x| x + base * scale;
+
+    let offset = Offset { value: 5 };
+    let add_offset: fn(i32) -> i32 = |x| x + offset.value;
+
+    let total = apply(7, add_scaled) + add_offset(20);
+    println(total);
+
+    0
+}

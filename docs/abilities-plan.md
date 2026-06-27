@@ -886,7 +886,61 @@ Implemented notes:
 
 ## Phase 12: closures and captured environments
 
-Abilities become important for closure captures.
+Status: complete for copy-safe value captures.
+
+This phase connects the existing `fn(...) -> ...` function value surface to
+closure literals that capture ordinary copy-safe values from the surrounding
+scope.
+
+Non-capturing closures:
+
+```text
+use env = null
+```
+
+Capturing closures:
+
+```text
+capture copy-safe values by value
+lower as { code_ptr, env_ptr }
+```
+
+Runtime primitive captures such as `Matrix` and `T<>`, plus custom-drop and
+other non-copy resources, remain limited until explicit move-capture and
+closure environment cleanup are designed.
+
+Deliverables:
+
+- capture analysis integrated with move checking for copy-safe captures
+- function values lowered as fat values `{ code_ptr, env_ptr }`
+- wrappers for top-level functions used as values
+- tests for non-capturing closures, capturing closures, nested captures,
+  top-level functions as values, and unit-returning function values
+- sample program for copy-safe captures
+
+Implemented notes:
+
+- closure bodies can capture copy-safe outer values by value
+- nested closure capture analysis is transitive, so outer closure environments
+  contain values required by inner closures
+- function values lower as a fat pair `{ code_ptr, env_ptr }`
+- non-capturing closures and top-level functions use `env = null`
+- captured `Matrix`, `T<>`, `List[T]`, custom-drop resources, and other
+  non-copy values are rejected until explicit move-capture and closure env
+  cleanup are designed
+- assignments to captured variables are rejected for now
+- closure env clone/drop is intentionally not exposed as language-level
+  `clone`/`drop` until function values receive formal primitive/runtime ability
+  integration
+
+## Phase 13: closure move captures and environment cleanup
+
+Status: planned.
+
+This phase contains the remaining closure work that was intentionally left out
+of the Phase 12 MVP.
+
+Abilities become important for closure values themselves:
 
 Non-capturing closures:
 
@@ -897,7 +951,7 @@ eventually copy, clone, drop after primitive/function-pointer ability integratio
 Capturing closures:
 
 ```text
-copy: initially no
+copy: no
 clone: if captured environment has clone
 drop: if captured environment has drop
 ```
@@ -919,30 +973,22 @@ until those primitives receive formal language-level `copy`, `clone`, and
 
 Deliverables:
 
-- capture analysis integrated with move checking
+- `move || ...` syntax and parser tests, if the language chooses explicit move
+  closures
+- move-checking that marks non-copy captures as moved into the closure
 - closure env drop glue
 - closure clone glue if closure values are cloneable
+- capture drop tests for custom-drop structs/enums
+- capture clone tests for cloneable captured environments
+- diagnostics for use-after-move caused by move captures
 
-## Phase 13: diagnostics and migration mode
+Open design questions:
 
-Abilities affect common code paths, so diagnostics matter.
-
-Good errors should say:
-
-- which value was moved
-- where it was moved
-- why the type is not `copy`
-- which ability is missing
-- which field or enum variant prevents deriving an ability
-
-During migration, consider a temporary compatibility mode:
-
-- existing structs/enums without `has` keep current behavior if all fields are
-  trivially copy/drop
-- compiler warns that explicit `has` will be required later
-
-Once examples and tests are migrated, strict mode can require explicit abilities
-for user-defined resource-like types.
+- whether non-`move` closures should ever capture by reference
+- whether closure environments should use plain heap allocation, RC, or a later
+  smart-pointer primitive
+- when function values themselves receive language-level `copy`, `clone`, and
+  `drop`
 
 ## Phase 14: primitive ability integration
 
@@ -1036,6 +1082,27 @@ Deliverables:
 - examples rewritten to rely on auto-drop where appropriate
 - old manual-drop examples moved to low-level/runtime docs
 
+## Phase 16: diagnostics and migration mode
+
+Abilities affect common code paths, so diagnostics matter.
+
+Good errors should say:
+
+- which value was moved
+- where it was moved
+- why the type is not `copy`
+- which ability is missing
+- which field or enum variant prevents deriving an ability
+
+During migration, consider a temporary compatibility mode:
+
+- existing structs/enums without `has` keep current behavior if all fields are
+  trivially copy/drop
+- compiler warns that explicit `has` will be required later
+
+Once examples and tests are migrated, strict mode can require explicit abilities
+for user-defined resource-like types.
+
 ## Suggested implementation order
 
 1. Parse `has copy, clone, drop, deref`.
@@ -1052,11 +1119,13 @@ Deliverables:
 11. Add early-return/break/continue custom-drop insertion.
 12. Add drop flags for custom-drop locals.
 13. Add aggregate drop glue for user-defined types.
-14. Connect closure captures to abilities.
-15. Integrate `copy`, `clone`, `drop`, and `deref` for built-in primitives and
+14. Connect copy-safe closure captures to abilities. (complete)
+15. Add closure move captures and closure environment clone/drop.
+16. Integrate `copy`, `clone`, `drop`, and `deref` for built-in primitives and
     runtime handles: scalars, raw pointers/references, fixed arrays/vectors,
     `Matrix`, `T<>`, `List[T]`.
-16. Update docs and examples.
+17. Update docs and examples.
+18. Improve diagnostics and optional migration mode.
 
 The key design rule is simple: codegen should not guess ownership or access
 semantics. Ownership, moves, clone permissions, deref permissions, and drop

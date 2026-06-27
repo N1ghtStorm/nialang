@@ -79,11 +79,60 @@ fn main() i32 {
 "#,
     );
     assert!(
-        ll.contains("define internal i32 @__nia_closure_0(i32 %x)"),
+        ll.contains("define internal i32 @__nia_closure_0(ptr %_nia_closure_env, i32 %x)"),
         "IR:\n{ll}"
     );
-    assert!(ll.contains("store ptr @__nia_closure_0"), "IR:\n{ll}");
+    assert!(
+        ll.contains("insertvalue { ptr, ptr } poison, ptr @__nia_closure_0, 0"),
+        "IR:\n{ll}"
+    );
     assert!(ll.contains("call i32 %"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_capturing_closure_function_value() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let add_base: fn(i32) -> i32 = |x| x + base;
+    add_base(32)
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal i32 @__nia_closure_0(ptr %_nia_closure_env, i32 %x)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
+    assert!(
+        ll.contains("getelementptr inbounds { i32 }, ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call i32 %"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_nested_capturing_closure_function_value() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let outer: fn(i32) -> i32 = |x| {
+        let inner: fn(i32) -> i32 = |y| y + base;
+        inner(x)
+    };
+    outer(32)
+}
+"#,
+    );
+    assert!(ll.contains("@__nia_closure_0"), "IR:\n{ll}");
+    assert!(ll.contains("@__nia_closure_1"), "IR:\n{ll}");
+    assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
+    assert!(
+        ll.contains("getelementptr inbounds { i32 }, ptr %"),
+        "IR:\n{ll}"
+    );
 }
 
 #[test]
@@ -98,7 +147,7 @@ fn main() i32 {
 "#,
     );
     assert!(
-        ll.contains("define internal void @__nia_closure_0(i32 %x)"),
+        ll.contains("define internal void @__nia_closure_0(ptr %_nia_closure_env, i32 %x)"),
         "IR:\n{ll}"
     );
     assert!(ll.contains("call void %"), "IR:\n{ll}");

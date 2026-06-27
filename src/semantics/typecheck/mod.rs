@@ -1628,13 +1628,25 @@ fn check_moves_closure(
     params: &[(String, Option<Ty>)],
     body: &Block,
     closure_ty: &Ty,
+    outer_env: &HashMap<String, Ty>,
+    outer_states: &MoveStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     let Ty::Fn(param_tys, ret_ty) = closure_ty else {
         return Ok(());
     };
+    let (captures, _) = closure_capture_names(params, body, outer_env);
     let mut closure_env = HashMap::new();
     let mut closure_states = MoveStates::new();
+    for name in captures {
+        if let Some(ty) = outer_env.get(&name) {
+            if outer_states.contains_key(&name) {
+                ensure_local_available(&name, outer_states)?;
+            }
+            closure_env.insert(name.clone(), ty.clone());
+            closure_states.insert(name, LocalMoveState::Available);
+        }
+    }
     for ((name, _), ty) in params.iter().zip(param_tys) {
         closure_env.insert(name.clone(), ty.clone());
         closure_states.insert(name.clone(), LocalMoveState::Available);
@@ -1702,7 +1714,9 @@ fn check_moves_expr(
                 check_moves_args_fallback(args, env, states, ctx)?;
             }
         }
-        Expr::Closure { params, body, .. } => check_moves_closure(params, body, &inferred, ctx)?,
+        Expr::Closure { params, body, .. } => {
+            check_moves_closure(params, body, &inferred, env, states, ctx)?
+        }
         Expr::StructLit { name, fields } => {
             if let Some(def) = ctx.structs.get(name) {
                 check_moves_struct_literal_fields(fields, &def.fields, env, states, ctx)?;
@@ -2889,6 +2903,244 @@ fn infer_fn_value_call(
     Ok(ret.as_ref().clone())
 }
 
+fn push_capture_name(
+    name: &str,
+    bound: &HashSet<String>,
+    outer_env: &HashMap<String, Ty>,
+    captures: &mut Vec<String>,
+) {
+    if !bound.contains(name)
+        && outer_env.contains_key(name)
+        && !captures.iter().any(|existing| existing == name)
+    {
+        captures.push(name.to_string());
+    }
+}
+
+fn push_capture_write(
+    name: &str,
+    bound: &HashSet<String>,
+    outer_env: &HashMap<String, Ty>,
+    writes: &mut Vec<String>,
+) {
+    if !bound.contains(name)
+        && outer_env.contains_key(name)
+        && !writes.iter().any(|existing| existing == name)
+    {
+        writes.push(name.to_string());
+    }
+}
+
+fn collect_lvalue_capture_writes(
+    target: &Expr,
+    bound: &HashSet<String>,
+    outer_env: &HashMap<String, Ty>,
+    captures: &mut Vec<String>,
+    writes: &mut Vec<String>,
+) {
+    match target {
+        Expr::Ident(name) => push_capture_write(name, bound, outer_env, writes),
+        Expr::Field(base, _) => {
+            collect_lvalue_capture_writes(base, bound, outer_env, captures, writes)
+        }
+        Expr::Index(base, idx) => {
+            collect_lvalue_capture_writes(base, bound, outer_env, captures, writes);
+            collect_expr_captures(idx, bound, outer_env, captures, writes);
+        }
+        Expr::Deref(inner) => collect_expr_captures(inner, bound, outer_env, captures, writes),
+        other => collect_expr_captures(other, bound, outer_env, captures, writes),
+    }
+}
+
+fn collect_block_captures(
+    block: &Block,
+    bound: &HashSet<String>,
+    outer_env: &HashMap<String, Ty>,
+    captures: &mut Vec<String>,
+    writes: &mut Vec<String>,
+) {
+    let mut scoped = bound.clone();
+    for st in &block.stmts {
+        match st {
+            Stmt::Let { name, init, .. } => {
+                if let Some(init) = init {
+                    collect_expr_captures(init, &scoped, outer_env, captures, writes);
+                }
+                scoped.insert(name.clone());
+            }
+            Stmt::Expr(expr) | Stmt::Return(expr) => {
+                collect_expr_captures(expr, &scoped, outer_env, captures, writes);
+            }
+            Stmt::Assign { target, value } => {
+                collect_lvalue_capture_writes(target, &scoped, outer_env, captures, writes);
+                collect_expr_captures(value, &scoped, outer_env, captures, writes);
+            }
+            Stmt::If { cond, then_block } => {
+                collect_expr_captures(cond, &scoped, outer_env, captures, writes);
+                collect_block_captures(then_block, &scoped, outer_env, captures, writes);
+            }
+            Stmt::While { cond, body } => {
+                collect_expr_captures(cond, &scoped, outer_env, captures, writes);
+                collect_block_captures(body, &scoped, outer_env, captures, writes);
+            }
+            Stmt::Loop { body } => {
+                collect_block_captures(body, &scoped, outer_env, captures, writes);
+            }
+            Stmt::Quant { body } | Stmt::Gpu { body } => {
+                collect_block_captures(body, &scoped, outer_env, captures, writes);
+            }
+            Stmt::Break => {}
+            Stmt::For {
+                var,
+                start,
+                end,
+                body,
+            } => {
+                collect_expr_captures(start, &scoped, outer_env, captures, writes);
+                collect_expr_captures(end, &scoped, outer_env, captures, writes);
+                let mut body_bound = scoped.clone();
+                body_bound.insert(var.clone());
+                collect_block_captures(body, &body_bound, outer_env, captures, writes);
+            }
+        }
+    }
+    if let Some(tail) = &block.tail {
+        collect_expr_captures(tail, &scoped, outer_env, captures, writes);
+    }
+}
+
+fn collect_match_pattern_bindings(pattern: &MatchPattern, bound: &mut HashSet<String>) {
+    match pattern {
+        MatchPattern::Unit { .. } => {}
+        MatchPattern::Tuple { bindings, .. } | MatchPattern::Struct { bindings, .. } => {
+            for binding in bindings {
+                bound.insert(binding.clone());
+            }
+        }
+    }
+}
+
+fn collect_expr_captures(
+    expr: &Expr,
+    bound: &HashSet<String>,
+    outer_env: &HashMap<String, Ty>,
+    captures: &mut Vec<String>,
+    writes: &mut Vec<String>,
+) {
+    match expr {
+        Expr::Ident(name) => push_capture_name(name, bound, outer_env, captures),
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::EnumVariant { .. } => {}
+        Expr::Neg(inner)
+        | Expr::Not(inner)
+        | Expr::BitNot(inner)
+        | Expr::AddrOf(inner)
+        | Expr::Deref(inner)
+        | Expr::Field(inner, _) => collect_expr_captures(inner, bound, outer_env, captures, writes),
+        Expr::Add(l, r)
+        | Expr::Sub(l, r)
+        | Expr::Mul(l, r)
+        | Expr::VecDot(l, r)
+        | Expr::Div(l, r)
+        | Expr::Rem(l, r)
+        | Expr::BitAnd(l, r)
+        | Expr::BitOr(l, r)
+        | Expr::BitXor(l, r)
+        | Expr::Shl(l, r)
+        | Expr::Shr(l, r)
+        | Expr::Eq(l, r)
+        | Expr::Ne(l, r)
+        | Expr::Lt(l, r)
+        | Expr::Le(l, r)
+        | Expr::Gt(l, r)
+        | Expr::Ge(l, r)
+        | Expr::Index(l, r) => {
+            collect_expr_captures(l, bound, outer_env, captures, writes);
+            collect_expr_captures(r, bound, outer_env, captures, writes);
+        }
+        Expr::Call { name, args } => {
+            push_capture_name(name, bound, outer_env, captures);
+            for arg in args {
+                collect_expr_captures(arg, bound, outer_env, captures, writes);
+            }
+        }
+        Expr::GenericCall { args, .. } | Expr::EnumTuple { args, .. } => {
+            for arg in args {
+                collect_expr_captures(arg, bound, outer_env, captures, writes);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_expr_captures(receiver, bound, outer_env, captures, writes);
+            for arg in args {
+                collect_expr_captures(arg, bound, outer_env, captures, writes);
+            }
+        }
+        Expr::CallExpr { callee, args } => {
+            collect_expr_captures(callee, bound, outer_env, captures, writes);
+            for arg in args {
+                collect_expr_captures(arg, bound, outer_env, captures, writes);
+            }
+        }
+        Expr::Closure { params, body, .. } => {
+            let mut closure_bound = bound.clone();
+            for (name, _) in params {
+                closure_bound.insert(name.clone());
+            }
+            collect_block_captures(body, &closure_bound, outer_env, captures, writes);
+        }
+        Expr::StructLit { fields, .. }
+        | Expr::VectorLit { fields, .. }
+        | Expr::EnumStruct { fields, .. } => {
+            for (_, value) in fields {
+                collect_expr_captures(value, bound, outer_env, captures, writes);
+            }
+        }
+        Expr::AnonVectorLit(elems) | Expr::ArrayLit(elems) => {
+            for elem in elems {
+                collect_expr_captures(elem, bound, outer_env, captures, writes);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            collect_expr_captures(scrutinee, bound, outer_env, captures, writes);
+            for (pattern, arm) in arms {
+                let mut arm_bound = bound.clone();
+                collect_match_pattern_bindings(pattern, &mut arm_bound);
+                collect_expr_captures(arm, &arm_bound, outer_env, captures, writes);
+            }
+        }
+        Expr::Quant { body } | Expr::Gpu { body } => {
+            collect_block_captures(body, bound, outer_env, captures, writes);
+        }
+    }
+}
+
+pub(crate) fn closure_capture_names(
+    params: &[(String, Option<Ty>)],
+    body: &Block,
+    outer_env: &HashMap<String, Ty>,
+) -> (Vec<String>, Vec<String>) {
+    let mut bound = HashSet::new();
+    for (name, _) in params {
+        bound.insert(name.clone());
+    }
+    let mut captures = Vec::new();
+    let mut writes = Vec::new();
+    collect_block_captures(body, &bound, outer_env, &mut captures, &mut writes);
+    (captures, writes)
+}
+
+fn supports_closure_capture_ty(
+    ty: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    supports_decl_ability(ty, Ability::Copy, structs, enums, vectors)
+}
+
 fn infer_closure_expr(
     params: &[(String, Option<Ty>)],
     explicit_ret: Option<&Ty>,
@@ -2915,8 +3167,30 @@ fn infer_closure_expr(
         }
     }
 
+    let (captures, writes) = closure_capture_names(params, body, env);
+    if let Some(name) = writes.first() {
+        return Err(format!(
+            "assignment to captured variable `{name}` is not supported yet"
+        ));
+    }
+    for name in &captures {
+        let ty = env
+            .get(name)
+            .expect("capture collection only uses outer env names");
+        if !supports_closure_capture_ty(ty, structs, enums, vectors) {
+            return Err(format!(
+                "closure capture `{name}` requires `copy`; captured move/drop environments are not supported yet"
+            ));
+        }
+    }
+
     let mut closure_params = Vec::with_capacity(params.len());
     let mut closure_env = HashMap::new();
+    for name in &captures {
+        if let Some(ty) = env.get(name) {
+            closure_env.insert(name.clone(), ty.clone());
+        }
+    }
     for (idx, (name, ann)) in params.iter().enumerate() {
         let ty = match (ann, expected) {
             (Some(t), _) => normalize_ty(t, structs, enums, vectors)?,

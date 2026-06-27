@@ -19,11 +19,12 @@ use crate::nia_std::{
     RECORD, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET,
     VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
-use crate::semantics::typecheck::FnSig;
+use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
 const CLONE_METHOD: &str = "clone";
 const DROP_METHOD: &str = "drop";
 const DEREF_METHOD: &str = "deref";
+const CLOSURE_ENV_PARAM: &str = "\0nia.closure.env";
 
 /// Walks all functions and collects UTF-8 string literal payloads for module-level globals.
 fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
@@ -306,6 +307,7 @@ enum CodegenMode {
 struct ClosureState {
     next_id: u32,
     defs: Vec<String>,
+    wrappers: BTreeSet<String>,
 }
 
 fn qir_runner_prelude() -> &'static str {
@@ -669,6 +671,10 @@ fn emit_vector_print_constants(vectors: &[VectorDef]) -> String {
 }
 
 /// Maps high-level nialang type into LLVM IR textual type.
+fn fn_value_ll_ty() -> &'static str {
+    "{ ptr, ptr }"
+}
+
 fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
     match t {
         Ty::I8 => "i8".into(),
@@ -699,7 +705,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::HeapVector(_) => "ptr".into(),
         Ty::List(_) => "ptr".into(),
         Ty::Matrix(_, _) => "ptr".into(),
-        Ty::Fn(_, _) => "ptr".into(),
+        Ty::Fn(_, _) => fn_value_ll_ty().into(),
     }
 }
 
@@ -1014,6 +1020,41 @@ impl<'a> Gen<'a> {
         let n = self.lbl;
         self.lbl += 1;
         format!("{prefix}.{n}")
+    }
+
+    fn emit_fn_value(&mut self, code: &str, env: &str) -> String {
+        let with_code = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} poison, ptr {}, 0",
+            with_code,
+            fn_value_ll_ty(),
+            code
+        )
+        .unwrap();
+        let with_env = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} %{}, ptr {}, 1",
+            with_env,
+            fn_value_ll_ty(),
+            with_code,
+            env
+        )
+        .unwrap();
+        format!("%{with_env}")
+    }
+
+    fn closure_env_ll_ty(captures: &[(String, Ty)]) -> String {
+        if captures.is_empty() {
+            return "{}".into();
+        }
+        let fields = captures
+            .iter()
+            .map(|(_, ty)| llvm_ty(ty, &[]))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{{ {fields} }}")
     }
 
     fn emit_method_self_arg(
@@ -1682,23 +1723,41 @@ impl<'a> Gen<'a> {
         args: &[Expr],
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
-        let mut arg_strs = Vec::new();
+        let code = self.fresh();
+        let env = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 0",
+            code,
+            fn_value_ll_ty(),
+            callee
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 1",
+            env,
+            fn_value_ll_ty(),
+            callee
+        )
+        .unwrap();
+        let mut arg_strs = vec![format!("ptr %{env}")];
         for (arg, param_ty) in args.iter().zip(params) {
             let (arg_ty, arg_val) = self.emit_expr(arg, locals, Some(param_ty));
             debug_assert!(types_match(&arg_ty, param_ty));
             arg_strs.push(format!("{} {}", llvm_ty(param_ty, self.structs), arg_val));
         }
         if matches!(ret, Ty::Unit) {
-            writeln!(self.out, "  call void {}({})", callee, arg_strs.join(", ")).unwrap();
+            writeln!(self.out, "  call void %{}({})", code, arg_strs.join(", ")).unwrap();
             (Ty::Unit, String::new())
         } else {
             let tmp = self.fresh();
             writeln!(
                 self.out,
-                "  %{} = call {} {}({})",
+                "  %{} = call {} %{}({})",
                 tmp,
                 llvm_ty(ret, self.structs),
-                callee,
+                code,
                 arg_strs.join(", ")
             )
             .unwrap();
@@ -1706,11 +1765,66 @@ impl<'a> Gen<'a> {
         }
     }
 
+    fn ensure_function_value_wrapper(&mut self, name: &str) -> String {
+        let wrapper = format!("__nia_fn_value_{}", sanitize(name));
+        if !self.closures.borrow_mut().wrappers.insert(wrapper.clone()) {
+            return wrapper;
+        }
+        let (sig_params, sig_ret) = {
+            let sig = self.fn_sigs.get(name).expect("typechecked function value");
+            (sig.params.clone(), sig.ret.clone())
+        };
+        let ret_ty = sig_ret.clone().unwrap_or(Ty::Unit);
+        let ret_ll = if matches!(ret_ty, Ty::Unit) {
+            "void".to_string()
+        } else {
+            llvm_ty(&ret_ty, self.structs)
+        };
+        let mut params = vec!["ptr %__env".to_string()];
+        for (idx, ty) in sig_params.iter().enumerate() {
+            params.push(format!("{} %arg{}", llvm_ty(ty, self.structs), idx));
+        }
+        let mut def = String::new();
+        writeln!(
+            def,
+            "define internal {} @{}({}) {{",
+            ret_ll,
+            sanitize(&wrapper),
+            params.join(", ")
+        )
+        .unwrap();
+        writeln!(def, "entry:").unwrap();
+        let call_args = sig_params
+            .iter()
+            .enumerate()
+            .map(|(idx, ty)| format!("{} %arg{}", llvm_ty(ty, self.structs), idx))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if matches!(ret_ty, Ty::Unit) {
+            writeln!(def, "  call void @{}({})", sanitize(name), call_args).unwrap();
+            writeln!(def, "  ret void").unwrap();
+        } else {
+            writeln!(
+                def,
+                "  %ret = call {} @{}({})",
+                llvm_ty(&ret_ty, self.structs),
+                sanitize(name),
+                call_args
+            )
+            .unwrap();
+            writeln!(def, "  ret {} %ret", llvm_ty(&ret_ty, self.structs)).unwrap();
+        }
+        writeln!(def, "}}").unwrap();
+        self.closures.borrow_mut().defs.push(def);
+        wrapper
+    }
+
     fn emit_closure_literal(
         &mut self,
         params: &[(String, Option<Ty>)],
         explicit_ret: Option<&Ty>,
         body: &Block,
+        locals: &HashMap<String, (Ty, String)>,
         hint: Option<&Ty>,
     ) -> (Ty, String) {
         let expected = match hint {
@@ -1738,14 +1852,54 @@ impl<'a> Gen<'a> {
             id
         };
         let name = format!("__nia_closure_{id}");
+        let outer_env = locals
+            .iter()
+            .map(|(name, (ty, _))| (name.clone(), ty.clone()))
+            .collect::<HashMap<_, _>>();
+        let (capture_names, _) = closure_capture_names(params, body, &outer_env);
+        let captures = capture_names
+            .iter()
+            .filter_map(|name| outer_env.get(name).map(|ty| (name.clone(), ty.clone())))
+            .collect::<Vec<_>>();
+        let env_ll = Self::closure_env_ll_ty(&captures);
+        let env_value = if captures.is_empty() {
+            "null".to_string()
+        } else {
+            let sz = self.emit_sizeof_ll_ty_i64(&env_ll);
+            let env = self.fresh();
+            writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", env, sz).unwrap();
+            for (idx, (capture_name, capture_ty)) in captures.iter().enumerate() {
+                let (_, capture_val) =
+                    self.emit_expr(&Expr::Ident(capture_name.clone()), locals, Some(capture_ty));
+                let field_ptr = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = getelementptr inbounds {}, ptr %{}, i32 0, i32 {}",
+                    field_ptr, env_ll, env, idx
+                )
+                .unwrap();
+                writeln!(
+                    self.out,
+                    "  store {} {}, ptr %{}",
+                    llvm_ty(capture_ty, self.structs),
+                    capture_val,
+                    field_ptr
+                )
+                .unwrap();
+            }
+            format!("%{env}")
+        };
         let f = FnDef {
             name: name.clone(),
             is_extern: false,
             is_quantum: false,
-            params: params
-                .iter()
-                .zip(&param_tys)
-                .map(|((name, _), ty)| (name.clone(), ty.clone()))
+            params: std::iter::once((CLOSURE_ENV_PARAM.to_string(), Ty::Ptr(Box::new(Ty::Unit))))
+                .chain(
+                    params
+                        .iter()
+                        .zip(&param_tys)
+                        .map(|((name, _), ty)| (name.clone(), ty.clone())),
+                )
                 .collect(),
             ret: if matches!(ret_ty, Ty::Unit) {
                 None
@@ -1753,6 +1907,7 @@ impl<'a> Gen<'a> {
                 Some(ret_ty.clone())
             },
             body: body.clone(),
+            closure_captures: captures,
         };
         let def = Gen::new(
             self.structs,
@@ -1767,7 +1922,7 @@ impl<'a> Gen<'a> {
         self.closures.borrow_mut().defs.push(def);
         (
             Ty::Fn(param_tys, Box::new(ret_ty)),
-            format!("@{}", sanitize(&name)),
+            self.emit_fn_value(&format!("@{}", sanitize(&name)), &env_value),
         )
     }
 
@@ -2021,6 +2176,10 @@ impl<'a> Gen<'a> {
 
     fn emit_sizeof_i64(&mut self, ty: &Ty) -> String {
         let ty_ll = llvm_ty(ty, self.structs);
+        self.emit_sizeof_ll_ty_i64(&ty_ll)
+    }
+
+    fn emit_sizeof_ll_ty_i64(&mut self, ty_ll: &str) -> String {
         let gep = self.fresh();
         let sz = self.fresh();
         writeln!(
@@ -6496,6 +6655,28 @@ impl<'a> Gen<'a> {
                 visible_order.push(pname.clone());
             }
         }
+        if !f.closure_captures.is_empty() {
+            let (_, env_slot) = local_ptr
+                .get(CLOSURE_ENV_PARAM)
+                .expect("closure env param is emitted for captured closures")
+                .clone();
+            let env = self.fresh();
+            writeln!(self.out, "  %{} = load ptr, ptr {}", env, env_slot).unwrap();
+            let env_ll = Self::closure_env_ll_ty(&f.closure_captures);
+            for (idx, (capture_name, capture_ty)) in f.closure_captures.iter().enumerate() {
+                let field_ptr = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = getelementptr inbounds {}, ptr %{}, i32 0, i32 {}",
+                    field_ptr, env_ll, env, idx
+                )
+                .unwrap();
+                local_ptr.insert(
+                    capture_name.clone(),
+                    (capture_ty.clone(), format!("%{field_ptr}")),
+                );
+            }
+        }
 
         for st in &f.body.stmts {
             self.emit_stmt(
@@ -7112,11 +7293,11 @@ impl<'a> Gen<'a> {
                         return (Ty::F64, self.emit_pi_value());
                     }
                     if let Some(sig) = self.fn_sigs.get(name) {
+                        let params = sig.params.clone();
                         let ret = sig.ret.clone().unwrap_or(Ty::Unit);
-                        return (
-                            Ty::Fn(sig.params.clone(), Box::new(ret)),
-                            format!("@{}", sanitize(name)),
-                        );
+                        let wrapper = self.ensure_function_value_wrapper(name);
+                        let value = self.emit_fn_value(&format!("@{}", sanitize(&wrapper)), "null");
+                        return (Ty::Fn(params, Box::new(ret)), value);
                     }
                     if let Some((enum_name, variant)) = split_variant_path(name) {
                         return self.emit_enum_unit_variant(enum_name, variant);
@@ -7756,7 +7937,7 @@ impl<'a> Gen<'a> {
                 unreachable!("typechecked generic call")
             }
             Expr::Closure { params, ret, body } => {
-                self.emit_closure_literal(params, ret.as_ref(), body, hint)
+                self.emit_closure_literal(params, ret.as_ref(), body, locals, hint)
             }
             Expr::CallExpr { callee, args } => {
                 let (callee_ty, callee_val) = self.emit_expr(callee, locals, None);
@@ -7771,7 +7952,14 @@ impl<'a> Gen<'a> {
                     let ret = ret.as_ref().clone();
                     let ptr = ptr.clone();
                     let callee = self.fresh();
-                    writeln!(self.out, "  %{} = load ptr, ptr {}", callee, ptr).unwrap();
+                    writeln!(
+                        self.out,
+                        "  %{} = load {}, ptr {}",
+                        callee,
+                        fn_value_ll_ty(),
+                        ptr
+                    )
+                    .unwrap();
                     return self.emit_fn_value_call(
                         &format!("%{callee}"),
                         &params,

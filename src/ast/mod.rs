@@ -105,6 +105,7 @@ pub struct FnDef {
     pub params: Vec<(String, Ty)>,
     pub ret: Option<Ty>,
     pub body: Block,
+    pub closure_captures: Vec<(String, Ty)>,
 }
 
 pub fn method_symbol(owner: &Ty, method: &str) -> String {

@@ -118,7 +118,7 @@ fn main() i32 {
 }
 
 #[test]
-fn typecheck_rejects_closure_captures_for_now() {
+fn typecheck_allows_copy_closure_captures() {
     let src = r#"
 fn main() i32 {
     let base: i32 = 10;
@@ -126,8 +126,66 @@ fn main() i32 {
     add_base(1)
 }
 "#;
-    let err = check_all(src).expect_err("captures are not supported yet");
-    assert!(err.contains("unknown variable `base`"), "{err}");
+    check_all(src).expect("copy captures should typecheck");
+}
+
+#[test]
+fn typecheck_allows_nested_copy_closure_captures() {
+    let src = r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let outer: fn(i32) -> i32 = |x| {
+        let inner: fn(i32) -> i32 = |y| y + base;
+        inner(x)
+    };
+    outer(32)
+}
+"#;
+    check_all(src).expect("nested copy captures should typecheck");
+}
+
+#[test]
+fn typecheck_rejects_non_copy_closure_capture() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 3 };
+    let read_fd: fn() -> i32 = || handle.fd;
+    read_fd()
+}
+"#;
+    let err = check_all(src).expect_err("non-copy captures are delayed");
+    assert!(
+        err.contains("closure capture `handle` requires `copy`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rejects_assignment_to_captured_variable() {
+    let src = r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let set_base: fn() -> () = || {
+        base = 20;
+    };
+    set_base();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("captured variables are read-only for now");
+    assert!(
+        err.contains("assignment to captured variable `base`"),
+        "{err}"
+    );
 }
 
 #[test]
