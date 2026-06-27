@@ -1,0 +1,32 @@
+struct SomeSmartPointer has drop {
+    id: i32,
+    prt: &i32,
+}
+
+impl SomeSmartPointer {
+    // fn new(id: i32, num: i32) SomeSmartPointer {
+    //     let prt = alloc(num);
+    //     SomeSmartPointer { id: id, prt: prt }
+    // }
+
+    fn drop(self) {
+        println(self.id);
+        dealloc(self.prt);
+    }
+}
+
+fn main() i32 {
+    let a = alloc(1000000);
+    // let outer_a = SomeSmartPointer { id: 1, prt: a };
+
+    // if true{
+    //     let inner = SomeSmartPointer { id: 2, prt: a };
+    // }
+
+    let outer_b = SomeSmartPointer { id: 3, prt: a };
+
+    let b = outer_b.prt;
+    println(*b);
+
+    0
+}
