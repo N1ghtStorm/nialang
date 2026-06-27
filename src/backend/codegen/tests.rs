@@ -257,6 +257,68 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_custom_deref_loads_through_deref_method() {
+    let ll = emit(
+        r#"
+struct BoxI32 has deref {
+    ptr: &i32,
+}
+
+impl BoxI32 {
+    fn deref(&self) &i32 {
+        self.ptr
+    }
+}
+
+fn main() i32 {
+    let x = 41;
+    let b = BoxI32 { ptr: &x };
+    *b
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal ptr @BoxI32__deref(ptr %self)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call ptr @BoxI32__deref(ptr %"), "IR:\n{ll}");
+    assert!(ll.contains("load i32, ptr %"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_explicit_drop_calls_custom_struct_drop() {
+    let ll = emit(
+        r#"
+struct MatrixOwner has drop {
+    m: f64[],
+}
+
+impl MatrixOwner {
+    fn drop(self) {
+        matrix_drop(self.m);
+    }
+}
+
+fn main() i32 {
+    let m: f64[] = matrix([[1.0]]);
+    let owner = MatrixOwner { m: m };
+    drop(owner);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal void @MatrixOwner__drop(%struct.MatrixOwner %self)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call void @MatrixOwner__drop(%struct.MatrixOwner %"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_contains_if_branching() {
     let ll = emit(include_str!("../../../examples/tests/ok_if_return.nia"));
     assert!(ll.contains("br i1"));

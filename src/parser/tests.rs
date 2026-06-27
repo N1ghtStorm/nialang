@@ -95,6 +95,22 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_drop_keyword_call() {
+    let src = r#"
+fn main() {
+    drop(value);
+}
+"#;
+    let toks = tokenize(src);
+    let (_structs, _enums, fns, _vectors) = Parser::new(toks).parse_file().unwrap();
+    let Stmt::Expr(Expr::Call { name, args }) = &fns[0].body.stmts[0] else {
+        panic!("expected drop call expression statement");
+    };
+    assert_eq!(name, "drop");
+    assert_eq!(args.len(), 1);
+}
+
+#[test]
 fn parse_fixture_impl_methods() {
     parse_ok(include_str!("../../examples/tests/ok_impl_methods.nia"));
 }

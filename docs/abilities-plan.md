@@ -513,6 +513,8 @@ Implemented notes:
 
 ## Phase 6: custom struct deref methods
 
+Status: complete.
+
 Allow structs with `deref` ability to override dereference logic.
 
 Preferred surface spelling:
@@ -575,7 +577,19 @@ Deliverables:
 - tests that `deref` does not grant `copy`, `clone`, or `drop`
 - diagnostics for implicit auto-deref forms if they are not supported yet
 
+Implemented notes:
+
+- custom deref is currently supported for structs only
+- `*x` calls `S::deref(&x)` when `x` has `deref`; raw pointer dereference keeps
+  its existing behavior
+- direct `.deref()` calls are rejected; use `*x`
+- deref borrows the owner and does not move it
+- implicit deref coercions, method forwarding, and chained auto-deref are still
+  future work
+
 ## Phase 7: custom struct drop methods
+
+Status: complete.
 
 Allow structs with `drop` ability to override their destructor logic.
 
@@ -653,7 +667,19 @@ Deliverables:
   inside custom destructors
 - diagnostics for direct `value.drop()` calls if they are not supported yet
 
+Implemented notes:
+
+- custom drop is currently supported for structs only
+- a struct that defines `fn drop(self)` must declare `has drop`
+- direct `.drop()` calls are rejected; use the language-level `drop(x)` form
+- moving non-copy fields out of `self` inside `drop` is rejected by the existing
+  partial-move diagnostics
+- low-level cleanup helpers such as `matrix_drop` and `vector_drop` remain
+  callable inside custom destructors
+
 ## Phase 8: explicit drop for custom-drop structs
+
+Status: complete.
 
 Add a language-level explicit drop operation for user-defined custom-drop
 structs:
@@ -685,6 +711,16 @@ Deliverables:
 - codegen tests showing `drop(x)` calls custom struct drop
 - tests that matrix/vector/list values are still rejected by language-level
   `drop(x)` in this phase
+
+Implemented notes:
+
+- `drop(x)` is parsed as a language-level operation, not as a normal user
+  function
+- `drop(x)` is accepted only for custom-drop structs and moves `x`
+- using a local after `drop(local)` is rejected by move checking
+- `drop(primitive)`, `drop(matrix)`, `drop(heap_vector)`, and `drop(list)` are
+  rejected until the final primitive-integration phase
+- existing `matrix_drop` and `vector_drop` builtins are unchanged
 
 ## Phase 9: automatic drop at lexical scope exit for custom-drop structs
 

@@ -1547,6 +1547,304 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_custom_deref_without_moving_source() {
+    let src = r#"
+struct BoxI32 has deref {
+    ptr: &i32,
+}
+
+impl BoxI32 {
+    fn deref(&self) &i32 {
+        self.ptr
+    }
+}
+
+fn main() i32 {
+    let x = 21;
+    let b = BoxI32 { ptr: &x };
+    let first = *b;
+    let second = *b;
+    first + second
+}
+"#;
+    check_all(src).expect("custom deref should borrow source");
+}
+
+#[test]
+fn typecheck_rejects_custom_deref_without_deref_ability() {
+    let src = r#"
+struct BoxI32 {
+    ptr: &i32,
+}
+
+impl BoxI32 {
+    fn deref(&self) &i32 {
+        self.ptr
+    }
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("custom deref requires deref ability");
+    assert!(err.contains("does not declare `deref` ability"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_direct_deref_method_call() {
+    let src = r#"
+struct BoxI32 has deref {
+    ptr: &i32,
+}
+
+impl BoxI32 {
+    fn deref(&self) &i32 {
+        self.ptr
+    }
+}
+
+fn main() i32 {
+    let x = 1;
+    let b = BoxI32 { ptr: &x };
+    b.deref();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("direct deref method call is not supported");
+    assert!(err.contains("use `*x`"), "{err}");
+}
+
+#[test]
+fn typecheck_deref_does_not_grant_clone_or_drop() {
+    for src in [
+        r#"
+struct BoxI32 has deref {
+    ptr: &i32,
+}
+
+impl BoxI32 {
+    fn deref(&self) &i32 {
+        self.ptr
+    }
+}
+
+fn main() i32 {
+    let x = 1;
+    let b = BoxI32 { ptr: &x };
+    let cloned = b.clone();
+    *cloned
+}
+"#,
+        r#"
+struct BoxI32 has deref {
+    ptr: &i32,
+}
+
+impl BoxI32 {
+    fn deref(&self) &i32 {
+        self.ptr
+    }
+}
+
+fn main() i32 {
+    let x = 1;
+    let b = BoxI32 { ptr: &x };
+    drop(b);
+    0
+}
+"#,
+    ] {
+        let err = check_all(src).expect_err("deref should not imply other abilities");
+        assert!(
+            err.contains("declare `clone`")
+                || err.contains("only available for custom-drop structs"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn typecheck_rejects_moving_non_copy_value_out_through_deref() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+struct BoxToken has deref {
+    ptr: &Token,
+}
+
+impl BoxToken {
+    fn deref(&self) &Token {
+        self.ptr
+    }
+}
+
+fn main() i32 {
+    let token = Token { id: 7 };
+    let b = BoxToken { ptr: &token };
+    let moved = *b;
+    moved.id
+}
+"#;
+    let err = check_all(src).expect_err("deref should not move non-copy targets out");
+    assert!(err.contains("cannot move out through dereference"), "{err}");
+}
+
+#[test]
+fn typecheck_allows_custom_drop_and_explicit_drop() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+        println(self.fd);
+    }
+}
+
+fn main() i32 {
+    let h = FileHandle { fd: 3 };
+    drop(h);
+    0
+}
+"#;
+    check_all(src).expect("explicit drop should accept custom-drop structs");
+}
+
+#[test]
+fn typecheck_rejects_custom_drop_without_drop_ability() {
+    let src = r#"
+struct FileHandle {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("custom drop requires drop ability");
+    assert!(err.contains("does not declare `drop` ability"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_direct_drop_method_call() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let h = FileHandle { fd: 3 };
+    h.drop();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("direct drop method call is not supported");
+    assert!(err.contains("use `drop(x)`"), "{err}");
+}
+
+#[test]
+fn typecheck_explicit_drop_moves_local() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let h = FileHandle { fd: 3 };
+    drop(h);
+    h.fd
+}
+"#;
+    let err = check_all(src).expect_err("drop should move the local");
+    assert!(err.contains("use of moved local `h`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_language_drop_for_primitives_and_runtime_handles_for_now() {
+    for src in [
+        r#"
+fn main() i32 {
+    let n = 1;
+    drop(n);
+    0
+}
+"#,
+        r#"
+fn main() i32 {
+    let m: f64[] = matrix([[1.0]]);
+    drop(m);
+    0
+}
+"#,
+        r#"
+fn main() i32 {
+    let v: f64<> = <1.0>;
+    drop(v);
+    0
+}
+"#,
+        r#"
+fn main() i32 {
+    let xs: List[i32] = list_new[i32]();
+    drop(xs);
+    0
+}
+"#,
+    ] {
+        let err = check_all(src).expect_err("runtime drop integration is delayed");
+        assert!(
+            err.contains("only available for custom-drop structs"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn typecheck_rejects_moving_field_out_inside_custom_drop() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+struct FileHandle has drop {
+    token: Token,
+}
+
+impl FileHandle {
+    fn drop(self) {
+        let token = self.token;
+        println(token.id);
+    }
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("custom drop should not move fields out");
+    assert!(err.contains("partial moves are not supported yet"), "{err}");
+}
+
+#[test]
 fn typecheck_reserves_new_single_qubit_gate_function_names() {
     for gate in ["I", "Y", "Z", "S", "Sdg", "T", "Tdg"] {
         let src = format!(

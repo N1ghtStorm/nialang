@@ -22,6 +22,8 @@ use crate::nia_std::{
 use crate::semantics::typecheck::FnSig;
 
 const CLONE_METHOD: &str = "clone";
+const DROP_METHOD: &str = "drop";
+const DEREF_METHOD: &str = "deref";
 
 /// Walks all functions and collects UTF-8 string literal payloads for module-level globals.
 fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
@@ -1006,6 +1008,105 @@ impl<'a> Gen<'a> {
         let n = self.lbl;
         self.lbl += 1;
         format!("{prefix}.{n}")
+    }
+
+    fn emit_method_self_arg(
+        &mut self,
+        recv_ty: &Ty,
+        recv_val: String,
+        self_param: &Ty,
+    ) -> (Ty, String) {
+        if types_match(recv_ty, self_param) {
+            (self_param.clone(), recv_val)
+        } else if let Ty::Ptr(pointee) = self_param {
+            debug_assert!(types_match(recv_ty, pointee));
+            let slot = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = alloca {}",
+                slot,
+                llvm_ty(pointee, self.structs)
+            )
+            .unwrap();
+            writeln!(
+                self.out,
+                "  store {} {}, ptr %{}",
+                llvm_ty(pointee, self.structs),
+                recv_val,
+                slot
+            )
+            .unwrap();
+            (self_param.clone(), format!("%{slot}"))
+        } else if let Ty::Ptr(pointee) = recv_ty {
+            debug_assert!(types_match(pointee, self_param));
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = load {}, ptr {}",
+                tmp,
+                llvm_ty(self_param, self.structs),
+                recv_val
+            )
+            .unwrap();
+            (self_param.clone(), format!("%{tmp}"))
+        } else {
+            unreachable!("typechecked method receiver")
+        }
+    }
+
+    fn emit_custom_deref_ptr(&mut self, recv_ty: &Ty, recv_val: String) -> Option<(Ty, String)> {
+        if matches!(recv_ty, Ty::Ptr(_)) {
+            return None;
+        }
+        let symbol = method_symbol(method_receiver_owner_ty(recv_ty), DEREF_METHOD);
+        let (params, ret) = self
+            .fn_sigs
+            .get(&symbol)
+            .map(|sig| (sig.params.clone(), sig.ret.clone()))?;
+        debug_assert_eq!(params.len(), 1);
+        let Some(Ty::Ptr(pointee)) = ret else {
+            return None;
+        };
+        let (self_arg_ty, self_arg_val) = self.emit_method_self_arg(recv_ty, recv_val, &params[0]);
+        let ret_ty = Ty::Ptr(pointee.clone());
+        let tmp = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call {} @{}({} {})",
+            tmp,
+            llvm_ty(&ret_ty, self.structs),
+            sanitize(&symbol),
+            llvm_ty(&self_arg_ty, self.structs),
+            self_arg_val
+        )
+        .unwrap();
+        Some((pointee.as_ref().clone(), format!("%{tmp}")))
+    }
+
+    fn emit_language_drop(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        debug_assert_eq!(args.len(), 1);
+        let (arg_ty, arg_val) = self.emit_expr(&args[0], locals, None);
+        let symbol = method_symbol(method_receiver_owner_ty(&arg_ty), DROP_METHOD);
+        let (params, ret) = {
+            let sig = self.fn_sigs.get(&symbol).expect("typechecked drop");
+            (sig.params.clone(), sig.ret.clone())
+        };
+        debug_assert_eq!(params.len(), 1);
+        let (self_arg_ty, self_arg_val) = self.emit_method_self_arg(&arg_ty, arg_val, &params[0]);
+        debug_assert!(matches!(ret, None | Some(Ty::Unit)));
+        writeln!(
+            self.out,
+            "  call void @{}({} {})",
+            sanitize(&symbol),
+            llvm_ty(&self_arg_ty, self.structs),
+            self_arg_val
+        )
+        .unwrap();
+        (Ty::Unit, String::new())
     }
 
     fn emit_fn_value_call(
@@ -5836,7 +5937,11 @@ impl<'a> Gen<'a> {
             let tail = f.body.tail.as_ref().unwrap();
             let (t, v) = self.emit_expr(tail, &local_ptr, Some(ret_ty));
             debug_assert!(types_match(&t, ret_ty));
-            writeln!(self.out, "  ret {} {}", llvm_ty(ret_ty, self.structs), v).unwrap();
+            if matches!(ret_ty, Ty::Unit) {
+                writeln!(self.out, "  ret void").unwrap();
+            } else {
+                writeln!(self.out, "  ret {} {}", llvm_ty(ret_ty, self.structs), v).unwrap();
+            }
         } else {
             if let Some(tail) = &f.body.tail {
                 let (t, _) = self.emit_expr(tail, &local_ptr, Some(&Ty::Unit));
@@ -5897,7 +6002,11 @@ impl<'a> Gen<'a> {
                 };
                 let (t, v) = self.emit_expr(e, locals, Some(ret_ty));
                 debug_assert!(types_match(&t, ret_ty));
-                writeln!(self.out, "  ret {} {}", llvm_ty(ret_ty, self.structs), v).unwrap();
+                if matches!(ret_ty, Ty::Unit) {
+                    writeln!(self.out, "  ret void").unwrap();
+                } else {
+                    writeln!(self.out, "  ret {} {}", llvm_ty(ret_ty, self.structs), v).unwrap();
+                }
                 self.terminated = true;
             }
             Stmt::Break => {
@@ -6921,6 +7030,9 @@ impl<'a> Gen<'a> {
                         locals,
                     );
                 }
+                if name == DROP_METHOD {
+                    return self.emit_language_drop(args, locals);
+                }
                 if let Some(result) = self.emit_crypto_builtin_call(name, args, locals) {
                     return result;
                 }
@@ -7208,31 +7320,8 @@ impl<'a> Gen<'a> {
                         .map(|sig| (sig.params.clone(), sig.ret.clone()))
                     {
                         debug_assert_eq!(params.len(), 1);
-                        let self_param = &params[0];
-                        let (self_arg_ty, self_arg_val) = if types_match(&recv_ty, self_param) {
-                            (self_param.clone(), recv_val)
-                        } else if let Ty::Ptr(pointee) = self_param {
-                            debug_assert!(types_match(&recv_ty, pointee));
-                            let slot = self.fresh();
-                            writeln!(
-                                self.out,
-                                "  %{} = alloca {}",
-                                slot,
-                                llvm_ty(pointee, self.structs)
-                            )
-                            .unwrap();
-                            writeln!(
-                                self.out,
-                                "  store {} {}, ptr %{}",
-                                llvm_ty(pointee, self.structs),
-                                recv_val,
-                                slot
-                            )
-                            .unwrap();
-                            (self_param.clone(), format!("%{slot}"))
-                        } else {
-                            unreachable!("typechecked clone receiver")
-                        };
+                        let (self_arg_ty, self_arg_val) =
+                            self.emit_method_self_arg(&recv_ty, recv_val, &params[0]);
                         let tmp = self.fresh();
                         writeln!(
                             self.out,
@@ -7999,19 +8088,26 @@ impl<'a> Gen<'a> {
             }
             Expr::Deref(inner) => {
                 let (ti, v) = self.emit_expr(inner, locals, None);
-                let Ty::Ptr(pointee) = ti else {
-                    unreachable!("typechecked")
+                let (pointee, ptr) = match ti {
+                    Ty::Ptr(pointee) => ((*pointee).clone(), v),
+                    other => {
+                        if let Some((target_ty, ptr)) = self.emit_custom_deref_ptr(&other, v) {
+                            (target_ty, ptr)
+                        } else {
+                            unreachable!("typechecked")
+                        }
+                    }
                 };
                 let tmp = self.fresh();
                 writeln!(
                     self.out,
                     "  %{} = load {}, ptr {}",
                     tmp,
-                    llvm_ty(pointee.as_ref(), self.structs),
-                    v
+                    llvm_ty(&pointee, self.structs),
+                    ptr
                 )
                 .unwrap();
-                ((*pointee).clone(), format!("%{tmp}"))
+                (pointee, format!("%{tmp}"))
             }
         }
     }
@@ -8067,10 +8163,16 @@ impl<'a> Gen<'a> {
             }
             Expr::Deref(inner) => {
                 let (pt, pv) = self.emit_expr(inner, locals, None);
-                let Ty::Ptr(pointee) = pt else {
-                    unreachable!("typechecked assign deref")
-                };
-                ((*pointee).clone(), pv)
+                match pt {
+                    Ty::Ptr(pointee) => ((*pointee).clone(), pv),
+                    other => {
+                        if let Some((target_ty, ptr)) = self.emit_custom_deref_ptr(&other, pv) {
+                            (target_ty, ptr)
+                        } else {
+                            unreachable!("typechecked assign deref")
+                        }
+                    }
+                }
             }
             Expr::Index(arr, idx) => {
                 let full = Expr::Index(arr.clone(), idx.clone());

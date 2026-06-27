@@ -1348,6 +1348,17 @@ impl Parser {
                 })
             }
             Token::Match => self.parse_match_expr(),
+            Token::Drop => {
+                self.bump();
+                if !matches!(self.peek(), Token::LParen) {
+                    return Err("`drop` must be called as `drop(value)`".into());
+                }
+                let args = self.parse_call_args()?;
+                Ok(Expr::Call {
+                    name: "drop".into(),
+                    args,
+                })
+            }
             Token::Amp => {
                 self.bump();
                 let inner = self.parse_atom()?;

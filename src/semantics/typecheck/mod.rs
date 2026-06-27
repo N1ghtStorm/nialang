@@ -19,6 +19,8 @@ use crate::nia_std::{
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
 const CLONE_METHOD: &str = "clone";
+const DROP_METHOD: &str = "drop";
+const DEREF_METHOD: &str = "deref";
 
 /// Canonical function signature table entry used across semantic passes.
 ///
@@ -259,6 +261,39 @@ fn custom_method_name(owner: &str, method: &str) -> String {
     method_symbol(&Ty::Struct(owner.into()), method)
 }
 
+fn custom_deref_target_ty(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    fn_sigs: &HashMap<String, FnSig>,
+) -> Option<Ty> {
+    let Ty::Struct(name) = t else {
+        return None;
+    };
+    let s = structs.get(name)?;
+    if !has_declared_ability(&s.abilities, Ability::Deref) {
+        return None;
+    }
+    let sig = fn_sigs.get(&custom_method_name(name, DEREF_METHOD))?;
+    let Some(Ty::Ptr(target)) = &sig.ret else {
+        return None;
+    };
+    Some(target.as_ref().clone())
+}
+
+fn supports_language_drop(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    fn_sigs: &HashMap<String, FnSig>,
+) -> bool {
+    let Ty::Struct(name) = t else {
+        return false;
+    };
+    structs
+        .get(name)
+        .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop))
+        && fn_sigs.contains_key(&custom_method_name(name, DROP_METHOD))
+}
+
 fn expr_contains_direct_self_clone(e: &Expr) -> bool {
     match e {
         Expr::MethodCall {
@@ -406,7 +441,7 @@ fn validate_custom_clone_sig(
 }
 
 fn validate_custom_drop_sig(s: &StructDef, fn_sigs: &HashMap<String, FnSig>) -> Result<(), String> {
-    let method = custom_method_name(&s.name, "drop");
+    let method = custom_method_name(&s.name, DROP_METHOD);
     let Some(sig) = fn_sigs.get(&method) else {
         return Err(format!(
             "struct `{}` has `drop` but does not define `fn drop(self)`",
@@ -429,7 +464,7 @@ fn validate_custom_deref_sig(
     s: &StructDef,
     fn_sigs: &HashMap<String, FnSig>,
 ) -> Result<(), String> {
-    let method = custom_method_name(&s.name, "deref");
+    let method = custom_method_name(&s.name, DEREF_METHOD);
     let Some(sig) = fn_sigs.get(&method) else {
         return Err(format!(
             "struct `{}` has `deref` but does not define `fn deref(&self) &Target`",
@@ -461,8 +496,22 @@ fn validate_abilities(
     for s in structs.values() {
         validate_copy_implies_clone(&format!("struct `{}`", s.name), &s.abilities)?;
         let has_custom_clone = fn_sigs.contains_key(&custom_method_name(&s.name, CLONE_METHOD));
+        let has_custom_drop = fn_sigs.contains_key(&custom_method_name(&s.name, DROP_METHOD));
+        let has_custom_deref = fn_sigs.contains_key(&custom_method_name(&s.name, DEREF_METHOD));
         if has_custom_clone {
             validate_custom_clone_sig(s, fn_sigs, fns)?;
+        }
+        if has_custom_drop && !has_declared_ability(&s.abilities, Ability::Drop) {
+            return Err(format!(
+                "struct `{}` defines `drop`, but does not declare `drop` ability",
+                s.name
+            ));
+        }
+        if has_custom_deref && !has_declared_ability(&s.abilities, Ability::Deref) {
+            return Err(format!(
+                "struct `{}` defines `deref`, but does not declare `deref` ability",
+                s.name
+            ));
         }
         for ability in s.abilities.clone() {
             match ability {
@@ -500,6 +549,18 @@ fn validate_abilities(
         if fn_sigs.contains_key(&custom_method_name(&e.name, CLONE_METHOD)) {
             return Err(format!(
                 "enum `{}` defines `clone`, but custom enum clone is not supported yet",
+                e.name
+            ));
+        }
+        if fn_sigs.contains_key(&custom_method_name(&e.name, DROP_METHOD)) {
+            return Err(format!(
+                "enum `{}` defines `drop`, but custom enum drop is not supported yet",
+                e.name
+            ));
+        }
+        if fn_sigs.contains_key(&custom_method_name(&e.name, DEREF_METHOD)) {
+            return Err(format!(
+                "enum `{}` defines `deref`, but custom enum deref is not supported yet",
                 e.name
             ));
         }
@@ -548,6 +609,18 @@ fn validate_abilities(
         if fn_sigs.contains_key(&custom_method_name(&v.name, CLONE_METHOD)) {
             return Err(format!(
                 "vector `{}` defines `clone`, but custom vector clone is not supported yet",
+                v.name
+            ));
+        }
+        if fn_sigs.contains_key(&custom_method_name(&v.name, DROP_METHOD)) {
+            return Err(format!(
+                "vector `{}` defines `drop`, but custom vector drop is not supported yet",
+                v.name
+            ));
+        }
+        if fn_sigs.contains_key(&custom_method_name(&v.name, DEREF_METHOD)) {
+            return Err(format!(
+                "vector `{}` defines `deref`, but custom vector deref is not supported yet",
                 v.name
             ));
         }
@@ -1219,6 +1292,22 @@ fn check_moves_args_fallback(
     Ok(())
 }
 
+fn check_moves_language_drop_arg(
+    arg: &Expr,
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    if let Expr::Ident(name) = arg {
+        if states.contains_key(name) {
+            ensure_local_available(name, states)?;
+            states.insert(name.clone(), LocalMoveState::Moved);
+            return Ok(());
+        }
+    }
+    check_moves_expr(arg, env, states, ctx, None, ExprMoveMode::Consume).map(|_| ())
+}
+
 fn check_moves_call(
     name: &str,
     args: &[Expr],
@@ -1240,6 +1329,10 @@ fn check_moves_call(
             check_moves_expr(arg, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
         }
         return Ok(());
+    }
+
+    if name == DROP_METHOD && args.len() == 1 {
+        return check_moves_language_drop_arg(&args[0], env, states, ctx);
     }
 
     if let Some(def) = ctx.structs.get(name) {
@@ -1651,6 +1744,11 @@ fn check_moves_expr(
         Expr::AddrOf(inner) => check_moves_lvalue(inner, env, states, ctx, false)?,
         Expr::Deref(inner) => {
             check_moves_expr(inner, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+            if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
+                return Err(
+                    "cannot move out through dereference; deref moves are not supported yet".into(),
+                );
+            }
         }
     }
     Ok(inferred)
@@ -2972,6 +3070,21 @@ fn infer_expr(
                     return infer_fn_value_call(local_ty, args, env, structs, enums, vectors, fns);
                 }
             }
+            if name == DROP_METHOD {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{DROP_METHOD}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let value_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                if !supports_language_drop(&value_ty, structs, fns) {
+                    return Err(format!(
+                        "`drop(x)` is only available for custom-drop structs in this phase; got {value_ty:?}"
+                    ));
+                }
+                return Ok(Ty::Unit);
+            }
             if name == QUBIT {
                 if args.len() != 0 {
                     return Err(format!(
@@ -3784,6 +3897,12 @@ fn infer_expr(
             name,
             args,
         } => {
+            if name == DROP_METHOD {
+                return Err("direct `.drop()` calls are not supported yet; use `drop(x)`".into());
+            }
+            if name == DEREF_METHOD {
+                return Err("direct `.deref()` calls are not supported yet; use `*x`".into());
+            }
             if name == CLONE_METHOD {
                 if !args.is_empty() {
                     return Err(format!(
@@ -4500,7 +4619,9 @@ fn infer_expr(
             let ti = infer_expr(inner, env, structs, enums, vectors, fns, None)?;
             match ti {
                 Ty::Ptr(p) => Ok((*p).clone()),
-                _ => Err(format!("dereference requires a pointer, got {ti:?}")),
+                _ => custom_deref_target_ty(&ti, structs, fns).ok_or_else(|| {
+                    format!("dereference requires a pointer or `deref` ability, got {ti:?}")
+                }),
             }
         }
     }
