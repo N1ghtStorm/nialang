@@ -70,6 +70,31 @@ fn parse_rejects_duplicate_ability() {
 }
 
 #[test]
+fn parse_clone_keyword_method_call() {
+    let src = r#"
+struct Token has clone {
+    id: i32,
+}
+
+fn main() i32 {
+    let token = Token { id: 1 };
+    let cloned = token.clone();
+    cloned.id
+}
+"#;
+    let toks = tokenize(src);
+    let (_structs, _enums, fns, _vectors) = Parser::new(toks).parse_file().unwrap();
+    let Stmt::Let { init, .. } = &fns[0].body.stmts[1] else {
+        panic!("expected clone let statement");
+    };
+    let Expr::MethodCall { name, args, .. } = init else {
+        panic!("expected clone method call");
+    };
+    assert_eq!(name, "clone");
+    assert!(args.is_empty());
+}
+
+#[test]
 fn parse_fixture_impl_methods() {
     parse_ok(include_str!("../../examples/tests/ok_impl_methods.nia"));
 }

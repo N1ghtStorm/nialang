@@ -327,6 +327,10 @@ impl<'a> Lexer<'a> {
                         let n = buf.parse::<i128>().unwrap_or(0);
                         return Token::Int(n);
                     }
+                    if !matches!(ahead.peek(), Some('0'..='9')) {
+                        let n = buf.parse::<i128>().unwrap_or(0);
+                        return Token::Int(n);
+                    }
                     buf.push(self.src.next().unwrap());
                     self.lex_decimal_digits(&mut buf);
                     if matches!(self.src.peek(), Some('e') | Some('E')) {

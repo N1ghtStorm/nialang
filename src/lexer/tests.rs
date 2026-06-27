@@ -83,6 +83,21 @@ fn lex_float_literals_fraction_and_exponent() {
 }
 
 #[test]
+fn lex_integer_method_postfix_keeps_dot_token() {
+    let toks = collect("1.clone()");
+    assert_eq!(
+        toks,
+        vec![
+            Token::Int(1),
+            Token::Dot,
+            Token::Clone,
+            Token::LParen,
+            Token::RParen,
+        ]
+    );
+}
+
+#[test]
 fn lex_numeric_literals_with_digit_separators() {
     let toks = collect("1_000 3.141_592 1.0e1_0 1_000..2_000");
     assert_eq!(

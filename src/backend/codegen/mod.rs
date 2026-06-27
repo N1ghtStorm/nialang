@@ -4,8 +4,8 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use crate::ast::{
-    Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty, VectorDef,
-    method_symbol,
+    Ability, Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty,
+    VectorDef, method_symbol,
 };
 use crate::nia_std::{
     ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
@@ -20,6 +20,8 @@ use crate::nia_std::{
     VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
 };
 use crate::semantics::typecheck::FnSig;
+
+const CLONE_METHOD: &str = "clone";
 
 /// Walks all functions and collects UTF-8 string literal payloads for module-level globals.
 fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
@@ -821,6 +823,42 @@ fn method_receiver_owner_ty(t: &Ty) -> &Ty {
     match t {
         Ty::Ptr(inner) => inner.as_ref(),
         _ => t,
+    }
+}
+
+fn has_declared_ability(abilities: &[Ability], ability: Ability) -> bool {
+    abilities.contains(&ability)
+}
+
+fn supports_clone_method_ty(
+    t: &Ty,
+    structs: &[StructDef],
+    enums: &[EnumDef],
+    vectors: &[VectorDef],
+) -> bool {
+    match t {
+        Ty::Struct(name) => {
+            vectors
+                .iter()
+                .find(|v| v.name == *name)
+                .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Clone))
+                || structs
+                    .iter()
+                    .find(|s| s.name == *name)
+                    .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Clone))
+        }
+        Ty::Enum(name) => enums
+            .iter()
+            .find(|e| e.name == *name)
+            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Clone)),
+        Ty::Vector(name, _) => vectors
+            .iter()
+            .find(|v| v.name == *name)
+            .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Clone)),
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
+            supports_clone_method_ty(elem, structs, enums, vectors)
+        }
+        _ => false,
     }
 }
 
@@ -7155,6 +7193,16 @@ impl<'a> Gen<'a> {
                     return (Ty::AnonVector(elem_ty, n), recv_val);
                 }
                 let (recv_ty, recv_val) = self.emit_expr(receiver, locals, None);
+                if name == CLONE_METHOD {
+                    debug_assert!(args.is_empty());
+                    debug_assert!(supports_clone_method_ty(
+                        &recv_ty,
+                        self.structs,
+                        self.enums,
+                        self.vectors
+                    ));
+                    return (recv_ty, recv_val);
+                }
                 if let Ty::List(elem_ty) = &recv_ty {
                     let elem_ty = elem_ty.as_ref();
                     if name == LIST_LEN || name == LIST_CAPACITY {

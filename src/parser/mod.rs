@@ -1229,6 +1229,9 @@ impl Parser {
                     self.bump();
                     let field = match self.bump() {
                         Token::Ident(s) => s,
+                        Token::Clone => "clone".into(),
+                        Token::Drop => "drop".into(),
+                        Token::Deref => "deref".into(),
                         Token::Int(n) => n.to_string(),
                         other => {
                             return Err(format!("expected field name or index, got {other:?}"));

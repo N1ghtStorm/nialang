@@ -18,6 +18,7 @@ use crate::nia_std::{
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
+const CLONE_METHOD: &str = "clone";
 
 /// Canonical function signature table entry used across semantic passes.
 ///
@@ -177,6 +178,9 @@ fn has_formal_ability(
     vectors: &HashMap<String, VectorDef>,
 ) -> bool {
     match t {
+        Ty::Struct(name) if vectors.contains_key(name) => vectors
+            .get(name)
+            .is_some_and(|v| has_declared_ability(&v.abilities, ability)),
         Ty::Struct(name) => structs
             .get(name)
             .is_some_and(|s| has_declared_ability(&s.abilities, ability)),
@@ -189,6 +193,32 @@ fn has_formal_ability(
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
             !matches!(ability, Ability::Deref)
                 && has_formal_ability(elem, ability, structs, enums, vectors)
+        }
+        _ => false,
+    }
+}
+
+fn supports_clone_method(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    match t {
+        Ty::Struct(name) if vectors.contains_key(name) => vectors
+            .get(name)
+            .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Clone)),
+        Ty::Struct(name) => structs
+            .get(name)
+            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Clone)),
+        Ty::Enum(name) => enums
+            .get(name)
+            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Clone)),
+        Ty::Vector(name, _) => vectors
+            .get(name)
+            .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Clone)),
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
+            supports_clone_method(elem, structs, enums, vectors)
         }
         _ => false,
     }
@@ -1100,6 +1130,11 @@ fn check_moves_method_call(
         ctx.fns,
         None,
     )?;
+
+    if name == CLONE_METHOD {
+        check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        return check_moves_args_fallback(args, env, states, ctx);
+    }
 
     if name == TO_MATRIX || name == TO_ARRAY || name == TO_VEC || name == "det" {
         check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
@@ -3573,6 +3608,21 @@ fn infer_expr(
             name,
             args,
         } => {
+            if name == CLONE_METHOD {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "method `{CLONE_METHOD}`: expected 0 args, got {}",
+                        args.len()
+                    ));
+                }
+                let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
+                if !supports_clone_method(&recv_ty, structs, enums, vectors) {
+                    return Err(format!(
+                        "method `{CLONE_METHOD}` requires receiver type {recv_ty:?} to declare `clone`; primitive/runtime clone integration is not available yet"
+                    ));
+                }
+                return Ok(recv_ty);
+            }
             if name == TO_MATRIX {
                 if !args.is_empty() {
                     return Err(format!(

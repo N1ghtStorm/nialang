@@ -185,6 +185,47 @@ fn main() f64 {
 }
 
 #[test]
+fn codegen_clone_method_for_clone_struct_uses_value_copy() {
+    let ll = emit(
+        r#"
+struct Token has clone {
+    id: i32,
+}
+
+fn main() i32 {
+    let token = Token { id: 7 };
+    let cloned = token.clone();
+    token.id + cloned.id
+}
+"#,
+    );
+    assert!(ll.contains("%struct.Token = type { i32 }"), "IR:\n{ll}");
+    assert!(ll.contains("load %struct.Token"), "IR:\n{ll}");
+    assert!(ll.contains("store %struct.Token"), "IR:\n{ll}");
+    assert!(!ll.contains("Token__clone"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_clone_method_for_array_of_clone_structs() {
+    let ll = emit(
+        r#"
+struct Token has clone {
+    id: i32,
+}
+
+fn main() i32 {
+    let tokens: [Token; 2] = [Token { id: 1 }, Token { id: 2 }];
+    let cloned = tokens.clone();
+    tokens[0].id + cloned[1].id
+}
+"#,
+    );
+    assert!(ll.contains("[2 x %struct.Token]"), "IR:\n{ll}");
+    assert!(ll.contains("load [2 x %struct.Token]"), "IR:\n{ll}");
+    assert!(!ll.contains("Token__clone"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_contains_if_branching() {
     let ll = emit(include_str!("../../../examples/tests/ok_if_return.nia"));
     assert!(ll.contains("br i1"));

@@ -1329,6 +1329,112 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_clone_method_for_clone_struct_without_moving_source() {
+    let src = r#"
+struct Token has clone {
+    id: i32,
+}
+
+fn main() i32 {
+    let token = Token { id: 7 };
+    let cloned = token.clone();
+    token.id + cloned.id
+}
+"#;
+    check_all(src).expect("clone method should borrow source");
+}
+
+#[test]
+fn typecheck_allows_clone_method_for_array_of_clone_values() {
+    let src = r#"
+struct Token has clone {
+    id: i32,
+}
+
+fn main() i32 {
+    let tokens: [Token; 2] = [Token { id: 1 }, Token { id: 2 }];
+    let cloned = tokens.clone();
+    tokens[0].id + cloned[1].id
+}
+"#;
+    check_all(src).expect("arrays of clone values should support clone method");
+}
+
+#[test]
+fn typecheck_rejects_clone_method_without_clone_ability() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+fn main() i32 {
+    let token = Token { id: 7 };
+    let cloned = token.clone();
+    cloned.id
+}
+"#;
+    let err = check_all(src).expect_err("clone method requires clone ability");
+    assert!(err.contains("requires receiver type"), "{err}");
+    assert!(err.contains("declare `clone`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_clone_method_arguments() {
+    let src = r#"
+struct Token has clone {
+    id: i32,
+}
+
+fn main() i32 {
+    let token = Token { id: 7 };
+    let cloned = token.clone(1);
+    cloned.id
+}
+"#;
+    let err = check_all(src).expect_err("clone method takes no arguments");
+    assert!(err.contains("method `clone`: expected 0 args"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_clone_method_for_primitives_and_runtime_handles_for_now() {
+    for src in [
+        r#"
+fn main() i32 {
+    let cloned = 1.clone();
+    cloned
+}
+"#,
+        r#"
+fn main() i32 {
+    let m: f64[] = matrix([[1.0]]);
+    let cloned = m.clone();
+    0
+}
+"#,
+        r#"
+fn main() i32 {
+    let v: f64<> = <1.0, 2.0>;
+    let cloned = v.clone();
+    0
+}
+"#,
+        r#"
+fn main() i32 {
+    let xs: List[i32] = list_new[i32]();
+    let cloned = xs.clone();
+    0
+}
+"#,
+    ] {
+        let err = check_all(src).expect_err("primitive/runtime clone is delayed");
+        assert!(
+            err.contains("primitive/runtime clone integration is not available yet"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
 fn typecheck_reserves_new_single_qubit_gate_function_names() {
     for gate in ["I", "Y", "Z", "S", "Sdg", "T", "Tdg"] {
         let src = format!(

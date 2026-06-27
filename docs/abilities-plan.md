@@ -44,7 +44,7 @@ println(a); // ok for copy types
 `clone` means the value can be explicitly duplicated:
 
 ```nia
-let b = clone(a);
+let b = a.clone();
 ```
 
 For reference-counted runtime values, clone glue increments the reference count.
@@ -394,29 +394,31 @@ Implemented notes:
 
 ## Phase 4: explicit clone glue
 
-Add a language-level clone operation. Start with a builtin function:
+Status: complete.
 
-```nia
-let b = clone(a);
-```
-
-Later this can also be exposed as method syntax:
+Add language-level clone glue behind method-call syntax only:
 
 ```nia
 let b = a.clone();
 ```
 
+Do not add a separate global `clone(x)` builtin. Clone is an ability-backed
+method operation, so the surface form should stay attached to the value whose
+ability is being used.
+
 Type checking:
 
-- `clone(x)` requires `x` to have `clone`
+- `x.clone()` requires `x` to have `clone`
 - result type is the same as `x`
 - clone does not move `x`
 
 Lowering:
 
-- user-defined structs/enums with custom clone glue -> call that glue
-- user-defined structs/enums without custom clone -> recursively clone fields
-  whose types already have language-level `clone`
+- user-defined structs/enums/named vectors with `clone` -> generate clone
+  lowering for the value
+- arrays and fixed anonymous vectors clone when their element type already has
+  language-level `clone`
+- custom `fn clone(&self) OwnerType` overrides are deliberately left to Phase 5
 - built-in primitives, including scalar primitives, `Matrix`, `T<>`, and
   `List[T]`, are not lowered through ability `clone` until the final
   primitive-integration phase
@@ -427,12 +429,12 @@ clone yet.
 
 Deliverables:
 
-- typechecker tests for `clone`
-- codegen tests for user-defined clone glue
+- typechecker tests for `x.clone()`
+- codegen tests for generated clone lowering
 - recursive struct/array clone tests that exclude primitive clone until the
   final integration phase
-- tests that `clone(matrix_value)`, `clone(heap_vector)`, and primitive
-  `clone(1)` are rejected before primitive integration
+- tests that `matrix_value.clone()`, `heap_vector.clone()`, and primitive
+  `1.clone()` are rejected before primitive integration
 
 ## Phase 5: custom struct clone methods
 
@@ -460,11 +462,10 @@ Rules:
 - `clone` takes `&self`, not `self`, because cloning must not move the source
   value
 - return type must be exactly the owner struct type
-- `clone` should be called through `clone(x)` in the first implementation
-- `x.clone()` can remain future method syntax sugar for the same operation
+- `clone` is called through `x.clone()`; there is no global `clone(x)`
 - `clone` methods cannot be `copy`, `drop`, `extern`, or quantum functions
 - moving fields out of `&self` is rejected
-- recursive `clone(self)` calls inside the same custom clone method should be
+- recursive `self.clone()` calls inside the same custom clone method should be
   diagnosed if they would obviously recurse forever
 
 Generated clone glue for a struct should be:
@@ -480,7 +481,7 @@ Example:
 
 ```nia
 let a = Token { id: 7 };
-let b = clone(a);
+let b = a.clone();
 ```
 
 Lower roughly as:
@@ -496,11 +497,9 @@ Deliverables:
 
 - parser/typechecker support for recognizing `fn clone(&self) OwnerType`
 - rejection tests for wrong signatures
-- codegen tests showing `clone(x)` calls custom clone glue
-- tests that `clone(x)` does not move `x`
+- codegen tests showing `x.clone()` calls custom clone glue
+- tests that `x.clone()` does not move `x`
 - recursive fallback tests for structs without custom clone
-- diagnostics for direct `value.clone()` calls if method sugar is not supported
-  yet for ability glue
 
 ## Phase 6: custom struct deref methods
 
@@ -800,7 +799,7 @@ When Nia grows more generic syntax, add ability bounds:
 
 ```nia
 fn dup[T: clone](x: T) T {
-    clone(x)
+    x.clone()
 }
 
 fn ignore[T: drop](x: T) () {
@@ -944,9 +943,9 @@ Deliverables:
 - primitive scalar `copy` / `clone` / `drop` tests
 - raw pointer/reference `deref` tests
 - fixed array and fixed vector derived ability tests
-- `clone(matrix_value)` tests
-- `clone(heap_vector)` tests
-- `clone(list)` tests
+- `matrix_value.clone()` tests
+- `heap_vector.clone()` tests
+- `list.clone()` tests
 - `drop(matrix_value)` and auto-drop tests
 - `drop(heap_vector)` and auto-drop tests
 - `drop(list)` and auto-drop tests
@@ -968,7 +967,7 @@ Keep these builtins available for internal lowering and compatibility:
 After primitive ability integration is stable, user-facing docs should prefer:
 
 ```nia
-clone(x)
+x.clone()
 drop(x)
 ```
 
@@ -986,8 +985,8 @@ Deliverables:
 2. Add `AbilitySet` and typechecker queries.
 3. Validate declared abilities structurally.
 4. Add move checking for non-copy locals. (complete)
-5. Add `clone(x)`.
-6. Add custom struct clone methods.
+5. Add ability-backed `x.clone()` method calls.
+6. Add custom struct clone method validation and lowering.
 7. Add custom struct deref methods and explicit `*x` lowering through deref
    glue.
 8. Add custom struct drop methods.
