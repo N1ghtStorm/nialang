@@ -18,13 +18,11 @@ pub const MATRIX_ROWS: &str = "matrix_rows";
 pub const MATRIX_COLS: &str = "matrix_cols";
 pub const MATRIX_LEN: &str = "matrix_len";
 pub const MATRIX_CLONE: &str = "matrix_clone";
-pub const MATRIX_REFCOUNT: &str = "matrix_refcount";
 pub const MATRIX_DROP: &str = "matrix_drop";
 pub const VECTOR_GET: &str = "vector_get";
 pub const VECTOR_SET: &str = "vector_set";
 pub const VECTOR_LEN: &str = "vector_len";
 pub const VECTOR_CLONE: &str = "vector_clone";
-pub const VECTOR_REFCOUNT: &str = "vector_refcount";
 pub const VECTOR_DROP: &str = "vector_drop";
 pub const LIST_TYPE: &str = "List";
 pub const LIST_NEW: &str = "list_new";
@@ -125,13 +123,11 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | MATRIX_COLS
             | MATRIX_LEN
             | MATRIX_CLONE
-            | MATRIX_REFCOUNT
             | MATRIX_DROP
             | VECTOR_GET
             | VECTOR_SET
             | VECTOR_LEN
             | VECTOR_CLONE
-            | VECTOR_REFCOUNT
             | VECTOR_DROP
             | LIST_NEW
             | LIST_WITH_CAPACITY
@@ -205,8 +201,8 @@ pub fn llvm_prelude() -> String {
 @nialang.std.fmt.u64 = private unnamed_addr constant [6 x i8] c"%llu\0A\00", align 1
 @nialang.std.fmt.i128hex = private unnamed_addr constant [18 x i8] c"0x%016llx%016llx\0A\00", align 1
 @nialang.std.fmt.ptrhex = private unnamed_addr constant [8 x i8] c"0x%llx\0A\00", align 1
-@nialang.std.fmt.matrix = private unnamed_addr constant [41 x i8] c"Matrix(rows=%lld, cols=%lld, refs=%lld)\0A\00", align 1
-@nialang.std.fmt.matrix.nn = private unnamed_addr constant [40 x i8] c"Matrix(rows=%lld, cols=%lld, refs=%lld)\00", align 1
+@nialang.std.fmt.matrix = private unnamed_addr constant [30 x i8] c"Matrix(rows=%lld, cols=%lld)\0A\00", align 1
+@nialang.std.fmt.matrix.nn = private unnamed_addr constant [29 x i8] c"Matrix(rows=%lld, cols=%lld)\00", align 1
 @nialang.std.fmt.f64 = private unnamed_addr constant [4 x i8] c"%f\0A\00", align 1
 @nialang.std.fmt.f64.nn = private unnamed_addr constant [3 x i8] c"%f\00", align 1
 @nialang.std.fmt.str = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1

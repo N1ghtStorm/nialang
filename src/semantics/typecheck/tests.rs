@@ -3648,10 +3648,9 @@ fn main() i32 {
     println(len(v));
     println(vector_get(v, 1));
     vector_set(v, 2, 9.0);
-    let shared: f64<> = vector_clone(v);
-    println(vector_refcount(v));
-    println(shared);
-    vector_drop(shared);
+    let copied: f64<> = vector_clone(v);
+    println(copied);
+    vector_drop(copied);
     vector_drop(v);
     0
 }

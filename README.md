@@ -204,17 +204,17 @@ fn main() i32 {
 The explicit anonymous-vector type spelling is `T<N>`: element type `T`,
 length `N`. The same arithmetic works for integer and float vectors.
 
-Use `T<>` for a reference-counted heap anonymous vector:
+Use `T<>` for a unique heap-owned anonymous vector:
 
 ```nia
 let v: f64<> = <1.0, 2.0, 3.0>;
 println(len(v));
-println(vector_refcount(v));
 
-let shared: f64<> = v.clone();
-vector_set(shared, 1, 9.0);
+let copied: f64<> = v.clone();
+vector_set(copied, 1, 9.0);
 println(vector_get(v, 1));
-drop(shared);
+println(vector_get(copied, 1));
+drop(copied);
 drop(v);
 ```
 
@@ -477,8 +477,8 @@ It is useful as a smoke test for generated loops and larger dense values.
 
 ## Matrix Ownership
 
-`Matrix` values are reference-counted heap handles in the runtime. They support
-language-level clone/drop:
+`Matrix` values are unique heap-owned runtime handles. They support
+language-level deep clone/drop:
 
 ```nia
 let m = matrix([
@@ -486,9 +486,9 @@ let m = matrix([
     [3, 4],
 ]);
 
-let shared = m.clone();
+let copied = m.clone();
 println(m.det());
-drop(shared);
+drop(copied);
 drop(m);
 ```
 
@@ -912,7 +912,7 @@ Currently available:
 - named and anonymous vectors
 - dynamic `List[T]` values with `len`, `capacity`, `push`, and `get`
 - complex numbers, `sin`, `cos`, `PI`, and `cis`
-- dense reference-counted matrices
+- dense heap-owned matrices
 - vector arithmetic, dot products, scalar multiplication, and outer products
 - matrix arithmetic, matrix multiplication, and array conversions
 - matrix-vector and vector-matrix multiplication

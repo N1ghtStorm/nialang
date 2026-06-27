@@ -3,7 +3,7 @@
 // `+`, `-`, and `*` are component-wise matrix arithmetic:
 // - both operands must have the same numeric cell type,
 // - both operands must have the same runtime shape,
-// - the result is a new Matrix allocation with refcount 1.
+// - the result is a new uniquely owned Matrix allocation.
 //
 // `@` is real matrix multiplication:
 // - left columns must equal right rows,

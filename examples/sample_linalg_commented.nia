@@ -1,7 +1,7 @@
 // sample_linalg_commented.nia — vectors and matrices with comments (linear algebra).
 //
 // Vector: fixed number of axes, one numeric field per axis (here i32).
-// Matrix: built-in heap Matrix type with explicit refcount; each result of
+// Matrix: built-in heap Matrix type with unique ownership; each result of
 //   (+, -, *, @) is a new value → call matrix_drop for each owner at the end.
 
 vector Vec2 i32 [

@@ -215,7 +215,7 @@ println(a + b)   // [5, 7, 9]
 println(a @ b)   // 32
 ```
 
-Anonymous heap vector (`T<>`, reference-counted, dynamic length):
+Anonymous heap vector (`T<>`, unique heap-owned, dynamic length):
 
 ```
 let v: f64<> = <1.0, 2.0, 3.0>
@@ -229,7 +229,7 @@ Vector operators: `+` `-` `*` (element-wise), `@` (dot product), `k * v` (scalar
 
 ## Matrices
 
-`T[]` is a heap-backed reference-counted matrix with element type `T`.
+`T[]` is a unique heap-backed matrix with element type `T`.
 The shape is inferred from the literal or expression on the right-hand side.
 
 ```
@@ -258,7 +258,7 @@ let m: i32[] = outer(<1, 2, 3>, <4, 5>)
 ```
 
 Matrix builtins: `matrix_get`, `matrix_set`, `matrix_rows`, `matrix_cols`,
-`matrix_len`, `matrix_clone`, `matrix_refcount`, `matrix_drop`.
+`matrix_len`, `matrix_clone`, `matrix_drop`.
 
 ## Control Flow
 

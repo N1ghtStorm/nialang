@@ -11,10 +11,10 @@ use crate::nia_std::{
     GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP,
     GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW,
     LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH,
-    MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT,
-    READ, REALLOC, RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE,
-    VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH,
+    MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
+    RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
+    VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -374,14 +374,14 @@ fn ability_failure_reason(
             ability_failure_reason(elem, ability, structs, enums, vectors)
         ),
         Ty::HeapVector(_) if matches!(ability, Ability::Copy) => format!(
-            "heap vector {} is a runtime owner and is not `copy`; use `.clone()` to share it",
+            "heap vector {} is a runtime owner and is not `copy`; use `.clone()` to duplicate it",
             ty_diag_label(t)
         ),
         Ty::List(_) if matches!(ability, Ability::Copy) => {
             "List values are runtime owners and are not `copy`; use `.clone()` when the element type supports it".into()
         }
         Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
-            "Matrix is a runtime owner and is not `copy`; use `.clone()` to share it".into()
+            "Matrix is a runtime owner and is not `copy`; use `.clone()` to duplicate it".into()
         }
         Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _)
             if matches!(ability, Ability::Clone | Ability::Drop) =>
@@ -1960,10 +1960,8 @@ fn check_moves_call(
         || name == MATRIX_ROWS
         || name == MATRIX_COLS
         || name == MATRIX_LEN
-        || name == MATRIX_REFCOUNT
         || name == VECTOR_CLONE
         || name == VECTOR_LEN
-        || name == VECTOR_REFCOUNT
     {
         if args.len() == 1 {
             return check_moves_expr(
@@ -4926,11 +4924,7 @@ fn infer_expr(
                 }
                 return Ok(Ty::Unit);
             }
-            if name == MATRIX_ROWS
-                || name == MATRIX_COLS
-                || name == MATRIX_LEN
-                || name == MATRIX_REFCOUNT
-            {
+            if name == MATRIX_ROWS || name == MATRIX_COLS || name == MATRIX_LEN {
                 if args.len() != 1 {
                     return Err(format!(
                         "`{name}` expects exactly 1 argument, got {}",
@@ -5014,7 +5008,7 @@ fn infer_expr(
                 }
                 return Ok(Ty::Unit);
             }
-            if name == VECTOR_LEN || name == VECTOR_REFCOUNT {
+            if name == VECTOR_LEN {
                 if args.len() != 1 {
                     return Err(format!(
                         "`{name}` expects exactly 1 argument, got {}",

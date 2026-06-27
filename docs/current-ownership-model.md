@@ -34,16 +34,13 @@ User-defined structs, enums, and named vectors declare abilities with
 `Matrix` is a built-in heap-backed runtime handle. It is not `copy`, because a
 bitwise copy would duplicate ownership of the same heap allocation. It supports:
 
-- `m.clone()` - share the matrix handle by incrementing the runtime reference
-  count
-- `drop(m)` - release one owner and free matrix storage when the reference count
-  reaches zero
+- `m.clone()` - allocate an independent matrix and clone/copy its cells
+- `drop(m)` - free the owned matrix storage
 - automatic cleanup at scope exit for live matrix owners
 
 Shape and element helpers remain available:
 
 - `matrix(...)`
-- `matrix_refcount(m)`
 - `matrix_get`, `matrix_set`, `matrix_rows`, `matrix_cols`, `matrix_len`
 
 Compatibility helpers `matrix_clone(m)` and `matrix_drop(m)` still compile, but
@@ -51,19 +48,17 @@ new user code should prefer `m.clone()` and `drop(m)`.
 
 ## Heap anonymous vectors
 
-`T<>` is a reference-counted heap anonymous vector with dynamic length. It is
+`T<>` is a unique heap-owned anonymous vector with dynamic length. It is
 distinct from fixed-size anonymous vectors `T<N>`.
 
 Preferred ownership operations:
 
-- `v.clone()` - share the vector handle by incrementing the runtime reference
-  count
-- `drop(v)` - release one owner
+- `v.clone()` - allocate an independent vector and clone/copy its elements
+- `drop(v)` - free the owned vector storage
 - automatic cleanup at scope exit for live vector owners
 
 Other public helpers:
 
-- `vector_refcount(v)`
 - `vector_get`, `vector_set`, `vector_len`
 - `len(v)`
 

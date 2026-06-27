@@ -59,11 +59,11 @@ pub enum Ty {
     Vector(String, Box<Ty>),
     /// Anonymous fixed-size vector type, written as `T<N>` in source annotations.
     AnonVector(Box<Ty>, usize),
-    /// Reference-counted heap vector with dynamic length, written as `T<>`.
+    /// Unique heap-owned vector with dynamic length, written as `T<>`.
     HeapVector(Box<Ty>),
     /// Heap-backed growable list, written as `List[T]`.
     List(Box<Ty>),
-    /// Built-in reference-counted heap matrix with one numeric cell type.
+    /// Built-in unique heap-owned matrix with one numeric cell type.
     ///
     /// The optional `(rows, cols)` shape is known for matrix literals and derived
     /// matrix expressions. A plain source annotation `Matrix` keeps it as `None`.

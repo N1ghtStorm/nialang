@@ -834,29 +834,29 @@ fn main() i32 {
 }
 
 #[test]
-fn codegen_heap_anon_vector_uses_rc_header_and_len() {
+fn codegen_heap_anon_vector_uses_unique_header_and_len() {
     let src = r#"
 fn main() i32 {
     let v: f64<> = <1.0, 2.0, 3.0>;
     println(vector_len(v));
     println(len(v));
-    println(vector_refcount(v));
-    let shared: f64<> = vector_clone(v);
-    vector_set(shared, 1, 9.0);
+    let copied: f64<> = vector_clone(v);
+    vector_set(copied, 1, 9.0);
     println(vector_get(v, 1));
+    println(vector_get(copied, 1));
     println(v);
-    vector_drop(shared);
+    vector_drop(copied);
     vector_drop(v);
     0
 }
 "#;
     let ll = emit(src);
     assert!(
-        ll.contains("getelementptr inbounds { i64, ptr, i64 }"),
+        ll.contains("getelementptr inbounds { ptr, i64 }"),
         "IR:\n{ll}"
     );
-    assert!(ll.contains("call ptr @malloc(i64 24)"), "IR:\n{ll}");
-    assert!(ll.contains("heap.vector.drop.free"), "IR:\n{ll}");
+    assert!(ll.contains("call ptr @malloc(i64 16)"), "IR:\n{ll}");
+    assert!(ll.contains("heap.vector.clone.loop"), "IR:\n{ll}");
     assert!(ll.contains("println.heap.vector.cond"), "IR:\n{ll}");
 }
 
@@ -891,7 +891,7 @@ fn main() i32 {
 }
 
 #[test]
-fn codegen_matrix_clone_method_and_language_drop_use_rc_helpers() {
+fn codegen_matrix_clone_method_and_language_drop_deep_copy_and_free() {
     let src = r#"
 fn main() i32 {
     let m: f64[] = matrix([[1.0, 2.0]]);
@@ -902,13 +902,16 @@ fn main() i32 {
 }
 "#;
     let ll = emit(src);
-    assert!(ll.contains("add i64"), "IR:\n{ll}");
-    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.clone.cond"), "IR:\n{ll}");
+    assert!(
+        ll.contains("getelementptr inbounds { ptr, i64, i64 }"),
+        "IR:\n{ll}"
+    );
     assert!(ll.contains("call void @free(ptr"), "IR:\n{ll}");
 }
 
 #[test]
-fn codegen_heap_vector_clone_method_and_language_drop_use_rc_helpers() {
+fn codegen_heap_vector_clone_method_and_language_drop_deep_copy_and_free() {
     let src = r#"
 fn main() i32 {
     let v: i32<> = <1, 2, 3>;
@@ -919,8 +922,11 @@ fn main() i32 {
 }
 "#;
     let ll = emit(src);
-    assert!(ll.contains("add i64"), "IR:\n{ll}");
-    assert!(ll.contains("heap.vector.drop.free"), "IR:\n{ll}");
+    assert!(ll.contains("heap.vector.clone.loop"), "IR:\n{ll}");
+    assert!(
+        ll.contains("getelementptr inbounds { ptr, i64 }"),
+        "IR:\n{ll}"
+    );
     assert!(ll.contains("call void @free(ptr"), "IR:\n{ll}");
 }
 
@@ -970,7 +976,7 @@ fn main() i32 {
 "#;
     let ll = emit(src);
     assert!(ll.contains("%owner.drop = alloca i1"), "IR:\n{ll}");
-    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
+    assert!(ll.contains("call void @free(ptr"), "IR:\n{ll}");
 }
 
 #[test]
@@ -990,8 +996,8 @@ fn main() i32 {
 "#;
     let ll = emit(src);
     assert!(ll.contains("extractvalue %struct.Owner"), "IR:\n{ll}");
-    assert!(ll.contains("add i64"), "IR:\n{ll}");
-    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.clone.cond"), "IR:\n{ll}");
+    assert!(ll.contains("call void @free(ptr"), "IR:\n{ll}");
 }
 
 #[test]
@@ -1322,14 +1328,13 @@ fn codegen_alloc_realloc_dealloc_calls_present() {
 }
 
 #[test]
-fn codegen_matrix_rc_helpers_present() {
+fn codegen_matrix_box_helpers_present() {
     let ll = emit(include_str!("../../../examples/sample_matrix_rc.nia"));
     assert!(ll.contains("call ptr @malloc"), "IR:\n{ll}");
     assert!(ll.contains("println.matrix.row.cond"), "IR:\n{ll}");
     assert!(ll.contains("println.matrix.col.cond"), "IR:\n{ll}");
-    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
     assert!(
-        ll.contains("getelementptr inbounds { i64, ptr, i64, i64 }"),
+        ll.contains("getelementptr inbounds { ptr, i64, i64 }"),
         "IR:\n{ll}"
     );
     assert!(ll.contains("getelementptr inbounds i32"), "IR:\n{ll}");

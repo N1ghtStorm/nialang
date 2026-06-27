@@ -47,7 +47,7 @@ println(a); // ok for copy types
 let b = a.clone();
 ```
 
-For reference-counted runtime values, clone glue increments the reference count.
+For unique heap-owned runtime values, clone glue allocates independent storage.
 For plain copy values, clone can lower to the same value.
 
 `drop` means the compiler is allowed to destroy the value automatically when it
@@ -195,8 +195,8 @@ implementation, a struct supports it by providing a valid custom deref method.
 
 Status: complete in [current-ownership-model.md](current-ownership-model.md).
 
-Current Nia has reference-counted heap handles, but lifetime management is still
-explicit in many places:
+Current Nia has heap-owned runtime handles, but lifetime management is still
+explicitly exposed through compatibility helpers in several places:
 
 - `matrix_clone`, `matrix_drop`
 - `vector_clone`, `vector_drop`
@@ -962,7 +962,7 @@ This phase grants `copy` / `clone` / `drop` / `deref` where appropriate:
   supports the same ability, but not `copy`
 - future built-in smart pointer handles may receive `deref` here if they expose
   a well-defined target type
-- any other future reference-counted runtime handle receives explicit ability
+- any future runtime handle receives explicit ability
   rules here
 
 Lowering:
@@ -1011,14 +1011,14 @@ Implemented notes:
 - scalar primitives support formal `copy`, `clone`, and no-op `drop`
 - fixed arrays and fixed anonymous vectors derive `copy`, `clone`, and `drop`
   from their element type
-- `Matrix` and heap anonymous vectors `T<>` support `clone` through their
-  existing reference-counted runtime headers and `drop` through runtime cleanup
+- `Matrix` and heap anonymous vectors `T<>` support `clone` by allocating
+  independent storage and `drop` through runtime cleanup
 - `List[T]` supports `clone` / `drop` when `T` supports the same ability;
   list clone allocates a new list and clones elements
 - structs, vectors, and enums can derive recursive clone/drop through runtime
   primitive fields
 - `Matrix`, `T<>`, and `List[T]` are no longer treated as copy-like by move
-  checking; use `.clone()` to share/duplicate them
+  checking; use `.clone()` to duplicate them
 - old low-level `matrix_clone`, `matrix_drop`, `vector_clone`, and
   `vector_drop` calls remain available and clear auto-drop state for
   compatibility

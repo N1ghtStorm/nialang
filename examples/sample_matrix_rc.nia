@@ -1,10 +1,9 @@
-// Low-level compatibility sample for the built-in ref-counted matrix handle.
+// Low-level compatibility sample for the built-in heap-owned matrix handle.
 //
 // New user code should usually prefer `m.clone()` and `drop(m)`. This fixture
 // intentionally keeps the runtime helper surface visible.
 //
 // Matrix is a compiler-known heap object:
-// - reference counter,
 // - heap pointer to contiguous cells of one numeric type,
 // - row count,
 // - column count.
@@ -24,14 +23,13 @@ fn main() i32 {
     println(m);
     println(matrix_get(m, 1, 2));
 
-    println(matrix_refcount(m));
-    let shared: i32[] = matrix_clone(m);
-    println(matrix_refcount(m));
-    println(shared);
-    println(matrix_get(shared, 1, 2));
+    let copied: i32[] = matrix_clone(m);
+    matrix_set(copied, 1, 2, 7);
+    println(copied);
+    println(matrix_get(copied, 1, 2));
+    println(matrix_get(m, 1, 2));
 
-    matrix_drop(shared);
-    println(matrix_refcount(m));
+    matrix_drop(copied);
     matrix_drop(m);
 
     0

@@ -181,7 +181,9 @@ fn main() i32 {
     matrix_set(mat, 0, 1, 12.25);
     println(matrix_get(mat, 0, 1));
     let mat2: f64[] = mat.clone();
-    println(matrix_refcount(mat));
+    matrix_set(mat2, 0, 1, 99.0);
+    println(matrix_get(mat, 0, 1));
+    println(matrix_get(mat2, 0, 1));
     drop(mat2);
     drop(mat);
 

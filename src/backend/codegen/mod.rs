@@ -14,10 +14,10 @@ use crate::nia_std::{
     GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T,
     GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH,
     LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW,
-    MATRIX_REFCOUNT, MATRIX_ROWS, MATRIX_SET, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH,
-    MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET,
-    VECTOR_LEN, VECTOR_REFCOUNT, VECTOR_SET,
+    MATRIX_ROWS, MATRIX_SET, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT,
+    MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256,
+    SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
+    VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -1260,50 +1260,158 @@ impl<'a> Gen<'a> {
     }
 
     fn emit_matrix_clone_value(&mut self, matrix_ty: &Ty, matrix: &str) -> String {
-        let rc_ptr = self.matrix_field_ptr(matrix, 0);
-        let old = self.fresh();
-        let new = self.fresh();
-        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = add i64 %{}, 1", new, old).unwrap();
-        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
-        debug_assert!(matches!(matrix_ty, Ty::Matrix(_, _)));
-        matrix.to_string()
-    }
+        let Ty::Matrix(elem_ty, _) = matrix_ty else {
+            unreachable!("typechecked matrix clone")
+        };
+        let rows = self.matrix_load_i64_field(matrix, 1);
+        let cols = self.matrix_load_i64_field(matrix, 2);
+        let len = self.fresh();
+        writeln!(self.out, "  %{} = mul i64 {}, {}", len, rows, cols).unwrap();
+        let bytes = if matrix_elem_size(elem_ty) == 1 {
+            format!("%{len}")
+        } else {
+            let bytes = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = mul i64 %{}, {}",
+                bytes,
+                len,
+                matrix_elem_size(elem_ty)
+            )
+            .unwrap();
+            format!("%{bytes}")
+        };
+        let data = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
+        let out = self.emit_matrix_header_alloc(&format!("%{data}"), &rows, &cols);
+        let source_data = self.matrix_load_data_ptr(matrix);
 
-    fn emit_matrix_drop_value(&mut self, matrix: &str) {
-        let rc_ptr = self.matrix_field_ptr(matrix, 0);
-        let old = self.fresh();
-        let new = self.fresh();
-        let is_zero = self.fresh();
-        let free_lbl = self.fresh_label("matrix.drop.free");
-        let cont_lbl = self.fresh_label("matrix.drop.cont");
-        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = sub i64 %{}, 1", new, old).unwrap();
-        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_zero, new).unwrap();
+        let idx_addr = self.fresh();
+        let cond_lbl = self.fresh_label("matrix.clone.cond");
+        let body_lbl = self.fresh_label("matrix.clone.body");
+        let done_lbl = self.fresh_label("matrix.clone.done");
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+
+        writeln!(self.out, "{}:", cond_lbl).unwrap();
+        let idx = self.fresh();
+        let has_item = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, %{}",
+            has_item, idx, len
+        )
+        .unwrap();
         writeln!(
             self.out,
             "  br i1 %{}, label %{}, label %{}",
-            is_zero, free_lbl, cont_lbl
+            has_item, body_lbl, done_lbl
         )
         .unwrap();
-        writeln!(self.out, "{}:", free_lbl).unwrap();
+
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        let source_cell = self.fresh();
+        let out_cell = self.fresh();
+        let value = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i64 %{}",
+            source_cell, elem_ll, source_data, idx
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr %{}, i64 %{}",
+            out_cell, elem_ll, data, idx
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr %{}",
+            value, elem_ll, source_cell
+        )
+        .unwrap();
+        let cloned = self.emit_clone_value(elem_ty, &format!("%{value}"));
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            elem_ll, cloned, out_cell
+        )
+        .unwrap();
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
+        writeln!(self.out, "{}:", done_lbl).unwrap();
+        out
+    }
+
+    fn emit_matrix_drop_value(&mut self, matrix: &str) {
         let data = self.matrix_load_data_ptr(matrix);
         writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
         writeln!(self.out, "  call void @free(ptr {})", matrix).unwrap();
-        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
-        writeln!(self.out, "{}:", cont_lbl).unwrap();
     }
 
     fn emit_heap_vector_clone_value(&mut self, vector_ty: &Ty, vector: &str) -> String {
-        let rc_ptr = self.heap_vector_field_ptr(vector, 0);
-        let old = self.fresh();
-        let new = self.fresh();
-        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = add i64 %{}, 1", new, old).unwrap();
-        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
-        debug_assert!(matches!(vector_ty, Ty::HeapVector(_)));
-        vector.to_string()
+        let Ty::HeapVector(elem_ty) = vector_ty else {
+            unreachable!("typechecked heap vector clone")
+        };
+        let len = self.heap_vector_load_i64_field(vector, 1);
+        let (out, out_data) = self.emit_heap_vector_alloc(elem_ty, &len);
+        let source_data = self.heap_vector_load_data_ptr(vector);
+        let idx_addr = self.fresh();
+        let loop_lbl = self.fresh_label("heap.vector.clone.loop");
+        let body_lbl = self.fresh_label("heap.vector.clone.body");
+        let cont_lbl = self.fresh_label("heap.vector.clone.cont");
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", loop_lbl).unwrap();
+        writeln!(self.out, "{}:", loop_lbl).unwrap();
+        let idx = self.fresh();
+        let keep_going = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, {}",
+            keep_going, idx, len
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            keep_going, body_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let source_cell = self.heap_vector_data_cell_ptr(&source_data, &format!("%{idx}"), elem_ty);
+        let out_cell = self.heap_vector_data_cell_ptr(&out_data, &format!("%{idx}"), elem_ty);
+        let value = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            value,
+            llvm_ty(elem_ty, self.structs),
+            source_cell
+        )
+        .unwrap();
+        let cloned = self.emit_clone_value(elem_ty, &format!("%{value}"));
+        writeln!(
+            self.out,
+            "  store {} {}, ptr {}",
+            llvm_ty(elem_ty, self.structs),
+            cloned,
+            out_cell
+        )
+        .unwrap();
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", loop_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        out
     }
 
     fn emit_drop_linear_elements(
@@ -1359,30 +1467,11 @@ impl<'a> Gen<'a> {
     }
 
     fn emit_heap_vector_drop_value(&mut self, elem_ty: &Ty, vector: &str) {
-        let rc_ptr = self.heap_vector_field_ptr(vector, 0);
-        let old = self.fresh();
-        let new = self.fresh();
-        let is_zero = self.fresh();
-        let free_lbl = self.fresh_label("heap.vector.drop.free");
-        let cont_lbl = self.fresh_label("heap.vector.drop.cont");
-        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = sub i64 %{}, 1", new, old).unwrap();
-        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_zero, new).unwrap();
-        writeln!(
-            self.out,
-            "  br i1 %{}, label %{}, label %{}",
-            is_zero, free_lbl, cont_lbl
-        )
-        .unwrap();
-        writeln!(self.out, "{}:", free_lbl).unwrap();
-        let len = self.heap_vector_load_i64_field(vector, 2);
+        let len = self.heap_vector_load_i64_field(vector, 1);
         let data = self.heap_vector_load_data_ptr(vector);
         self.emit_drop_linear_elements(&data, &len, elem_ty, "heap.vector");
         writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
         writeln!(self.out, "  call void @free(ptr {})", vector).unwrap();
-        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
-        writeln!(self.out, "{}:", cont_lbl).unwrap();
     }
 
     fn emit_list_drop_value(&mut self, elem_ty: &Ty, list: &str) {
@@ -2280,10 +2369,8 @@ impl<'a> Gen<'a> {
                     || name == MATRIX_ROWS
                     || name == MATRIX_COLS
                     || name == MATRIX_LEN
-                    || name == MATRIX_REFCOUNT
                     || name == VECTOR_CLONE
                     || name == VECTOR_LEN
-                    || name == VECTOR_REFCOUNT
                 {
                     for arg in args {
                         self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, false);
@@ -3374,11 +3461,24 @@ impl<'a> Gen<'a> {
         let out = self.fresh();
         writeln!(
             self.out,
-            "  %{} = getelementptr inbounds {{ i64, ptr, i64, i64 }}, ptr {}, i32 0, i32 {}",
+            "  %{} = getelementptr inbounds {{ ptr, i64, i64 }}, ptr {}, i32 0, i32 {}",
             out, matrix, field
         )
         .unwrap();
         format!("%{out}")
+    }
+
+    fn emit_matrix_header_alloc(&mut self, data: &str, rows: &str, cols: &str) -> String {
+        let matrix = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 24)", matrix).unwrap();
+        let matrix_ref = format!("%{matrix}");
+        let data_ptr = self.matrix_field_ptr(&matrix_ref, 0);
+        let rows_ptr = self.matrix_field_ptr(&matrix_ref, 1);
+        let cols_ptr = self.matrix_field_ptr(&matrix_ref, 2);
+        writeln!(self.out, "  store ptr {}, ptr {}", data, data_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", rows, rows_ptr).unwrap();
+        writeln!(self.out, "  store i64 {}, ptr {}", cols, cols_ptr).unwrap();
+        matrix_ref
     }
 
     fn matrix_load_i64_field(&mut self, matrix: &str, field: u32) -> String {
@@ -3389,14 +3489,14 @@ impl<'a> Gen<'a> {
     }
 
     fn matrix_load_data_ptr(&mut self, matrix: &str) -> String {
-        let ptr = self.matrix_field_ptr(matrix, 1);
+        let ptr = self.matrix_field_ptr(matrix, 0);
         let out = self.fresh();
         writeln!(self.out, "  %{} = load ptr, ptr {}", out, ptr).unwrap();
         format!("%{out}")
     }
 
     fn matrix_cell_ptr(&mut self, matrix: &str, row: &str, col: &str, elem_ty: &Ty) -> String {
-        let cols = self.matrix_load_i64_field(matrix, 3);
+        let cols = self.matrix_load_i64_field(matrix, 2);
         let row64 = self.fresh();
         let col64 = self.fresh();
         let row_offset = self.fresh();
@@ -3428,7 +3528,7 @@ impl<'a> Gen<'a> {
         let out = self.fresh();
         writeln!(
             self.out,
-            "  %{} = getelementptr inbounds {{ i64, ptr, i64 }}, ptr {}, i32 0, i32 {}",
+            "  %{} = getelementptr inbounds {{ ptr, i64 }}, ptr {}, i32 0, i32 {}",
             out, vector, field
         )
         .unwrap();
@@ -3443,7 +3543,7 @@ impl<'a> Gen<'a> {
     }
 
     fn heap_vector_load_data_ptr(&mut self, vector: &str) -> String {
-        let ptr = self.heap_vector_field_ptr(vector, 1);
+        let ptr = self.heap_vector_field_ptr(vector, 0);
         let out = self.fresh();
         writeln!(self.out, "  %{} = load ptr, ptr {}", out, ptr).unwrap();
         format!("%{out}")
@@ -3635,20 +3735,18 @@ impl<'a> Gen<'a> {
         let vector = self.fresh();
         writeln!(self.out, "  %{} = mul i64 {}, {}", bytes, len, elem_size).unwrap();
         writeln!(self.out, "  %{} = call ptr @malloc(i64 %{})", data, bytes).unwrap();
-        writeln!(self.out, "  %{} = call ptr @malloc(i64 24)", vector).unwrap();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 16)", vector).unwrap();
 
-        let rc_ptr = self.heap_vector_field_ptr(&format!("%{vector}"), 0);
-        let data_ptr = self.heap_vector_field_ptr(&format!("%{vector}"), 1);
-        let len_ptr = self.heap_vector_field_ptr(&format!("%{vector}"), 2);
-        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
+        let data_ptr = self.heap_vector_field_ptr(&format!("%{vector}"), 0);
+        let len_ptr = self.heap_vector_field_ptr(&format!("%{vector}"), 1);
         writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
         writeln!(self.out, "  store i64 {}, ptr {}", len, len_ptr).unwrap();
         (format!("%{vector}"), format!("%{data}"))
     }
 
     fn emit_heap_vector_shape_check(&mut self, left: &str, right: &str, label: &str) -> String {
-        let left_len = self.heap_vector_load_i64_field(left, 2);
-        let right_len = self.heap_vector_load_i64_field(right, 2);
+        let left_len = self.heap_vector_load_i64_field(left, 1);
+        let right_len = self.heap_vector_load_i64_field(right, 1);
         let same_len = self.fresh();
         let ok_lbl = self.fresh_label(&format!("heap.vector.{label}.len.ok"));
         let abort_lbl = self.fresh_label(&format!("heap.vector.{label}.len.abort"));
@@ -4643,19 +4741,18 @@ impl<'a> Gen<'a> {
     }
 
     fn emit_print_matrix_summary(&mut self, matrix: &str, newline: bool) {
-        let refs = self.matrix_load_i64_field(matrix, 0);
-        let rows = self.matrix_load_i64_field(matrix, 2);
-        let cols = self.matrix_load_i64_field(matrix, 3);
+        let rows = self.matrix_load_i64_field(matrix, 1);
+        let cols = self.matrix_load_i64_field(matrix, 2);
         let (sym, size) = if newline {
-            ("nialang.std.fmt.matrix", 41)
+            ("nialang.std.fmt.matrix", 30)
         } else {
-            ("nialang.std.fmt.matrix.nn", 40)
+            ("nialang.std.fmt.matrix.nn", 29)
         };
         let p = self.fmt_ptr(sym, size);
         writeln!(
             self.out,
-            "  call i32 (ptr, ...) @printf(ptr {}, i64 {}, i64 {}, i64 {})",
-            p, rows, cols, refs
+            "  call i32 (ptr, ...) @printf(ptr {}, i64 {}, i64 {})",
+            p, rows, cols
         )
         .unwrap();
     }
@@ -4666,8 +4763,8 @@ impl<'a> Gen<'a> {
             return;
         }
 
-        let rows = self.matrix_load_i64_field(matrix, 2);
-        let cols = self.matrix_load_i64_field(matrix, 3);
+        let rows = self.matrix_load_i64_field(matrix, 1);
+        let cols = self.matrix_load_i64_field(matrix, 2);
         let data = self.matrix_load_data_ptr(matrix);
         let row_addr = self.fresh();
         let col_addr = self.fresh();
@@ -4838,7 +4935,7 @@ impl<'a> Gen<'a> {
         let Some((open_sym, open_size)) = anon_vector_print_open_symbol(elem_ty) else {
             unreachable!("typechecked heap anonymous vector print element type")
         };
-        let len = self.heap_vector_load_i64_field(vector, 2);
+        let len = self.heap_vector_load_i64_field(vector, 1);
         let data = self.heap_vector_load_data_ptr(vector);
         let idx_addr = self.fresh();
         writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
@@ -4927,18 +5024,12 @@ impl<'a> Gen<'a> {
         let len = rows * cols;
         let bytes = len * matrix_elem_size(cell_ty);
         let data = self.fresh();
-        let matrix = self.fresh();
         writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
-        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", matrix).unwrap();
-
-        let rc_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 0);
-        let data_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 1);
-        let rows_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 2);
-        let cols_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 3);
-        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
-        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", rows, rows_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", cols, cols_ptr).unwrap();
+        let matrix = self.emit_matrix_header_alloc(
+            &format!("%{data}"),
+            &rows.to_string(),
+            &cols.to_string(),
+        );
 
         let src_ll = llvm_ty(
             &Ty::Array(Box::new(Ty::Array(cell_ty.clone(), *cols)), rows),
@@ -4983,10 +5074,7 @@ impl<'a> Gen<'a> {
             }
         }
 
-        (
-            Ty::Matrix(cell_ty.clone(), Some((rows, *cols))),
-            format!("%{matrix}"),
-        )
+        (Ty::Matrix(cell_ty.clone(), Some((rows, *cols))), matrix)
     }
 
     fn emit_matrix_to_array(
@@ -5130,14 +5218,12 @@ impl<'a> Gen<'a> {
     ) -> (Ty, String) {
         let (_, matrix) = self.emit_expr(&args[0], locals, None);
         let value64 = if name == MATRIX_ROWS {
-            self.matrix_load_i64_field(&matrix, 2)
+            self.matrix_load_i64_field(&matrix, 1)
         } else if name == MATRIX_COLS {
-            self.matrix_load_i64_field(&matrix, 3)
-        } else if name == MATRIX_REFCOUNT {
-            self.matrix_load_i64_field(&matrix, 0)
+            self.matrix_load_i64_field(&matrix, 2)
         } else {
-            let rows = self.matrix_load_i64_field(&matrix, 2);
-            let cols = self.matrix_load_i64_field(&matrix, 3);
+            let rows = self.matrix_load_i64_field(&matrix, 1);
+            let cols = self.matrix_load_i64_field(&matrix, 2);
             let len = self.fresh();
             writeln!(self.out, "  %{} = mul i64 {}, {}", len, rows, cols).unwrap();
             format!("%{len}")
@@ -5219,13 +5305,12 @@ impl<'a> Gen<'a> {
 
     fn emit_heap_vector_info(
         &mut self,
-        name: &str,
+        _name: &str,
         args: &[Expr],
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
         let (_, vector) = self.emit_expr(&args[0], locals, None);
-        let field = if name == VECTOR_REFCOUNT { 0 } else { 2 };
-        let value64 = self.heap_vector_load_i64_field(&vector, field);
+        let value64 = self.heap_vector_load_i64_field(&vector, 1);
         let out = self.fresh();
         writeln!(self.out, "  %{} = trunc i64 {} to i32", out, value64).unwrap();
         (Ty::I32, format!("%{out}"))
@@ -5364,10 +5449,10 @@ impl<'a> Gen<'a> {
         op: &str,
     ) -> (Ty, String) {
         let label_op = matrix_binop_label(op);
-        let left_rows = self.matrix_load_i64_field(left, 2);
-        let left_cols = self.matrix_load_i64_field(left, 3);
-        let right_rows = self.matrix_load_i64_field(right, 2);
-        let right_cols = self.matrix_load_i64_field(right, 3);
+        let left_rows = self.matrix_load_i64_field(left, 1);
+        let left_cols = self.matrix_load_i64_field(left, 2);
+        let right_rows = self.matrix_load_i64_field(right, 1);
+        let right_cols = self.matrix_load_i64_field(right, 2);
         let rows_match = self.fresh();
         let cols_match = self.fresh();
         let shape_match = self.fresh();
@@ -5425,18 +5510,8 @@ impl<'a> Gen<'a> {
             format!("%{bytes}")
         };
         let data = self.fresh();
-        let matrix = self.fresh();
         writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
-        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", matrix).unwrap();
-
-        let rc_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 0);
-        let data_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 1);
-        let rows_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 2);
-        let cols_ptr = self.matrix_field_ptr(&format!("%{matrix}"), 3);
-        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
-        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", left_rows, rows_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", left_cols, cols_ptr).unwrap();
+        let matrix = self.emit_matrix_header_alloc(&format!("%{data}"), &left_rows, &left_cols);
 
         let left_data = self.matrix_load_data_ptr(left);
         let right_data = self.matrix_load_data_ptr(right);
@@ -5520,10 +5595,7 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
 
         writeln!(self.out, "{}:", done_lbl).unwrap();
-        (
-            Ty::Matrix(Box::new(elem_ty.clone()), shape),
-            format!("%{matrix}"),
-        )
+        (Ty::Matrix(Box::new(elem_ty.clone()), shape), matrix)
     }
 
     fn emit_matrix_scalar_mul(
@@ -5533,8 +5605,8 @@ impl<'a> Gen<'a> {
         elem_ty: &Ty,
         shape: Option<(usize, usize)>,
     ) -> (Ty, String) {
-        let rows = self.matrix_load_i64_field(matrix, 2);
-        let cols = self.matrix_load_i64_field(matrix, 3);
+        let rows = self.matrix_load_i64_field(matrix, 1);
+        let cols = self.matrix_load_i64_field(matrix, 2);
         let len = self.fresh();
         writeln!(self.out, "  %{} = mul i64 {}, {}", len, rows, cols).unwrap();
         let bytes = if matrix_elem_size(elem_ty) == 1 {
@@ -5552,18 +5624,8 @@ impl<'a> Gen<'a> {
             format!("%{bytes}")
         };
         let data = self.fresh();
-        let out_matrix = self.fresh();
         writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
-        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", out_matrix).unwrap();
-
-        let rc_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 0);
-        let data_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 1);
-        let rows_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 2);
-        let cols_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 3);
-        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
-        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", rows, rows_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", cols, cols_ptr).unwrap();
+        let out_matrix = self.emit_matrix_header_alloc(&format!("%{data}"), &rows, &cols);
 
         let matrix_data = self.matrix_load_data_ptr(matrix);
         let idx_addr = self.fresh();
@@ -5622,10 +5684,7 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
 
         writeln!(self.out, "{}:", done_lbl).unwrap();
-        (
-            Ty::Matrix(Box::new(elem_ty.clone()), shape),
-            format!("%{out_matrix}"),
-        )
+        (Ty::Matrix(Box::new(elem_ty.clone()), shape), out_matrix)
     }
 
     fn emit_matrix_matmul(
@@ -5635,10 +5694,10 @@ impl<'a> Gen<'a> {
         elem_ty: &Ty,
         shape: Option<(usize, usize)>,
     ) -> (Ty, String) {
-        let left_rows = self.matrix_load_i64_field(left, 2);
-        let left_cols = self.matrix_load_i64_field(left, 3);
-        let right_rows = self.matrix_load_i64_field(right, 2);
-        let right_cols = self.matrix_load_i64_field(right, 3);
+        let left_rows = self.matrix_load_i64_field(left, 1);
+        let left_cols = self.matrix_load_i64_field(left, 2);
+        let right_rows = self.matrix_load_i64_field(right, 1);
+        let right_cols = self.matrix_load_i64_field(right, 2);
         let shape_match = self.fresh();
         let ok_lbl = self.fresh_label("matrix.matmul.shape.ok");
         let abort_lbl = self.fresh_label("matrix.matmul.shape.abort");
@@ -5682,18 +5741,9 @@ impl<'a> Gen<'a> {
             format!("%{bytes}")
         };
         let data = self.fresh();
-        let out_matrix = self.fresh();
         writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
-        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", out_matrix).unwrap();
-
-        let rc_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 0);
-        let data_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 1);
-        let rows_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 2);
-        let cols_ptr = self.matrix_field_ptr(&format!("%{out_matrix}"), 3);
-        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
-        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", left_rows, rows_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", right_cols, cols_ptr).unwrap();
+        let out_matrix =
+            self.emit_matrix_header_alloc(&format!("%{data}"), &left_rows, &right_cols);
 
         let ll = llvm_ty(elem_ty, self.structs);
         let left_data = self.matrix_load_data_ptr(left);
@@ -5917,10 +5967,7 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  br label %{}", row_cond_lbl).unwrap();
 
         writeln!(self.out, "{}:", done_lbl).unwrap();
-        (
-            Ty::Matrix(Box::new(elem_ty.clone()), shape),
-            format!("%{out_matrix}"),
-        )
+        (Ty::Matrix(Box::new(elem_ty.clone()), shape), out_matrix)
     }
 
     fn emit_matrix_det_lu(&mut self, elem_ty: &Ty, matrix: &str, n: &str) -> (Ty, String) {
@@ -6364,7 +6411,7 @@ impl<'a> Gen<'a> {
 
     fn emit_matrix_det_value(&mut self, elem_ty: Ty, matrix: &str) -> (Ty, String) {
         let rows = self.matrix_load_i64_field(matrix, 2);
-        let cols = self.matrix_load_i64_field(matrix, 3);
+        let cols = self.matrix_load_i64_field(matrix, 2);
         let square = self.fresh();
         let ok_lbl = self.fresh_label("matrix.det.shape.ok");
         let abort_lbl = self.fresh_label("matrix.det.shape.abort");
@@ -6884,7 +6931,7 @@ impl<'a> Gen<'a> {
         vector: &str,
         scalar: &str,
     ) -> (Ty, String) {
-        let len = self.heap_vector_load_i64_field(vector, 2);
+        let len = self.heap_vector_load_i64_field(vector, 1);
         let (out_vector, out_data) = self.emit_heap_vector_alloc(elem_ty, &len);
         let data = self.heap_vector_load_data_ptr(vector);
         let idx_addr = self.fresh();
@@ -7203,7 +7250,7 @@ impl<'a> Gen<'a> {
         label: &str,
     ) -> (String, String, String) {
         let rows = self.matrix_load_i64_field(matrix, 2);
-        let cols = self.matrix_load_i64_field(matrix, 3);
+        let cols = self.matrix_load_i64_field(matrix, 2);
         let rows_ok = self.fresh();
         let cols_ok = self.fresh();
         let shape_ok = self.fresh();
@@ -7402,19 +7449,12 @@ impl<'a> Gen<'a> {
         let len = rows * cols;
         let bytes = len * matrix_elem_size(&elem_ty);
         let data = self.fresh();
-        let matrix = self.fresh();
         writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", data, bytes).unwrap();
-        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", matrix).unwrap();
-
-        let matrix_ref = format!("%{matrix}");
-        let rc_ptr = self.matrix_field_ptr(&matrix_ref, 0);
-        let data_ptr = self.matrix_field_ptr(&matrix_ref, 1);
-        let rows_ptr = self.matrix_field_ptr(&matrix_ref, 2);
-        let cols_ptr = self.matrix_field_ptr(&matrix_ref, 3);
-        writeln!(self.out, "  store i64 1, ptr {}", rc_ptr).unwrap();
-        writeln!(self.out, "  store ptr %{}, ptr {}", data, data_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", rows, rows_ptr).unwrap();
-        writeln!(self.out, "  store i64 {}, ptr {}", cols, cols_ptr).unwrap();
+        let matrix = self.emit_matrix_header_alloc(
+            &format!("%{data}"),
+            &rows.to_string(),
+            &cols.to_string(),
+        );
 
         let ll = llvm_ty(&elem_ty, self.structs);
         for i in 0..rows {
@@ -7451,10 +7491,7 @@ impl<'a> Gen<'a> {
             }
         }
 
-        (
-            Ty::Matrix(Box::new(elem_ty), Some((rows, cols))),
-            format!("%{matrix}"),
-        )
+        (Ty::Matrix(Box::new(elem_ty), Some((rows, cols))), matrix)
     }
 
     /// Emits one full LLVM function definition.
@@ -8878,7 +8915,7 @@ impl<'a> Gen<'a> {
                         return (Ty::I32, format!("{n}"));
                     }
                     if matches!(at, Ty::HeapVector(_)) {
-                        let len64 = self.heap_vector_load_i64_field(&av, 2);
+                        let len64 = self.heap_vector_load_i64_field(&av, 1);
                         let out = self.fresh();
                         writeln!(self.out, "  %{} = trunc i64 {} to i32", out, len64).unwrap();
                         return (Ty::I32, format!("%{out}"));
@@ -8940,11 +8977,7 @@ impl<'a> Gen<'a> {
                 if name == MATRIX_SET {
                     return self.emit_matrix_set(args, locals);
                 }
-                if name == MATRIX_ROWS
-                    || name == MATRIX_COLS
-                    || name == MATRIX_LEN
-                    || name == MATRIX_REFCOUNT
-                {
+                if name == MATRIX_ROWS || name == MATRIX_COLS || name == MATRIX_LEN {
                     return self.emit_matrix_info(name, args, locals);
                 }
                 if name == MATRIX_CLONE {
@@ -8959,7 +8992,7 @@ impl<'a> Gen<'a> {
                 if name == VECTOR_SET {
                     return self.emit_heap_vector_set(args, locals);
                 }
-                if name == VECTOR_LEN || name == VECTOR_REFCOUNT {
+                if name == VECTOR_LEN {
                     return self.emit_heap_vector_info(name, args, locals);
                 }
                 if name == VECTOR_CLONE {
