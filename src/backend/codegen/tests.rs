@@ -83,7 +83,7 @@ fn main() i32 {
         "IR:\n{ll}"
     );
     assert!(
-        ll.contains("insertvalue { ptr, ptr, ptr } poison, ptr @__nia_closure_0, 0"),
+        ll.contains("insertvalue { ptr, ptr, ptr, ptr } poison, ptr @__nia_closure_0, 0"),
         "IR:\n{ll}"
     );
     assert!(ll.contains("call i32 %"), "IR:\n{ll}");
@@ -138,7 +138,33 @@ fn main() i32 {
     );
     assert!(ll.contains("call void @FileHandle__drop"), "IR:\n{ll}");
     assert!(ll.contains("call void @free(ptr %env)"), "IR:\n{ll}");
-    assert!(ll.contains("insertvalue { ptr, ptr, ptr } %"), "IR:\n{ll}");
+    assert!(
+        ll.contains("insertvalue { ptr, ptr, ptr, ptr } %"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
+fn codegen_cloneable_capturing_closure_env_clone_glue() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let add_base: fn(i32) -> i32 = |x| x + base;
+    let cloned: fn(i32) -> i32 = add_base.clone();
+    add_base(1) + cloned(2)
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal ptr @__nia_closure_0_clone(ptr %env)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("extractvalue { ptr, ptr, ptr, ptr } %"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call ptr %"), "IR:\n{ll}");
 }
 
 #[test]

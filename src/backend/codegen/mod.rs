@@ -672,7 +672,7 @@ fn emit_vector_print_constants(vectors: &[VectorDef]) -> String {
 
 /// Maps high-level nialang type into LLVM IR textual type.
 fn fn_value_ll_ty() -> &'static str {
-    "{ ptr, ptr, ptr }"
+    "{ ptr, ptr, ptr, ptr }"
 }
 
 fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
@@ -889,6 +889,7 @@ fn supports_clone_method_ty(
         Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
             supports_clone_method_ty(elem, structs, enums, vectors)
         }
+        Ty::Fn(_, _) => true,
         _ => false,
     }
 }
@@ -1042,7 +1043,7 @@ impl<'a> Gen<'a> {
         format!("{prefix}.{n}")
     }
 
-    fn emit_fn_value(&mut self, code: &str, env: &str, drop: &str) -> String {
+    fn emit_fn_value(&mut self, code: &str, env: &str, drop: &str, clone: &str) -> String {
         let with_code = self.fresh();
         writeln!(
             self.out,
@@ -1072,7 +1073,17 @@ impl<'a> Gen<'a> {
             drop
         )
         .unwrap();
-        format!("%{with_drop}")
+        let with_clone = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} %{}, ptr {}, 3",
+            with_clone,
+            fn_value_ll_ty(),
+            with_drop,
+            clone
+        )
+        .unwrap();
+        format!("%{with_clone}")
     }
 
     fn closure_env_ll_ty(captures: &[(String, Ty)]) -> String {
@@ -1665,6 +1676,7 @@ impl<'a> Gen<'a> {
             Ty::HeapVector(_) => self.emit_heap_vector_clone_value(ty, value),
             Ty::List(elem_ty) => self.emit_list_clone_value(elem_ty, value),
             Ty::Matrix(_, _) => self.emit_matrix_clone_value(ty, value),
+            Ty::Fn(_, _) => self.emit_fn_value_clone(value),
             Ty::Struct(name) if self.vector_def(name).is_some() => {
                 let vdef = self.vector_def(name).cloned().expect("checked vector");
                 let fields = vdef
@@ -1793,6 +1805,107 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  call void %{}(ptr %{})", drop_fn, env).unwrap();
         writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
         writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
+    fn emit_fn_value_clone(&mut self, value: &str) -> String {
+        let out_slot = self.fresh();
+        writeln!(self.out, "  %{} = alloca {}", out_slot, fn_value_ll_ty()).unwrap();
+        let code = self.fresh();
+        let env = self.fresh();
+        let drop_fn = self.fresh();
+        let clone_fn = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 0",
+            code,
+            fn_value_ll_ty(),
+            value
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 1",
+            env,
+            fn_value_ll_ty(),
+            value
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 2",
+            drop_fn,
+            fn_value_ll_ty(),
+            value
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 3",
+            clone_fn,
+            fn_value_ll_ty(),
+            value
+        )
+        .unwrap();
+        let has_clone = self.fresh();
+        let clone_lbl = self.fresh_label("fn.clone.env");
+        let plain_lbl = self.fresh_label("fn.clone.plain");
+        let cont_lbl = self.fresh_label("fn.clone.cont");
+        writeln!(
+            self.out,
+            "  %{} = icmp ne ptr %{}, null",
+            has_clone, clone_fn
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_clone, clone_lbl, plain_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", clone_lbl).unwrap();
+        let new_env = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call ptr %{}(ptr %{})",
+            new_env, clone_fn, env
+        )
+        .unwrap();
+        let cloned = self.emit_fn_value(
+            &format!("%{code}"),
+            &format!("%{new_env}"),
+            &format!("%{drop_fn}"),
+            &format!("%{clone_fn}"),
+        );
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            fn_value_ll_ty(),
+            cloned,
+            out_slot
+        )
+        .unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", plain_lbl).unwrap();
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            fn_value_ll_ty(),
+            value,
+            out_slot
+        )
+        .unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        let out = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr %{}",
+            out,
+            fn_value_ll_ty(),
+            out_slot
+        )
+        .unwrap();
+        format!("%{out}")
     }
 
     fn emit_drop_value(&mut self, ty: &Ty, value: String) {
@@ -2546,6 +2659,72 @@ impl<'a> Gen<'a> {
         drop_gen.out
     }
 
+    fn closure_captures_cloneable(&self, captures: &[(String, Ty)]) -> bool {
+        captures
+            .iter()
+            .all(|(_, ty)| supports_clone_method_ty(ty, self.structs, self.enums, self.vectors))
+    }
+
+    fn emit_closure_clone_def(&self, name: &str, captures: &[(String, Ty)]) -> String {
+        let mut clone_gen = Gen::new(
+            self.structs,
+            self.enums,
+            self.vectors,
+            self.fn_sigs,
+            self.str_lit_syms,
+            self.mode,
+            self.closures.clone(),
+        );
+        let env_ll = Self::closure_env_ll_ty(captures);
+        writeln!(
+            clone_gen.out,
+            "define internal ptr @{}(ptr %env) {{",
+            sanitize(name)
+        )
+        .unwrap();
+        writeln!(clone_gen.out, "entry:").unwrap();
+        let sz = clone_gen.emit_sizeof_ll_ty_i64(&env_ll);
+        let out = clone_gen.fresh();
+        writeln!(clone_gen.out, "  %{} = call ptr @malloc(i64 {})", out, sz).unwrap();
+        for (idx, (_, capture_ty)) in captures.iter().enumerate() {
+            let src_ptr = clone_gen.fresh();
+            writeln!(
+                clone_gen.out,
+                "  %{} = getelementptr inbounds {}, ptr %env, i32 0, i32 {}",
+                src_ptr, env_ll, idx
+            )
+            .unwrap();
+            let raw = clone_gen.fresh();
+            writeln!(
+                clone_gen.out,
+                "  %{} = load {}, ptr %{}",
+                raw,
+                llvm_ty(capture_ty, clone_gen.structs),
+                src_ptr
+            )
+            .unwrap();
+            let cloned = clone_gen.emit_clone_value(capture_ty, &format!("%{raw}"));
+            let dst_ptr = clone_gen.fresh();
+            writeln!(
+                clone_gen.out,
+                "  %{} = getelementptr inbounds {}, ptr %{}, i32 0, i32 {}",
+                dst_ptr, env_ll, out, idx
+            )
+            .unwrap();
+            writeln!(
+                clone_gen.out,
+                "  store {} {}, ptr %{}",
+                llvm_ty(capture_ty, clone_gen.structs),
+                cloned,
+                dst_ptr
+            )
+            .unwrap();
+        }
+        writeln!(clone_gen.out, "  ret ptr %{}", out).unwrap();
+        writeln!(clone_gen.out, "}}").unwrap();
+        clone_gen.out
+    }
+
     fn emit_closure_literal(
         &mut self,
         _is_move: bool,
@@ -2590,8 +2769,8 @@ impl<'a> Gen<'a> {
             .filter_map(|name| outer_env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect::<Vec<_>>();
         let env_ll = Self::closure_env_ll_ty(&captures);
-        let (env_value, drop_value) = if captures.is_empty() {
-            ("null".to_string(), "null".to_string())
+        let (env_value, drop_value, clone_value) = if captures.is_empty() {
+            ("null".to_string(), "null".to_string(), "null".to_string())
         } else {
             let sz = self.emit_sizeof_ll_ty_i64(&env_ll);
             let env = self.fresh();
@@ -2618,7 +2797,19 @@ impl<'a> Gen<'a> {
             let drop_name = format!("{name}_drop");
             let drop_def = self.emit_closure_drop_def(&drop_name, &captures);
             self.closures.borrow_mut().defs.push(drop_def);
-            (format!("%{env}"), format!("@{}", sanitize(&drop_name)))
+            let clone_value = if self.closure_captures_cloneable(&captures) {
+                let clone_name = format!("{name}_clone");
+                let clone_def = self.emit_closure_clone_def(&clone_name, &captures);
+                self.closures.borrow_mut().defs.push(clone_def);
+                format!("@{}", sanitize(&clone_name))
+            } else {
+                "null".to_string()
+            };
+            (
+                format!("%{env}"),
+                format!("@{}", sanitize(&drop_name)),
+                clone_value,
+            )
         };
         let f = FnDef {
             name: name.clone(),
@@ -2653,7 +2844,12 @@ impl<'a> Gen<'a> {
         self.closures.borrow_mut().defs.push(def);
         (
             Ty::Fn(param_tys, Box::new(ret_ty)),
-            self.emit_fn_value(&format!("@{}", sanitize(&name)), &env_value, &drop_value),
+            self.emit_fn_value(
+                &format!("@{}", sanitize(&name)),
+                &env_value,
+                &drop_value,
+                &clone_value,
+            ),
         )
     }
 
@@ -7982,8 +8178,12 @@ impl<'a> Gen<'a> {
                         let params = sig.params.clone();
                         let ret = sig.ret.clone().unwrap_or(Ty::Unit);
                         let wrapper = self.ensure_function_value_wrapper(name);
-                        let value =
-                            self.emit_fn_value(&format!("@{}", sanitize(&wrapper)), "null", "null");
+                        let value = self.emit_fn_value(
+                            &format!("@{}", sanitize(&wrapper)),
+                            "null",
+                            "null",
+                            "null",
+                        );
                         return (Ty::Fn(params, Box::new(ret)), value);
                     }
                     if let Some((enum_name, variant)) = split_variant_path(name) {

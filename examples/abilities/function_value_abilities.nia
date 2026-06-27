@@ -1,0 +1,34 @@
+// Abilities phase 15 sample:
+// - top-level function values and non-capturing closures are copyable,
+// - capturing closures are move-only,
+// - cloneable captured environments can be duplicated with `.clone()`.
+
+fn double(x: i32) i32 {
+    x * 2
+}
+
+fn apply(x: i32, f: fn(i32) -> i32) i32 {
+    f(x)
+}
+
+fn main() i32 {
+    let plain: fn(i32) -> i32 = double;
+    let plain_copy: fn(i32) -> i32 = plain;
+    println(apply(5, plain));
+    println(apply(6, plain_copy));
+
+    let add1: fn(i32) -> i32 = |x| x + 1;
+    let add1_copy: fn(i32) -> i32 = add1;
+    println(add1(20));
+    println(add1_copy(30));
+
+    let base: i32 = 40;
+    let add_base: fn(i32) -> i32 = |x| x + base;
+    let add_base_clone: fn(i32) -> i32 = add_base.clone();
+    println(add_base(2));
+    println(add_base_clone(3));
+
+    drop(add_base_clone);
+    drop(add_base);
+    0
+}

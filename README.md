@@ -877,6 +877,7 @@ Good places to start:
 | `examples/abilities/closure_captures.nia` | copy-safe closure captures and function values |
 | `examples/abilities/primitive_abilities.nia` | clone/drop for runtime primitives and aggregates |
 | `examples/abilities/move_closure_captures.nia` | `move ||` captures and closure environment cleanup |
+| `examples/abilities/function_value_abilities.nia` | copy/clone/drop behavior for `fn(...) -> ...` values |
 | `examples/sample_extern_lib.nia` | C ABI exports and shared-library mode |
 | `examples/quantum/qubit_create.nia` | QIR gates, rotations, measurement, and result recording |
 | `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |

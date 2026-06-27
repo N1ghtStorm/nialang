@@ -263,6 +263,87 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_copying_top_level_function_value() {
+    let src = r#"
+fn add1(x: i32) i32 {
+    x + 1
+}
+
+fn main() i32 {
+    let f: fn(i32) -> i32 = add1;
+    let g: fn(i32) -> i32 = f;
+    f(1) + g(2)
+}
+"#;
+    check_all(src).expect("top-level function values are copyable");
+}
+
+#[test]
+fn typecheck_allows_copying_non_capturing_closure_value() {
+    let src = r#"
+fn main() i32 {
+    let f: fn(i32) -> i32 = |x| x + 1;
+    let g: fn(i32) -> i32 = f;
+    f(1) + g(2)
+}
+"#;
+    check_all(src).expect("non-capturing closure values are copyable");
+}
+
+#[test]
+fn typecheck_rejects_copying_capturing_closure_value() {
+    let src = r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let f: fn(i32) -> i32 = |x| x + base;
+    let g: fn(i32) -> i32 = f;
+    f(1) + g(2)
+}
+"#;
+    let err = check_all(src).expect_err("capturing closure values are move-only unless cloned");
+    assert!(err.contains("use of moved local `f`"), "{err}");
+}
+
+#[test]
+fn typecheck_allows_clone_of_cloneable_capturing_closure_value() {
+    let src = r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let f: fn(i32) -> i32 = |x| x + base;
+    let g: fn(i32) -> i32 = f.clone();
+    f(1) + g(2)
+}
+"#;
+    check_all(src).expect("capturing closure with cloneable env should clone");
+}
+
+#[test]
+fn typecheck_rejects_clone_of_non_cloneable_capturing_closure_value() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 3 };
+    let f: fn() -> i32 = move || handle.fd;
+    let g: fn() -> i32 = f.clone();
+    g()
+}
+"#;
+    let err = check_all(src).expect_err("drop-only capture should not be cloneable");
+    assert!(
+        err.contains("function value clone requires a cloneable closure environment"),
+        "{err}"
+    );
+}
+
+#[test]
 fn typecheck_rejects_assignment_to_captured_variable() {
     let src = r#"
 fn main() i32 {

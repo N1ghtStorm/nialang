@@ -1076,7 +1076,7 @@ Open design questions:
 
 ## Phase 15: function-value abilities
 
-Status: planned.
+Status: complete for value-level copy/clone/drop behavior.
 
 After closure environment ownership is explicit, assign formal abilities to the
 surface `fn(...) -> ...` type.
@@ -1092,21 +1092,34 @@ Capturing function values:
 ```text
 copy: no
 clone: if the environment is cloneable
-drop: if the environment is droppable
+drop: yes
 ```
 
 This phase should prevent shallow-copying an environment pointer while still
 allowing ordinary top-level functions and non-capturing closures to behave like
 cheap function pointers.
 
+Implementation notes:
+
+- the runtime function value is `{ code, env, drop, clone }`
+- top-level function values and non-capturing closures use null env/drop/clone
+  pointers and are treated as copyable plain function pointers by move checking
+- capturing closures are move-only by default
+- capturing closures get generated `__nia_closure_N_clone` glue when every
+  captured value is cloneable
+- `fn(...) -> ...` supports language-level `drop` as a type
+- structural `copy`/`clone` for aggregates containing `fn(...) -> ...` remains
+  conservative because the type alone does not encode whether a particular
+  function value has an environment
+
 Deliverables:
 
-- typechecker rules for `copy`, `clone`, and `drop` on function values
+- value-level typechecker/move-checker rules for `copy`, `clone`, and `drop`
+  on function values
 - clone/drop lowering for capturing function values
 - copy tests for top-level function values and non-capturing closures
 - rejection tests for copying capturing closure values
-- tests that arrays/structs/enums containing function values derive abilities
-  only when the contained function value supports them
+- tests for cloneable and non-cloneable captured environments
 
 ## Phase 16: deprecate low-level manual RC builtins in user docs
 
@@ -1175,6 +1188,7 @@ for user-defined resource-like types.
     `Matrix`, `T<>`, `List[T]`.
 16. Add closure move captures and closure environment drop cleanup. (complete)
 17. Add formal `copy`, `clone`, and `drop` rules for `fn(...) -> ...` values.
+    (complete)
 18. Update docs and examples.
 19. Improve diagnostics and optional migration mode.
 

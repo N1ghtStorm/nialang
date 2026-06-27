@@ -230,6 +230,7 @@ fn has_formal_ability(
         Ty::Matrix(elem, _) if matches!(ability, Ability::Clone | Ability::Drop) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
+        Ty::Fn(_, _) => matches!(ability, Ability::Drop),
         _ => false,
     }
 }
@@ -240,6 +241,9 @@ fn supports_clone_method(
     enums: &HashMap<String, EnumDef>,
     vectors: &HashMap<String, VectorDef>,
 ) -> bool {
+    if matches!(t, Ty::Fn(_, _)) {
+        return true;
+    }
     has_formal_ability(t, Ability::Clone, structs, enums, vectors)
 }
 
@@ -1013,6 +1017,28 @@ enum ExprMoveMode {
     ReadOnly,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FnValueInfo {
+    copyable: bool,
+    cloneable: bool,
+}
+
+impl FnValueInfo {
+    fn owning_unknown() -> Self {
+        Self {
+            copyable: false,
+            cloneable: false,
+        }
+    }
+
+    fn plain_pointer() -> Self {
+        Self {
+            copyable: true,
+            cloneable: true,
+        }
+    }
+}
+
 struct MoveCtx<'a> {
     structs: &'a HashMap<String, StructDef>,
     enums: &'a HashMap<String, EnumDef>,
@@ -1022,6 +1048,7 @@ struct MoveCtx<'a> {
 }
 
 type MoveStates = HashMap<String, LocalMoveState>;
+type FnValueStates = HashMap<String, FnValueInfo>;
 
 fn check_fn_moves(
     f: &FnDef,
@@ -1046,14 +1073,19 @@ fn check_fn_moves(
         HashMap::new()
     };
     let mut states = MoveStates::new();
+    let mut fn_values = FnValueStates::new();
     for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
         env.insert(pname.clone(), pty.clone());
         states.insert(pname.clone(), LocalMoveState::Available);
+        if matches!(pty, Ty::Fn(_, _)) {
+            fn_values.insert(pname.clone(), FnValueInfo::owning_unknown());
+        }
     }
     check_moves_block(
         &f.body,
         &mut env,
         &mut states,
+        &mut fn_values,
         &ctx,
         sig.ret.as_ref(),
         sig.ret.as_ref(),
@@ -1064,15 +1096,24 @@ fn check_moves_block(
     block: &Block,
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
     fn_ret: Option<&Ty>,
     tail_hint: Option<&Ty>,
 ) -> Result<(), String> {
     for st in &block.stmts {
-        check_moves_stmt(st, env, states, ctx, fn_ret)?;
+        check_moves_stmt(st, env, states, fn_values, ctx, fn_ret)?;
     }
     if let Some(tail) = &block.tail {
-        check_moves_expr(tail, env, states, ctx, tail_hint, ExprMoveMode::Consume)?;
+        check_moves_expr(
+            tail,
+            env,
+            states,
+            fn_values,
+            ctx,
+            tail_hint,
+            ExprMoveMode::Consume,
+        )?;
     }
     Ok(())
 }
@@ -1108,6 +1149,7 @@ fn check_moves_stmt(
     st: &Stmt,
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
     fn_ret: Option<&Ty>,
 ) -> Result<(), String> {
@@ -1126,6 +1168,7 @@ fn check_moves_stmt(
                     init,
                     env,
                     states,
+                    fn_values,
                     ctx,
                     ann_norm.as_ref(),
                     ExprMoveMode::Consume,
@@ -1139,6 +1182,16 @@ fn check_moves_stmt(
                     ctx.fns,
                     ann_norm.as_ref(),
                 )?;
+                let fn_info = if matches!(t, Ty::Fn(_, _)) {
+                    Some(fn_value_info_for_expr(init, env, fn_values, ctx))
+                } else {
+                    None
+                };
+                if let Some(info) = fn_info {
+                    fn_values.insert(name.clone(), info);
+                } else {
+                    fn_values.remove(name);
+                }
                 (t, LocalMoveState::Available)
             } else {
                 let Some(t) = ann_norm else {
@@ -1146,13 +1199,18 @@ fn check_moves_stmt(
                         "let `{name}` without an initializer requires a type annotation"
                     ));
                 };
+                if matches!(t, Ty::Fn(_, _)) {
+                    fn_values.insert(name.clone(), FnValueInfo::owning_unknown());
+                } else {
+                    fn_values.remove(name);
+                }
                 (t, LocalMoveState::Uninitialized)
             };
             env.insert(name.clone(), t);
             states.insert(name.clone(), state);
         }
         Stmt::Expr(e) => {
-            check_moves_expr(e, env, states, ctx, None, ExprMoveMode::Consume)?;
+            check_moves_expr(e, env, states, fn_values, ctx, None, ExprMoveMode::Consume)?;
         }
         Stmt::Assign { target, value } => {
             let target_ty = infer_expr(
@@ -1164,11 +1222,12 @@ fn check_moves_stmt(
                 ctx.fns,
                 None,
             )?;
-            check_moves_lvalue(target, env, states, ctx, true)?;
+            check_moves_lvalue(target, env, states, fn_values, ctx, true)?;
             check_moves_expr(
                 value,
                 env,
                 states,
+                fn_values,
                 ctx,
                 Some(&target_ty),
                 ExprMoveMode::Consume,
@@ -1176,11 +1235,25 @@ fn check_moves_stmt(
             if let Expr::Ident(name) = target {
                 if env.contains_key(name) {
                     states.insert(name.clone(), LocalMoveState::Available);
+                    if matches!(target_ty, Ty::Fn(_, _)) {
+                        let info = fn_value_info_for_expr(value, env, fn_values, ctx);
+                        fn_values.insert(name.clone(), info);
+                    } else {
+                        fn_values.remove(name);
+                    }
                 }
             }
         }
         Stmt::Return(e) => {
-            check_moves_expr(e, env, states, ctx, fn_ret, ExprMoveMode::Consume)?;
+            check_moves_expr(
+                e,
+                env,
+                states,
+                fn_values,
+                ctx,
+                fn_ret,
+                ExprMoveMode::Consume,
+            )?;
         }
         Stmt::Break => {}
         Stmt::If { cond, then_block } => {
@@ -1188,16 +1261,19 @@ fn check_moves_stmt(
                 cond,
                 env,
                 states,
+                fn_values,
                 ctx,
                 Some(&Ty::Bool),
                 ExprMoveMode::Consume,
             )?;
             let mut then_env = env.clone();
             let mut then_states = states.clone();
+            let mut then_fn_values = fn_values.clone();
             check_moves_block(
                 then_block,
                 &mut then_env,
                 &mut then_states,
+                &mut then_fn_values,
                 ctx,
                 fn_ret,
                 None,
@@ -1209,19 +1285,38 @@ fn check_moves_stmt(
                 cond,
                 env,
                 states,
+                fn_values,
                 ctx,
                 Some(&Ty::Bool),
                 ExprMoveMode::Consume,
             )?;
             let mut body_env = env.clone();
             let mut body_states = states.clone();
-            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            let mut body_fn_values = fn_values.clone();
+            check_moves_block(
+                body,
+                &mut body_env,
+                &mut body_states,
+                &mut body_fn_values,
+                ctx,
+                fn_ret,
+                None,
+            )?;
             merge_moved_from_child(states, &body_states);
         }
         Stmt::Loop { body } => {
             let mut body_env = env.clone();
             let mut body_states = states.clone();
-            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            let mut body_fn_values = fn_values.clone();
+            check_moves_block(
+                body,
+                &mut body_env,
+                &mut body_states,
+                &mut body_fn_values,
+                ctx,
+                fn_ret,
+                None,
+            )?;
             merge_moved_from_child(states, &body_states);
         }
         Stmt::For {
@@ -1230,32 +1325,69 @@ fn check_moves_stmt(
             end,
             body,
         } => {
-            let start_ty = check_moves_expr(start, env, states, ctx, None, ExprMoveMode::Consume)?;
+            let start_ty = check_moves_expr(
+                start,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::Consume,
+            )?;
             check_moves_expr(
                 end,
                 env,
                 states,
+                fn_values,
                 ctx,
                 Some(&start_ty),
                 ExprMoveMode::Consume,
             )?;
             let mut body_env = env.clone();
             let mut body_states = states.clone();
+            let mut body_fn_values = fn_values.clone();
             body_env.insert(var.clone(), start_ty);
             body_states.insert(var.clone(), LocalMoveState::Available);
-            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            body_fn_values.remove(var);
+            check_moves_block(
+                body,
+                &mut body_env,
+                &mut body_states,
+                &mut body_fn_values,
+                ctx,
+                fn_ret,
+                None,
+            )?;
             merge_moved_from_child(states, &body_states);
         }
         Stmt::Quant { body } => {
             let mut body_env = enter_quant_scope(env);
             let mut body_states = states.clone();
-            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            let mut body_fn_values = fn_values.clone();
+            check_moves_block(
+                body,
+                &mut body_env,
+                &mut body_states,
+                &mut body_fn_values,
+                ctx,
+                fn_ret,
+                None,
+            )?;
             merge_moved_from_child(states, &body_states);
         }
         Stmt::Gpu { body } => {
             let mut body_env = env.clone();
             let mut body_states = states.clone();
-            check_moves_block(body, &mut body_env, &mut body_states, ctx, fn_ret, None)?;
+            let mut body_fn_values = fn_values.clone();
+            check_moves_block(
+                body,
+                &mut body_env,
+                &mut body_states,
+                &mut body_fn_values,
+                ctx,
+                fn_ret,
+                None,
+            )?;
             merge_moved_from_child(states, &body_states);
         }
     }
@@ -1310,6 +1442,86 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
     }
 }
 
+fn fn_value_info_for_ident(
+    name: &str,
+    env: &HashMap<String, Ty>,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> Option<FnValueInfo> {
+    if matches!(env.get(name), Some(Ty::Fn(_, _))) {
+        return Some(
+            fn_values
+                .get(name)
+                .copied()
+                .unwrap_or_else(FnValueInfo::owning_unknown),
+        );
+    }
+    if ctx.fns.contains_key(name) {
+        return Some(FnValueInfo::plain_pointer());
+    }
+    None
+}
+
+fn is_copy_for_local_move(
+    name: &str,
+    ty: &Ty,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> bool {
+    if matches!(ty, Ty::Fn(_, _)) {
+        return fn_values.get(name).is_some_and(|info| info.copyable);
+    }
+    is_copy_for_moves(ty, ctx)
+}
+
+fn fn_capture_cloneable(
+    name: &str,
+    env: &HashMap<String, Ty>,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> bool {
+    let Some(ty) = env.get(name) else {
+        return ctx.fns.contains_key(name);
+    };
+    if matches!(ty, Ty::Fn(_, _)) {
+        return fn_values.get(name).is_some_and(|info| info.cloneable);
+    }
+    supports_clone_method(ty, ctx.structs, ctx.enums, ctx.vectors)
+}
+
+fn fn_value_info_for_expr(
+    expr: &Expr,
+    env: &HashMap<String, Ty>,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> FnValueInfo {
+    match expr {
+        Expr::Ident(name) => fn_value_info_for_ident(name, env, fn_values, ctx)
+            .unwrap_or_else(FnValueInfo::owning_unknown),
+        Expr::Closure { params, body, .. } => {
+            let (captures, _) = closure_capture_names(params, body, env);
+            if captures.is_empty() {
+                FnValueInfo::plain_pointer()
+            } else {
+                FnValueInfo {
+                    copyable: false,
+                    cloneable: captures
+                        .iter()
+                        .all(|name| fn_capture_cloneable(name, env, fn_values, ctx)),
+                }
+            }
+        }
+        Expr::MethodCall {
+            receiver,
+            name,
+            args,
+        } if name == CLONE_METHOD && args.is_empty() => {
+            fn_value_info_for_expr(receiver, env, fn_values, ctx)
+        }
+        _ => FnValueInfo::owning_unknown(),
+    }
+}
+
 fn ensure_local_available(name: &str, states: &MoveStates) -> Result<(), String> {
     match states.get(name) {
         Some(LocalMoveState::Moved) => return Err(format!("use of moved local `{name}`")),
@@ -1328,6 +1540,7 @@ fn consume_ident_if_needed(
     name: &str,
     ty: &Ty,
     states: &mut MoveStates,
+    fn_values: &FnValueStates,
     ctx: &MoveCtx<'_>,
     mode: ExprMoveMode,
 ) -> Result<(), String> {
@@ -1335,7 +1548,7 @@ fn consume_ident_if_needed(
         return Ok(());
     }
     ensure_local_available(name, states)?;
-    if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(ty, ctx) {
+    if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_local_move(name, ty, fn_values, ctx) {
         if ctx.captured_locals.contains(name) {
             return Err(format!(
                 "cannot move captured variable `{name}` out of a closure environment"
@@ -1351,10 +1564,19 @@ fn check_moves_args_with_params(
     params: &[Ty],
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     for (arg, param) in args.iter().zip(params) {
-        check_moves_expr(arg, env, states, ctx, Some(param), ExprMoveMode::Consume)?;
+        check_moves_expr(
+            arg,
+            env,
+            states,
+            fn_values,
+            ctx,
+            Some(param),
+            ExprMoveMode::Consume,
+        )?;
     }
     Ok(())
 }
@@ -1363,10 +1585,19 @@ fn check_moves_args_fallback(
     args: &[Expr],
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     for arg in args {
-        check_moves_expr(arg, env, states, ctx, None, ExprMoveMode::Consume)?;
+        check_moves_expr(
+            arg,
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume,
+        )?;
     }
     Ok(())
 }
@@ -1379,6 +1610,7 @@ fn check_moves_runtime_read_or_consume(
     expr: &Expr,
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     let ty = infer_expr(
@@ -1395,19 +1627,20 @@ fn check_moves_runtime_read_or_consume(
     } else {
         ExprMoveMode::Consume
     };
-    check_moves_expr(expr, env, states, ctx, Some(&ty), mode).map(|_| ())
+    check_moves_expr(expr, env, states, fn_values, ctx, Some(&ty), mode).map(|_| ())
 }
 
 fn check_moves_language_drop_arg(
     arg: &Expr,
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     if let Expr::Ident(name) = arg {
         if let Some(ty) = env.get(name).cloned() {
             ensure_local_available(name, states)?;
-            if !is_copy_for_moves(&ty, ctx) {
+            if !is_copy_for_local_move(name, &ty, fn_values, ctx) {
                 if ctx.captured_locals.contains(name) {
                     return Err(format!(
                         "cannot move captured variable `{name}` out of a closure environment"
@@ -1418,7 +1651,16 @@ fn check_moves_language_drop_arg(
             return Ok(());
         }
     }
-    check_moves_expr(arg, env, states, ctx, None, ExprMoveMode::Consume).map(|_| ())
+    check_moves_expr(
+        arg,
+        env,
+        states,
+        fn_values,
+        ctx,
+        None,
+        ExprMoveMode::Consume,
+    )
+    .map(|_| ())
 }
 
 fn check_moves_call(
@@ -1426,31 +1668,40 @@ fn check_moves_call(
     args: &[Expr],
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     if let Some(local_ty) = env.get(name).cloned() {
         if matches!(local_ty, Ty::Fn(_, _)) {
             ensure_local_available(name, states)?;
             if let Ty::Fn(params, _) = local_ty {
-                return check_moves_args_with_params(args, &params, env, states, ctx);
+                return check_moves_args_with_params(args, &params, env, states, fn_values, ctx);
             }
         }
     }
 
     if name == PRINTLN || name == LEN {
         for arg in args {
-            check_moves_expr(arg, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+            check_moves_expr(
+                arg,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::ReadOnly,
+            )?;
         }
         return Ok(());
     }
 
     if name == DROP_METHOD && args.len() == 1 {
-        return check_moves_language_drop_arg(&args[0], env, states, ctx);
+        return check_moves_language_drop_arg(&args[0], env, states, fn_values, ctx);
     }
 
     if name == MATRIX_DROP || name == VECTOR_DROP {
         if args.len() == 1 {
-            return check_moves_language_drop_arg(&args[0], env, states, ctx);
+            return check_moves_language_drop_arg(&args[0], env, states, fn_values, ctx);
         }
     }
 
@@ -1464,17 +1715,34 @@ fn check_moves_call(
         || name == VECTOR_REFCOUNT
     {
         if args.len() == 1 {
-            return check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)
-                .map(|_| ());
+            return check_moves_expr(
+                &args[0],
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::ReadOnly,
+            )
+            .map(|_| ());
         }
     }
 
     if name == MATRIX_GET && args.len() == 3 {
-        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
         check_moves_expr(
             &args[1],
             env,
             states,
+            fn_values,
             ctx,
             Some(&Ty::I32),
             ExprMoveMode::Consume,
@@ -1483,6 +1751,7 @@ fn check_moves_call(
             &args[2],
             env,
             states,
+            fn_values,
             ctx,
             Some(&Ty::I32),
             ExprMoveMode::Consume,
@@ -1491,11 +1760,20 @@ fn check_moves_call(
     }
 
     if name == MATRIX_SET && args.len() == 4 {
-        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
         check_moves_expr(
             &args[1],
             env,
             states,
+            fn_values,
             ctx,
             Some(&Ty::I32),
             ExprMoveMode::Consume,
@@ -1504,20 +1782,38 @@ fn check_moves_call(
             &args[2],
             env,
             states,
+            fn_values,
             ctx,
             Some(&Ty::I32),
             ExprMoveMode::Consume,
         )?;
-        check_moves_expr(&args[3], env, states, ctx, None, ExprMoveMode::Consume)?;
+        check_moves_expr(
+            &args[3],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume,
+        )?;
         return Ok(());
     }
 
     if name == VECTOR_GET && args.len() == 2 {
-        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
         check_moves_expr(
             &args[1],
             env,
             states,
+            fn_values,
             ctx,
             Some(&Ty::I32),
             ExprMoveMode::Consume,
@@ -1526,22 +1822,55 @@ fn check_moves_call(
     }
 
     if name == VECTOR_SET && args.len() == 3 {
-        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
         check_moves_expr(
             &args[1],
             env,
             states,
+            fn_values,
             ctx,
             Some(&Ty::I32),
             ExprMoveMode::Consume,
         )?;
-        check_moves_expr(&args[2], env, states, ctx, None, ExprMoveMode::Consume)?;
+        check_moves_expr(
+            &args[2],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume,
+        )?;
         return Ok(());
     }
 
     if name == OUTER && args.len() == 2 {
-        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
-        check_moves_expr(&args[1], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
+        check_moves_expr(
+            &args[1],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
         return Ok(());
     }
 
@@ -1552,23 +1881,23 @@ fn check_moves_call(
                 .iter()
                 .map(|(_, ty)| ty.clone())
                 .collect::<Vec<_>>();
-            return check_moves_args_with_params(args, &params, env, states, ctx);
+            return check_moves_args_with_params(args, &params, env, states, fn_values, ctx);
         }
     }
 
     if let Some((enum_name, variant)) = split_variant_path(name) {
         if let Some(edef) = ctx.enums.get(enum_name) {
             if let Some(EnumVariantFields::Tuple(params)) = enum_variant(edef, variant) {
-                return check_moves_args_with_params(args, params, env, states, ctx);
+                return check_moves_args_with_params(args, params, env, states, fn_values, ctx);
             }
         }
     }
 
     if let Some(sig) = ctx.fns.get(name) {
-        return check_moves_args_with_params(args, &sig.params, env, states, ctx);
+        return check_moves_args_with_params(args, &sig.params, env, states, fn_values, ctx);
     }
 
-    check_moves_args_fallback(args, env, states, ctx)
+    check_moves_args_fallback(args, env, states, fn_values, ctx)
 }
 
 fn check_moves_generic_call(
@@ -1576,6 +1905,7 @@ fn check_moves_generic_call(
     args: &[Expr],
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     if name == LIST_WITH_CAPACITY && args.len() == 1 {
@@ -1583,13 +1913,14 @@ fn check_moves_generic_call(
             &args[0],
             env,
             states,
+            fn_values,
             ctx,
             Some(&Ty::I32),
             ExprMoveMode::Consume,
         )?;
         return Ok(());
     }
-    check_moves_args_fallback(args, env, states, ctx)
+    check_moves_args_fallback(args, env, states, fn_values, ctx)
 }
 
 fn check_moves_method_call(
@@ -1598,6 +1929,7 @@ fn check_moves_method_call(
     args: &[Expr],
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     let recv_ty = infer_expr(
@@ -1611,17 +1943,47 @@ fn check_moves_method_call(
     )?;
 
     if name == CLONE_METHOD {
-        check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
-        return check_moves_args_fallback(args, env, states, ctx);
+        if matches!(recv_ty, Ty::Fn(_, _)) {
+            let info = fn_value_info_for_expr(receiver, env, fn_values, ctx);
+            if !info.cloneable {
+                return Err("function value clone requires a cloneable closure environment".into());
+            }
+        }
+        check_moves_expr(
+            receiver,
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
+        return check_moves_args_fallback(args, env, states, fn_values, ctx);
     }
 
     if name == TO_MATRIX || name == TO_ARRAY || name == TO_VEC || name == "det" {
-        check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
-        return check_moves_args_fallback(args, env, states, ctx);
+        check_moves_expr(
+            receiver,
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
+        return check_moves_args_fallback(args, env, states, fn_values, ctx);
     }
 
     if matches!(recv_ty, Ty::List(_)) {
-        check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            receiver,
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
         if (name == LIST_LEN || name == LIST_CAPACITY) && args.is_empty() {
             return Ok(());
         }
@@ -1633,6 +1995,7 @@ fn check_moves_method_call(
                 &args[0],
                 env,
                 states,
+                fn_values,
                 ctx,
                 Some(elem_ty.as_ref()),
                 ExprMoveMode::Consume,
@@ -1644,13 +2007,14 @@ fn check_moves_method_call(
                 &args[0],
                 env,
                 states,
+                fn_values,
                 ctx,
                 Some(&Ty::I32),
                 ExprMoveMode::Consume,
             )?;
             return Ok(());
         }
-        return check_moves_args_fallback(args, env, states, ctx);
+        return check_moves_args_fallback(args, env, states, fn_values, ctx);
     }
 
     let owner_ty = method_receiver_owner_ty(&recv_ty);
@@ -1662,12 +2026,20 @@ fn check_moves_method_call(
             Some(_) => ExprMoveMode::Consume,
             None => ExprMoveMode::ReadOnly,
         };
-        check_moves_expr(receiver, env, states, ctx, None, receiver_mode)?;
-        return check_moves_args_with_params(args, &sig.params[1..], env, states, ctx);
+        check_moves_expr(receiver, env, states, fn_values, ctx, None, receiver_mode)?;
+        return check_moves_args_with_params(args, &sig.params[1..], env, states, fn_values, ctx);
     }
 
-    check_moves_expr(receiver, env, states, ctx, None, ExprMoveMode::Consume)?;
-    check_moves_args_fallback(args, env, states, ctx)
+    check_moves_expr(
+        receiver,
+        env,
+        states,
+        fn_values,
+        ctx,
+        None,
+        ExprMoveMode::Consume,
+    )?;
+    check_moves_args_fallback(args, env, states, fn_values, ctx)
 }
 
 fn check_moves_struct_literal_fields(
@@ -1675,6 +2047,7 @@ fn check_moves_struct_literal_fields(
     def_fields: &[(String, Ty)],
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     for (field_name, field_ty) in def_fields {
@@ -1683,6 +2056,7 @@ fn check_moves_struct_literal_fields(
                 expr,
                 env,
                 states,
+                fn_values,
                 ctx,
                 Some(field_ty),
                 ExprMoveMode::Consume,
@@ -1697,6 +2071,7 @@ fn check_moves_literal_elems(
     elem_hint: Option<Ty>,
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     let inferred_first;
@@ -1717,7 +2092,15 @@ fn check_moves_literal_elems(
         None
     };
     for elem in elems {
-        check_moves_expr(elem, env, states, ctx, hint, ExprMoveMode::Consume)?;
+        check_moves_expr(
+            elem,
+            env,
+            states,
+            fn_values,
+            ctx,
+            hint,
+            ExprMoveMode::Consume,
+        )?;
     }
     Ok(())
 }
@@ -1762,6 +2145,7 @@ fn check_moves_closure(
     closure_ty: &Ty,
     outer_env: &HashMap<String, Ty>,
     outer_states: &mut MoveStates,
+    outer_fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     let Ty::Fn(param_tys, ret_ty) = closure_ty else {
@@ -1771,6 +2155,7 @@ fn check_moves_closure(
     let capture_set = captures.iter().cloned().collect::<HashSet<_>>();
     let mut closure_env = HashMap::new();
     let mut closure_states = MoveStates::new();
+    let mut closure_fn_values = FnValueStates::new();
     for name in &captures {
         if let Some(ty) = outer_env.get(name) {
             if outer_states.contains_key(name) {
@@ -1778,11 +2163,21 @@ fn check_moves_closure(
             }
             closure_env.insert(name.clone(), ty.clone());
             closure_states.insert(name.clone(), LocalMoveState::Available);
+            if matches!(ty, Ty::Fn(_, _)) {
+                let info = outer_fn_values
+                    .get(name)
+                    .copied()
+                    .unwrap_or_else(FnValueInfo::owning_unknown);
+                closure_fn_values.insert(name.clone(), info);
+            }
         }
     }
     for ((name, _), ty) in params.iter().zip(param_tys) {
         closure_env.insert(name.clone(), ty.clone());
         closure_states.insert(name.clone(), LocalMoveState::Available);
+        if matches!(ty, Ty::Fn(_, _)) {
+            closure_fn_values.insert(name.clone(), FnValueInfo::owning_unknown());
+        }
     }
     let closure_ctx = MoveCtx {
         structs: ctx.structs,
@@ -1795,6 +2190,7 @@ fn check_moves_closure(
         body,
         &mut closure_env,
         &mut closure_states,
+        &mut closure_fn_values,
         &closure_ctx,
         Some(ret_ty.as_ref()),
         Some(ret_ty.as_ref()),
@@ -1804,7 +2200,9 @@ fn check_moves_closure(
             let Some(ty) = outer_env.get(&name) else {
                 continue;
             };
-            if outer_states.contains_key(&name) && !is_copy_for_moves(ty, ctx) {
+            if outer_states.contains_key(&name)
+                && !is_copy_for_local_move(&name, ty, outer_fn_values, ctx)
+            {
                 outer_states.insert(name, LocalMoveState::Moved);
             }
         }
@@ -1816,6 +2214,7 @@ fn check_moves_expr(
     e: &Expr,
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
     hint: Option<&Ty>,
     mode: ExprMoveMode,
@@ -1823,13 +2222,23 @@ fn check_moves_expr(
     let inferred = infer_expr(e, env, ctx.structs, ctx.enums, ctx.vectors, ctx.fns, hint)?;
     match e {
         Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) => {}
-        Expr::Ident(name) => consume_ident_if_needed(name, &inferred, states, ctx, mode)?,
+        Expr::Ident(name) => {
+            consume_ident_if_needed(name, &inferred, states, fn_values, ctx, mode)?
+        }
         Expr::Neg(inner) | Expr::Not(inner) | Expr::BitNot(inner) => {
-            check_moves_expr(inner, env, states, ctx, None, ExprMoveMode::Consume)?;
+            check_moves_expr(
+                inner,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::Consume,
+            )?;
         }
         Expr::Add(l, r) | Expr::Sub(l, r) | Expr::Mul(l, r) | Expr::VecDot(l, r) => {
-            check_moves_runtime_read_or_consume(l, env, states, ctx)?;
-            check_moves_runtime_read_or_consume(r, env, states, ctx)?;
+            check_moves_runtime_read_or_consume(l, env, states, fn_values, ctx)?;
+            check_moves_runtime_read_or_consume(r, env, states, fn_values, ctx)?;
         }
         Expr::Div(l, r)
         | Expr::Rem(l, r)
@@ -1844,25 +2253,32 @@ fn check_moves_expr(
         | Expr::Le(l, r)
         | Expr::Gt(l, r)
         | Expr::Ge(l, r) => {
-            check_moves_expr(l, env, states, ctx, None, ExprMoveMode::Consume)?;
-            check_moves_expr(r, env, states, ctx, None, ExprMoveMode::Consume)?;
+            check_moves_expr(l, env, states, fn_values, ctx, None, ExprMoveMode::Consume)?;
+            check_moves_expr(r, env, states, fn_values, ctx, None, ExprMoveMode::Consume)?;
         }
-        Expr::Call { name, args } => check_moves_call(name, args, env, states, ctx)?,
+        Expr::Call { name, args } => check_moves_call(name, args, env, states, fn_values, ctx)?,
         Expr::GenericCall { name, args, .. } => {
-            check_moves_generic_call(name, args, env, states, ctx)?
+            check_moves_generic_call(name, args, env, states, fn_values, ctx)?
         }
         Expr::MethodCall {
             receiver,
             name,
             args,
-        } => check_moves_method_call(receiver, name, args, env, states, ctx)?,
+        } => check_moves_method_call(receiver, name, args, env, states, fn_values, ctx)?,
         Expr::CallExpr { callee, args } => {
-            let callee_ty =
-                check_moves_expr(callee, env, states, ctx, None, ExprMoveMode::Consume)?;
+            let callee_ty = check_moves_expr(
+                callee,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::Consume,
+            )?;
             if let Ty::Fn(params, _) = callee_ty {
-                check_moves_args_with_params(args, &params, env, states, ctx)?;
+                check_moves_args_with_params(args, &params, env, states, fn_values, ctx)?;
             } else {
-                check_moves_args_fallback(args, env, states, ctx)?;
+                check_moves_args_fallback(args, env, states, fn_values, ctx)?;
             }
         }
         Expr::Closure {
@@ -1870,15 +2286,26 @@ fn check_moves_expr(
             params,
             body,
             ..
-        } => check_moves_closure(*is_move, params, body, &inferred, env, states, ctx)?,
+        } => check_moves_closure(
+            *is_move, params, body, &inferred, env, states, fn_values, ctx,
+        )?,
         Expr::StructLit { name, fields } => {
             if let Some(def) = ctx.structs.get(name) {
-                check_moves_struct_literal_fields(fields, &def.fields, env, states, ctx)?;
+                check_moves_struct_literal_fields(
+                    fields,
+                    &def.fields,
+                    env,
+                    states,
+                    fn_values,
+                    ctx,
+                )?;
             } else if let Some((enum_name, variant)) = split_variant_path(name) {
                 if let Some(edef) = ctx.enums.get(enum_name) {
                     if let Some(EnumVariantFields::Struct(def_fields)) = enum_variant(edef, variant)
                     {
-                        check_moves_struct_literal_fields(fields, def_fields, env, states, ctx)?;
+                        check_moves_struct_literal_fields(
+                            fields, def_fields, env, states, fn_values, ctx,
+                        )?;
                     }
                 }
             }
@@ -1890,7 +2317,14 @@ fn check_moves_expr(
                     .iter()
                     .map(|name| (name.clone(), def.ty.clone()))
                     .collect::<Vec<_>>();
-                check_moves_struct_literal_fields(fields, &def_fields, env, states, ctx)?;
+                check_moves_struct_literal_fields(
+                    fields,
+                    &def_fields,
+                    env,
+                    states,
+                    fn_values,
+                    ctx,
+                )?;
             }
         }
         Expr::AnonVectorLit(elems) => {
@@ -1900,14 +2334,14 @@ fn check_moves_expr(
                 }
                 _ => None,
             };
-            check_moves_literal_elems(elems, elem_hint, env, states, ctx)?;
+            check_moves_literal_elems(elems, elem_hint, env, states, fn_values, ctx)?;
         }
         Expr::ArrayLit(elems) => {
             let elem_hint = match hint {
                 Some(Ty::Array(elem, _)) => Some(elem.as_ref().clone()),
                 _ => None,
             };
-            check_moves_literal_elems(elems, elem_hint, env, states, ctx)?;
+            check_moves_literal_elems(elems, elem_hint, env, states, fn_values, ctx)?;
         }
         Expr::EnumVariant { .. } => {}
         Expr::EnumTuple {
@@ -1917,7 +2351,7 @@ fn check_moves_expr(
         } => {
             if let Some(edef) = ctx.enums.get(enum_name) {
                 if let Some(EnumVariantFields::Tuple(params)) = enum_variant(edef, variant) {
-                    check_moves_args_with_params(args, params, env, states, ctx)?;
+                    check_moves_args_with_params(args, params, env, states, fn_values, ctx)?;
                 }
             }
         }
@@ -1928,13 +2362,22 @@ fn check_moves_expr(
         } => {
             if let Some(edef) = ctx.enums.get(enum_name) {
                 if let Some(EnumVariantFields::Struct(def_fields)) = enum_variant(edef, variant) {
-                    check_moves_struct_literal_fields(fields, def_fields, env, states, ctx)?;
+                    check_moves_struct_literal_fields(
+                        fields, def_fields, env, states, fn_values, ctx,
+                    )?;
                 }
             }
         }
         Expr::Match { scrutinee, arms } => {
-            let scrutinee_ty =
-                check_moves_expr(scrutinee, env, states, ctx, None, ExprMoveMode::Consume)?;
+            let scrutinee_ty = check_moves_expr(
+                scrutinee,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::Consume,
+            )?;
             let Ty::Enum(enum_name) = scrutinee_ty else {
                 return Ok(inferred);
             };
@@ -1945,11 +2388,13 @@ fn check_moves_expr(
             for (pattern, arm_expr) in arms {
                 let mut arm_env = env.clone();
                 let mut arm_states = states.clone();
+                let mut arm_fn_values = fn_values.clone();
                 check_moves_match_arm_bindings(pattern, edef, &mut arm_env, &mut arm_states);
                 check_moves_expr(
                     arm_expr,
                     &mut arm_env,
                     &mut arm_states,
+                    &mut arm_fn_values,
                     ctx,
                     hint,
                     ExprMoveMode::Consume,
@@ -1961,17 +2406,43 @@ fn check_moves_expr(
         Expr::Quant { body } => {
             let mut body_env = enter_quant_scope(env);
             let mut body_states = states.clone();
-            check_moves_block(body, &mut body_env, &mut body_states, ctx, None, hint)?;
+            let mut body_fn_values = fn_values.clone();
+            check_moves_block(
+                body,
+                &mut body_env,
+                &mut body_states,
+                &mut body_fn_values,
+                ctx,
+                None,
+                hint,
+            )?;
             merge_moved_from_child(states, &body_states);
         }
         Expr::Gpu { body } => {
             let mut body_env = env.clone();
             let mut body_states = states.clone();
-            check_moves_block(body, &mut body_env, &mut body_states, ctx, None, hint)?;
+            let mut body_fn_values = fn_values.clone();
+            check_moves_block(
+                body,
+                &mut body_env,
+                &mut body_states,
+                &mut body_fn_values,
+                ctx,
+                None,
+                hint,
+            )?;
             merge_moved_from_child(states, &body_states);
         }
         Expr::Field(obj, field_name) => {
-            check_moves_expr(obj, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+            check_moves_expr(
+                obj,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::ReadOnly,
+            )?;
             if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
                 return Err(format!(
                     "cannot move field `{field_name}` out of a non-copy value; partial moves are not supported yet"
@@ -1979,8 +2450,24 @@ fn check_moves_expr(
             }
         }
         Expr::Index(arr, idx) => {
-            check_moves_expr(arr, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
-            check_moves_expr(idx, env, states, ctx, Some(&Ty::I32), ExprMoveMode::Consume)?;
+            check_moves_expr(
+                arr,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::ReadOnly,
+            )?;
+            check_moves_expr(
+                idx,
+                env,
+                states,
+                fn_values,
+                ctx,
+                Some(&Ty::I32),
+                ExprMoveMode::Consume,
+            )?;
             if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
                 return Err(
                     "cannot move out of an indexed value; indexed moves are not supported yet"
@@ -1988,9 +2475,17 @@ fn check_moves_expr(
                 );
             }
         }
-        Expr::AddrOf(inner) => check_moves_lvalue(inner, env, states, ctx, false)?,
+        Expr::AddrOf(inner) => check_moves_lvalue(inner, env, states, fn_values, ctx, false)?,
         Expr::Deref(inner) => {
-            check_moves_expr(inner, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+            check_moves_expr(
+                inner,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::ReadOnly,
+            )?;
             if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(&inferred, ctx) {
                 return Err(
                     "cannot move out through dereference; deref moves are not supported yet".into(),
@@ -2005,6 +2500,7 @@ fn check_moves_lvalue(
     target: &Expr,
     env: &mut HashMap<String, Ty>,
     states: &mut MoveStates,
+    fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
     allow_reinit_ident: bool,
 ) -> Result<(), String> {
@@ -2015,14 +2511,38 @@ fn check_moves_lvalue(
             }
         }
         Expr::Deref(inner) => {
-            check_moves_expr(inner, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+            check_moves_expr(
+                inner,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::ReadOnly,
+            )?;
         }
         Expr::Index(base, idx) => {
-            check_moves_lvalue(base, env, states, ctx, false)?;
-            check_moves_expr(idx, env, states, ctx, Some(&Ty::I32), ExprMoveMode::Consume)?;
+            check_moves_lvalue(base, env, states, fn_values, ctx, false)?;
+            check_moves_expr(
+                idx,
+                env,
+                states,
+                fn_values,
+                ctx,
+                Some(&Ty::I32),
+                ExprMoveMode::Consume,
+            )?;
         }
         _ => {
-            check_moves_expr(target, env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+            check_moves_expr(
+                target,
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::ReadOnly,
+            )?;
         }
     }
     Ok(())
