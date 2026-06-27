@@ -990,12 +990,16 @@ impl Parser {
     /// comparisons bind tighter than `&`, then `^`, then `|`.
     fn parse_expr(&mut self) -> Result<Expr, String> {
         if matches!(self.peek(), Token::Pipe) {
-            return self.parse_closure_expr();
+            return self.parse_closure_expr(false);
+        }
+        if matches!(self.peek(), Token::Move) {
+            self.bump();
+            return self.parse_closure_expr(true);
         }
         self.parse_bit_or()
     }
 
-    fn parse_closure_expr(&mut self) -> Result<Expr, String> {
+    fn parse_closure_expr(&mut self, is_move: bool) -> Result<Expr, String> {
         self.expect(&Token::Pipe)?;
         let mut params = Vec::new();
         if !matches!(self.peek(), Token::Pipe) {
@@ -1034,6 +1038,7 @@ impl Parser {
             }
         };
         Ok(Expr::Closure {
+            is_move,
             params,
             ret,
             body: Box::new(body),

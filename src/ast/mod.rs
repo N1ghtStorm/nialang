@@ -294,6 +294,7 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     Closure {
+        is_move: bool,
         params: Vec<(String, Option<Ty>)>,
         ret: Option<Ty>,
         body: Box<Block>,

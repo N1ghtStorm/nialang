@@ -906,13 +906,14 @@ lower as { code_ptr, env_ptr }
 ```
 
 Runtime primitive captures such as `Matrix` and `T<>`, plus custom-drop and
-other non-copy resources, remain limited until explicit move-capture and
-closure environment cleanup are designed.
+other non-copy resources, are handled by the later explicit `move || ...`
+closure work in Phase 14.
 
 Deliverables:
 
 - capture analysis integrated with move checking for copy-safe captures
-- function values lowered as fat values `{ code_ptr, env_ptr }`
+- function values initially lowered as fat values `{ code_ptr, env_ptr }`;
+  Phase 14 extends this to `{ code_ptr, env_ptr, drop_ptr }`
 - wrappers for top-level functions used as values
 - tests for non-capturing closures, capturing closures, nested captures,
   top-level functions as values, and unit-returning function values
@@ -923,18 +924,19 @@ Implemented notes:
 - closure bodies can capture copy-safe outer values by value
 - nested closure capture analysis is transitive, so outer closure environments
   contain values required by inner closures
-- function values lower as a fat pair `{ code_ptr, env_ptr }`
-- non-capturing closures and top-level functions use `env = null`
+- function values lower as a fat value containing code, env, and optional env
+  drop pointers
+- non-capturing closures and top-level functions use null env/drop pointers
 - captured `Matrix`, `T<>`, `List[T]`, custom-drop resources, and other
-  non-copy values are rejected until explicit move-capture and closure env
-  cleanup are designed
+  non-copy values use the later Phase 14 `move || ...` form
 - assignments to captured variables are rejected for now
-- closure env clone/drop is intentionally not exposed as language-level
-  `clone`/`drop` until Phase 15 defines formal function-value abilities
+- closure env clone is intentionally not exposed as language-level `clone`
+  until Phase 15 defines formal function-value abilities
 
 ## Phase 13: primitive ability integration
 
-Status: planned.
+Status: complete for scalar/fixed aggregate/runtime `clone` and `drop`;
+function-value abilities and pointer ownership remain future phases.
 
 After custom clone/deref/drop methods, auto-drop, drop flags, aggregate drop,
 and copy-safe closure captures are working, add formal language-level abilities
@@ -1004,9 +1006,26 @@ Deliverables:
 - overwrite and conditional-initialization tests for runtime primitives
 - README update that marks primitive abilities as stable
 
+Implemented notes:
+
+- scalar primitives support formal `copy`, `clone`, and no-op `drop`
+- fixed arrays and fixed anonymous vectors derive `copy`, `clone`, and `drop`
+  from their element type
+- `Matrix` and heap anonymous vectors `T<>` support `clone` through their
+  existing reference-counted runtime headers and `drop` through runtime cleanup
+- `List[T]` supports `clone` / `drop` when `T` supports the same ability;
+  list clone allocates a new list and clones elements
+- structs, vectors, and enums can derive recursive clone/drop through runtime
+  primitive fields
+- `Matrix`, `T<>`, and `List[T]` are no longer treated as copy-like by move
+  checking; use `.clone()` to share/duplicate them
+- old low-level `matrix_clone`, `matrix_drop`, `vector_clone`, and
+  `vector_drop` calls remain available and clear auto-drop state for
+  compatibility
+
 ## Phase 14: closure move captures and environment cleanup
 
-Status: planned.
+Status: complete for explicit `move` captures and environment drop cleanup.
 
 This phase contains the remaining closure work that was intentionally left out
 of the Phase 12 MVP. It now runs after primitive ability integration, so closure
@@ -1017,12 +1036,14 @@ Capturing closures:
 
 ```text
 copy: no
-clone: if captured environment has clone
-drop: if captured environment has drop
+clone: not exposed yet
+drop: yes, via generated closure environment drop glue
 ```
 
-If closure environments are heap allocated and reference-counted, they should be
-`clone, drop` but not `copy`.
+Closure environments are currently heap allocated and owned by the function
+value. The lowered function value carries `{ code, env, drop }`, so moving a
+function value transfers the environment cleanup responsibility. Non-capturing
+closures and top-level function values use null `env`/`drop` pointers.
 
 Move closures should move captured non-copy values into the environment:
 
@@ -1032,23 +1053,26 @@ let f = move || println(h.fd);
 println(h.fd); // error: moved into closure
 ```
 
+Captured non-copy values are read-only inside the closure body for now. This
+keeps the existing `fn(...) -> ...` call surface repeatable until a later
+`FnOnce`-style model exists.
+
 Deliverables:
 
-- `move || ...` syntax and parser tests, if the language chooses explicit move
-  closures
+- `move || ...` syntax and parser tests
 - move-checking that marks non-copy captures as moved into the closure
-- closure env drop glue
-- closure env clone glue if closure environments are cloneable
-- capture drop tests for custom-drop structs/enums
-- capture drop tests for runtime primitives
-- capture clone tests for cloneable captured environments
+- closure env drop glue through generated `__nia_closure_N_drop` functions
+- capture drop tests for custom-drop structs
 - diagnostics for use-after-move caused by move captures
+- diagnostics for attempts to move captured env values out of repeatable
+  closures
 
 Open design questions:
 
 - whether non-`move` closures should ever capture by reference
-- whether closure environments should use plain heap allocation, RC, or a later
-  smart-pointer primitive
+- whether closure environments should become cloneable through explicit
+  function-value `clone`
+- whether a later `FnOnce`-style type should allow consuming captured env values
 
 ## Phase 15: function-value abilities
 
@@ -1149,7 +1173,7 @@ for user-defined resource-like types.
 15. Integrate `copy`, `clone`, `drop`, and `deref` for built-in primitives and
     runtime handles: scalars, raw pointers/references, fixed arrays/vectors,
     `Matrix`, `T<>`, `List[T]`.
-16. Add closure move captures and closure environment clone/drop.
+16. Add closure move captures and closure environment drop cleanup. (complete)
 17. Add formal `copy`, `clone`, and `drop` rules for `fn(...) -> ...` values.
 18. Update docs and examples.
 19. Improve diagnostics and optional migration mode.

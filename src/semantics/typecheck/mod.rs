@@ -172,6 +172,29 @@ fn is_legacy_scalar_ability_carveout(t: &Ty, ability: Ability) -> bool {
     )
 }
 
+fn is_formal_scalar_ability_ty(t: &Ty) -> bool {
+    matches!(
+        t,
+        Ty::Unit
+            | Ty::Bool
+            | Ty::I8
+            | Ty::U8
+            | Ty::I16
+            | Ty::U16
+            | Ty::I32
+            | Ty::I64
+            | Ty::U64
+            | Ty::I128
+            | Ty::Isize
+            | Ty::Usize
+            | Ty::U128
+            | Ty::F16
+            | Ty::F32
+            | Ty::F64
+            | Ty::String
+    )
+}
+
 fn has_formal_ability(
     t: &Ty,
     ability: Ability,
@@ -179,7 +202,11 @@ fn has_formal_ability(
     enums: &HashMap<String, EnumDef>,
     vectors: &HashMap<String, VectorDef>,
 ) -> bool {
+    if is_formal_scalar_ability_ty(t) && !matches!(ability, Ability::Deref) {
+        return true;
+    }
     match t {
+        Ty::Ptr(_) => matches!(ability, Ability::Deref),
         Ty::Struct(name) if vectors.contains_key(name) => vectors
             .get(name)
             .is_some_and(|v| has_declared_ability(&v.abilities, ability)),
@@ -192,9 +219,16 @@ fn has_formal_ability(
         Ty::Vector(name, _) => vectors
             .get(name)
             .is_some_and(|v| has_declared_ability(&v.abilities, ability)),
-        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
-            !matches!(ability, Ability::Deref | Ability::Drop)
-                && has_formal_ability(elem, ability, structs, enums, vectors)
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) if !matches!(ability, Ability::Deref) => {
+            has_formal_ability(elem, ability, structs, enums, vectors)
+        }
+        Ty::HeapVector(elem) | Ty::List(elem)
+            if matches!(ability, Ability::Clone | Ability::Drop) =>
+        {
+            has_formal_ability(elem, ability, structs, enums, vectors)
+        }
+        Ty::Matrix(elem, _) if matches!(ability, Ability::Clone | Ability::Drop) => {
+            has_formal_ability(elem, ability, structs, enums, vectors)
         }
         _ => false,
     }
@@ -206,24 +240,7 @@ fn supports_clone_method(
     enums: &HashMap<String, EnumDef>,
     vectors: &HashMap<String, VectorDef>,
 ) -> bool {
-    match t {
-        Ty::Struct(name) if vectors.contains_key(name) => vectors
-            .get(name)
-            .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Clone)),
-        Ty::Struct(name) => structs
-            .get(name)
-            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Clone)),
-        Ty::Enum(name) => enums
-            .get(name)
-            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Clone)),
-        Ty::Vector(name, _) => vectors
-            .get(name)
-            .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Clone)),
-        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
-            supports_clone_method(elem, structs, enums, vectors)
-        }
-        _ => false,
-    }
+    has_formal_ability(t, Ability::Clone, structs, enums, vectors)
 }
 
 fn supports_decl_ability(
@@ -233,9 +250,6 @@ fn supports_decl_ability(
     enums: &HashMap<String, EnumDef>,
     vectors: &HashMap<String, VectorDef>,
 ) -> bool {
-    if matches!(ability, Ability::Drop) {
-        return supports_decl_drop_ability(t, structs, enums, vectors);
-    }
     if has_formal_ability(t, ability, structs, enums, vectors)
         || is_legacy_scalar_ability_carveout(t, ability)
     {
@@ -245,27 +259,6 @@ fn supports_decl_ability(
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) if !matches!(ability, Ability::Deref) => {
             supports_decl_ability(elem, ability, structs, enums, vectors)
         }
-        _ => false,
-    }
-}
-
-fn supports_decl_drop_ability(
-    t: &Ty,
-    structs: &HashMap<String, StructDef>,
-    enums: &HashMap<String, EnumDef>,
-    vectors: &HashMap<String, VectorDef>,
-) -> bool {
-    if is_legacy_scalar_ability_carveout(t, Ability::Drop) {
-        return true;
-    }
-    match t {
-        Ty::Struct(name) if vectors.contains_key(name) => false,
-        Ty::Struct(name) => structs
-            .get(name)
-            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop)),
-        Ty::Enum(name) => enums
-            .get(name)
-            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Drop)),
         _ => false,
     }
 }
@@ -310,16 +303,16 @@ fn supports_language_drop(
     enums: &HashMap<String, EnumDef>,
     vectors: &HashMap<String, VectorDef>,
 ) -> bool {
-    match method_receiver_owner_ty(t) {
-        Ty::Struct(name) if vectors.contains_key(name) => false,
-        Ty::Struct(name) => structs
-            .get(name)
-            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop)),
-        Ty::Enum(name) => enums
-            .get(name)
-            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Drop)),
-        _ => false,
+    if matches!(method_receiver_owner_ty(t), Ty::Fn(_, _)) {
+        return true;
     }
+    has_formal_ability(
+        method_receiver_owner_ty(t),
+        Ability::Drop,
+        structs,
+        enums,
+        vectors,
+    )
 }
 
 fn expr_contains_direct_self_clone(e: &Expr) -> bool {
@@ -1025,6 +1018,7 @@ struct MoveCtx<'a> {
     enums: &'a HashMap<String, EnumDef>,
     vectors: &'a HashMap<String, VectorDef>,
     fns: &'a HashMap<String, FnSig>,
+    captured_locals: HashSet<String>,
 }
 
 type MoveStates = HashMap<String, LocalMoveState>;
@@ -1044,6 +1038,7 @@ fn check_fn_moves(
         enums,
         vectors,
         fns: fn_sigs,
+        captured_locals: HashSet::new(),
     };
     let mut env: HashMap<String, Ty> = if f.is_quantum {
         enter_quant_scope(&HashMap::new())
@@ -1288,10 +1283,10 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::String
         | Ty::Qubit
         | Ty::Result
-        | Ty::Ptr(_)
-        | Ty::Fn(_, _) => true,
+        | Ty::Ptr(_) => true,
+        Ty::Fn(_, _) => false,
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
-        Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => true,
+        Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
         Ty::Struct(name) if name == COMPLEX_TYPE => true,
         Ty::Struct(name) if ctx.vectors.contains_key(name) => {
             let vector = ctx.vectors.get(name).expect("checked vector existence");
@@ -1341,6 +1336,11 @@ fn consume_ident_if_needed(
     }
     ensure_local_available(name, states)?;
     if matches!(mode, ExprMoveMode::Consume) && !is_copy_for_moves(ty, ctx) {
+        if ctx.captured_locals.contains(name) {
+            return Err(format!(
+                "cannot move captured variable `{name}` out of a closure environment"
+            ));
+        }
         states.insert(name.to_string(), LocalMoveState::Moved);
     }
     Ok(())
@@ -1371,6 +1371,33 @@ fn check_moves_args_fallback(
     Ok(())
 }
 
+fn is_runtime_owner_ty(t: &Ty) -> bool {
+    matches!(t, Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _))
+}
+
+fn check_moves_runtime_read_or_consume(
+    expr: &Expr,
+    env: &mut HashMap<String, Ty>,
+    states: &mut MoveStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    let ty = infer_expr(
+        expr,
+        env,
+        ctx.structs,
+        ctx.enums,
+        ctx.vectors,
+        ctx.fns,
+        None,
+    )?;
+    let mode = if is_runtime_owner_ty(&ty) {
+        ExprMoveMode::ReadOnly
+    } else {
+        ExprMoveMode::Consume
+    };
+    check_moves_expr(expr, env, states, ctx, Some(&ty), mode).map(|_| ())
+}
+
 fn check_moves_language_drop_arg(
     arg: &Expr,
     env: &mut HashMap<String, Ty>,
@@ -1378,9 +1405,16 @@ fn check_moves_language_drop_arg(
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     if let Expr::Ident(name) = arg {
-        if states.contains_key(name) {
+        if let Some(ty) = env.get(name).cloned() {
             ensure_local_available(name, states)?;
-            states.insert(name.clone(), LocalMoveState::Moved);
+            if !is_copy_for_moves(&ty, ctx) {
+                if ctx.captured_locals.contains(name) {
+                    return Err(format!(
+                        "cannot move captured variable `{name}` out of a closure environment"
+                    ));
+                }
+                states.insert(name.clone(), LocalMoveState::Moved);
+            }
             return Ok(());
         }
     }
@@ -1412,6 +1446,103 @@ fn check_moves_call(
 
     if name == DROP_METHOD && args.len() == 1 {
         return check_moves_language_drop_arg(&args[0], env, states, ctx);
+    }
+
+    if name == MATRIX_DROP || name == VECTOR_DROP {
+        if args.len() == 1 {
+            return check_moves_language_drop_arg(&args[0], env, states, ctx);
+        }
+    }
+
+    if name == MATRIX_CLONE
+        || name == MATRIX_ROWS
+        || name == MATRIX_COLS
+        || name == MATRIX_LEN
+        || name == MATRIX_REFCOUNT
+        || name == VECTOR_CLONE
+        || name == VECTOR_LEN
+        || name == VECTOR_REFCOUNT
+    {
+        if args.len() == 1 {
+            return check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)
+                .map(|_| ());
+        }
+    }
+
+    if name == MATRIX_GET && args.len() == 3 {
+        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[1],
+            env,
+            states,
+            ctx,
+            Some(&Ty::I32),
+            ExprMoveMode::Consume,
+        )?;
+        check_moves_expr(
+            &args[2],
+            env,
+            states,
+            ctx,
+            Some(&Ty::I32),
+            ExprMoveMode::Consume,
+        )?;
+        return Ok(());
+    }
+
+    if name == MATRIX_SET && args.len() == 4 {
+        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[1],
+            env,
+            states,
+            ctx,
+            Some(&Ty::I32),
+            ExprMoveMode::Consume,
+        )?;
+        check_moves_expr(
+            &args[2],
+            env,
+            states,
+            ctx,
+            Some(&Ty::I32),
+            ExprMoveMode::Consume,
+        )?;
+        check_moves_expr(&args[3], env, states, ctx, None, ExprMoveMode::Consume)?;
+        return Ok(());
+    }
+
+    if name == VECTOR_GET && args.len() == 2 {
+        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[1],
+            env,
+            states,
+            ctx,
+            Some(&Ty::I32),
+            ExprMoveMode::Consume,
+        )?;
+        return Ok(());
+    }
+
+    if name == VECTOR_SET && args.len() == 3 {
+        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(
+            &args[1],
+            env,
+            states,
+            ctx,
+            Some(&Ty::I32),
+            ExprMoveMode::Consume,
+        )?;
+        check_moves_expr(&args[2], env, states, ctx, None, ExprMoveMode::Consume)?;
+        return Ok(());
+    }
+
+    if name == OUTER && args.len() == 2 {
+        check_moves_expr(&args[0], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        check_moves_expr(&args[1], env, states, ctx, None, ExprMoveMode::ReadOnly)?;
+        return Ok(());
     }
 
     if let Some(def) = ctx.structs.get(name) {
@@ -1625,40 +1756,60 @@ fn check_moves_match_arm_bindings(
 }
 
 fn check_moves_closure(
+    is_move: bool,
     params: &[(String, Option<Ty>)],
     body: &Block,
     closure_ty: &Ty,
     outer_env: &HashMap<String, Ty>,
-    outer_states: &MoveStates,
+    outer_states: &mut MoveStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
     let Ty::Fn(param_tys, ret_ty) = closure_ty else {
         return Ok(());
     };
     let (captures, _) = closure_capture_names(params, body, outer_env);
+    let capture_set = captures.iter().cloned().collect::<HashSet<_>>();
     let mut closure_env = HashMap::new();
     let mut closure_states = MoveStates::new();
-    for name in captures {
-        if let Some(ty) = outer_env.get(&name) {
-            if outer_states.contains_key(&name) {
-                ensure_local_available(&name, outer_states)?;
+    for name in &captures {
+        if let Some(ty) = outer_env.get(name) {
+            if outer_states.contains_key(name) {
+                ensure_local_available(name, outer_states)?;
             }
             closure_env.insert(name.clone(), ty.clone());
-            closure_states.insert(name, LocalMoveState::Available);
+            closure_states.insert(name.clone(), LocalMoveState::Available);
         }
     }
     for ((name, _), ty) in params.iter().zip(param_tys) {
         closure_env.insert(name.clone(), ty.clone());
         closure_states.insert(name.clone(), LocalMoveState::Available);
     }
+    let closure_ctx = MoveCtx {
+        structs: ctx.structs,
+        enums: ctx.enums,
+        vectors: ctx.vectors,
+        fns: ctx.fns,
+        captured_locals: capture_set,
+    };
     check_moves_block(
         body,
         &mut closure_env,
         &mut closure_states,
-        ctx,
+        &closure_ctx,
         Some(ret_ty.as_ref()),
         Some(ret_ty.as_ref()),
-    )
+    )?;
+    if is_move {
+        for name in captures {
+            let Some(ty) = outer_env.get(&name) else {
+                continue;
+            };
+            if outer_states.contains_key(&name) && !is_copy_for_moves(ty, ctx) {
+                outer_states.insert(name, LocalMoveState::Moved);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn check_moves_expr(
@@ -1676,11 +1827,11 @@ fn check_moves_expr(
         Expr::Neg(inner) | Expr::Not(inner) | Expr::BitNot(inner) => {
             check_moves_expr(inner, env, states, ctx, None, ExprMoveMode::Consume)?;
         }
-        Expr::Add(l, r)
-        | Expr::Sub(l, r)
-        | Expr::Mul(l, r)
-        | Expr::VecDot(l, r)
-        | Expr::Div(l, r)
+        Expr::Add(l, r) | Expr::Sub(l, r) | Expr::Mul(l, r) | Expr::VecDot(l, r) => {
+            check_moves_runtime_read_or_consume(l, env, states, ctx)?;
+            check_moves_runtime_read_or_consume(r, env, states, ctx)?;
+        }
+        Expr::Div(l, r)
         | Expr::Rem(l, r)
         | Expr::BitAnd(l, r)
         | Expr::BitOr(l, r)
@@ -1714,9 +1865,12 @@ fn check_moves_expr(
                 check_moves_args_fallback(args, env, states, ctx)?;
             }
         }
-        Expr::Closure { params, body, .. } => {
-            check_moves_closure(params, body, &inferred, env, states, ctx)?
-        }
+        Expr::Closure {
+            is_move,
+            params,
+            body,
+            ..
+        } => check_moves_closure(*is_move, params, body, &inferred, env, states, ctx)?,
         Expr::StructLit { name, fields } => {
             if let Some(def) = ctx.structs.get(name) {
                 check_moves_struct_literal_fields(fields, &def.fields, env, states, ctx)?;
@@ -3141,7 +3295,19 @@ fn supports_closure_capture_ty(
     supports_decl_ability(ty, Ability::Copy, structs, enums, vectors)
 }
 
+fn supports_move_closure_capture_ty(
+    ty: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    supports_closure_capture_ty(ty, structs, enums, vectors)
+        || supports_language_drop(ty, structs, enums, vectors)
+        || matches!(ty, Ty::Fn(_, _))
+}
+
 fn infer_closure_expr(
+    is_move: bool,
     params: &[(String, Option<Ty>)],
     explicit_ret: Option<&Ty>,
     body: &Block,
@@ -3177,9 +3343,15 @@ fn infer_closure_expr(
         let ty = env
             .get(name)
             .expect("capture collection only uses outer env names");
-        if !supports_closure_capture_ty(ty, structs, enums, vectors) {
+        if is_move {
+            if !supports_move_closure_capture_ty(ty, structs, enums, vectors) {
+                return Err(format!(
+                    "move closure capture `{name}` requires `copy`, `drop`, or function-value ownership"
+                ));
+            }
+        } else if !supports_closure_capture_ty(ty, structs, enums, vectors) {
             return Err(format!(
-                "closure capture `{name}` requires `copy`; captured move/drop environments are not supported yet"
+                "closure capture `{name}` requires `copy`; use `move ||` to capture non-copy values by value"
             ));
         }
     }
@@ -3402,7 +3574,13 @@ fn infer_expr(
         Expr::Le(l, r) => infer_comparison_bin(l, r, env, structs, enums, vectors, fns, "<=", true),
         Expr::Gt(l, r) => infer_comparison_bin(l, r, env, structs, enums, vectors, fns, ">", true),
         Expr::Ge(l, r) => infer_comparison_bin(l, r, env, structs, enums, vectors, fns, ">=", true),
-        Expr::Closure { params, ret, body } => infer_closure_expr(
+        Expr::Closure {
+            is_move,
+            params,
+            ret,
+            body,
+        } => infer_closure_expr(
+            *is_move,
             params,
             ret.as_ref(),
             body,
@@ -3433,7 +3611,7 @@ fn infer_expr(
                 let value_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
                 if !supports_language_drop(&value_ty, structs, enums, vectors) {
                     return Err(format!(
-                        "`drop(x)` is only available for language-level drop structs/enums in this phase; got {value_ty:?}"
+                        "`drop(x)` requires value type {value_ty:?} to support `drop`"
                     ));
                 }
                 return Ok(Ty::Unit);
@@ -4266,7 +4444,7 @@ fn infer_expr(
                 let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
                 if !supports_clone_method(&recv_ty, structs, enums, vectors) {
                     return Err(format!(
-                        "method `{CLONE_METHOD}` requires receiver type {recv_ty:?} to declare `clone`; primitive/runtime clone integration is not available yet"
+                        "method `{CLONE_METHOD}` requires receiver type {recv_ty:?} to support `clone`"
                     ));
                 }
                 return Ok(recv_ty);

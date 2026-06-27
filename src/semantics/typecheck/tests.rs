@@ -170,6 +170,99 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_move_closure_capture() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 3 };
+    let read_fd: fn() -> i32 = move || handle.fd;
+    read_fd()
+}
+"#;
+    check_all(src).expect("move closure should capture a droppable non-copy value");
+}
+
+#[test]
+fn typecheck_rejects_use_after_move_closure_capture() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 3 };
+    let read_fd: fn() -> i32 = move || handle.fd;
+    handle.fd
+}
+"#;
+    let err = check_all(src).expect_err("move capture should move the source local");
+    assert!(err.contains("use of moved local `handle`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_moving_out_of_captured_closure_env() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 3 };
+    let consume: fn() -> () = move || {
+        drop(handle);
+    };
+    consume();
+    0
+}
+"#;
+    let err = check_all(src).expect_err("captured env values are not FnOnce captures yet");
+    assert!(
+        err.contains("cannot move captured variable `handle` out of a closure environment"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_allows_explicit_drop_of_function_value() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 3 };
+    let read_fd: fn() -> i32 = move || handle.fd;
+    drop(read_fd);
+    0
+}
+"#;
+    check_all(src).expect("function values own optional closure environments");
+}
+
+#[test]
 fn typecheck_rejects_assignment_to_captured_variable() {
     let src = r#"
 fn main() i32 {
@@ -1206,7 +1299,7 @@ fn main() i32 {
 }
 
 #[test]
-fn typecheck_rejects_derived_drop_for_runtime_handle_field() {
+fn typecheck_allows_derived_drop_for_runtime_handle_field() {
     let src = r#"
 struct MatrixOwner has drop {
     m: f64[],
@@ -1216,8 +1309,7 @@ fn main() i32 {
     0
 }
 "#;
-    let err = check_all(src).expect_err("runtime handles cannot derive drop yet");
-    assert!(err.contains("field `m` does not support it"), "{err}");
+    check_all(src).expect("runtime handles can now participate in derived drop");
 }
 
 #[test]
@@ -1600,7 +1692,7 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("clone method requires clone ability");
     assert!(err.contains("requires receiver type"), "{err}");
-    assert!(err.contains("declare `clone`"), "{err}");
+    assert!(err.contains("support `clone`"), "{err}");
 }
 
 #[test]
@@ -1621,7 +1713,7 @@ fn main() i32 {
 }
 
 #[test]
-fn typecheck_rejects_clone_method_for_primitives_and_runtime_handles_for_now() {
+fn typecheck_allows_clone_method_for_primitives_and_runtime_handles() {
     for src in [
         r#"
 fn main() i32 {
@@ -1651,12 +1743,26 @@ fn main() i32 {
 }
 "#,
     ] {
-        let err = check_all(src).expect_err("primitive/runtime clone is delayed");
-        assert!(
-            err.contains("primitive/runtime clone integration is not available yet"),
-            "{err}"
-        );
+        check_all(src).expect("primitive/runtime clone should typecheck");
     }
+}
+
+#[test]
+fn typecheck_allows_derived_clone_and_drop_for_runtime_owner_fields() {
+    let src = r#"
+struct Owner has clone, drop {
+    m: f64[],
+}
+
+fn main() i32 {
+    let owner = Owner { m: matrix([[1.0]]) };
+    let cloned = owner.clone();
+    drop(cloned);
+    drop(owner);
+    0
+}
+"#;
+    check_all(src).expect("runtime owner fields should support derived clone/drop");
 }
 
 #[test]
@@ -1770,8 +1876,7 @@ fn main() i32 {
     ] {
         let err = check_all(src).expect_err("deref should not imply other abilities");
         assert!(
-            err.contains("declare `clone`")
-                || err.contains("only available for language-level drop structs/enums"),
+            err.contains("support `clone`") || err.contains("support `drop`"),
             "{err}"
         );
     }
@@ -1892,7 +1997,7 @@ fn main() i32 {
 }
 
 #[test]
-fn typecheck_rejects_language_drop_for_primitives_and_runtime_handles_for_now() {
+fn typecheck_allows_language_drop_for_primitives_and_runtime_handles() {
     for src in [
         r#"
 fn main() i32 {
@@ -1923,12 +2028,21 @@ fn main() i32 {
 }
 "#,
     ] {
-        let err = check_all(src).expect_err("runtime drop integration is delayed");
-        assert!(
-            err.contains("only available for language-level drop structs/enums"),
-            "{err}"
-        );
+        check_all(src).expect("primitive/runtime drop should typecheck");
     }
+}
+
+#[test]
+fn typecheck_rejects_runtime_owner_use_after_move() {
+    let src = r#"
+fn main() i32 {
+    let m: f64[] = matrix([[1.0]]);
+    let moved = m;
+    matrix_rows(m)
+}
+"#;
+    let err = check_all(src).expect_err("Matrix moves should make the source unavailable");
+    assert!(err.contains("use of moved local `m`"), "{err}");
 }
 
 #[test]

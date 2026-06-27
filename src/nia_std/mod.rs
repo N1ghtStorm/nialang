@@ -2,7 +2,7 @@
 
 mod crypto_llvm;
 
-use crate::ast::{StructDef, Ty};
+use crate::ast::{Ability, StructDef, Ty};
 
 pub const PRINTLN: &str = "println";
 /// Array length: `len(arr)` → `i32` (compile-time size of `[T; N]`).
@@ -97,7 +97,7 @@ pub fn complex_ty() -> Ty {
 pub fn builtin_structs() -> Vec<StructDef> {
     vec![StructDef {
         name: COMPLEX_TYPE.into(),
-        abilities: Vec::new(),
+        abilities: vec![Ability::Copy, Ability::Clone, Ability::Drop],
         is_tuple: false,
         fields: vec![("re".into(), Ty::F64), ("im".into(), Ty::F64)],
     }]

@@ -1,7 +1,7 @@
 // Abilities phase 12 sample:
 // - closures can capture copy-safe values by value,
 // - function values are passed through the regular `fn(...) -> ...` type,
-// - non-copy resource captures are still delayed until move-capture/drop-env support.
+// - non-copy resource captures use the phase 14 `move ||` form.
 
 struct Offset has copy, clone {
     value: i32

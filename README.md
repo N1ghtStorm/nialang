@@ -212,12 +212,17 @@ println(vector_len(v));
 println(len(v));
 println(vector_refcount(v));
 
-let shared: f64<> = vector_clone(v);
+let shared: f64<> = v.clone();
 vector_set(shared, 1, 9.0);
 println(vector_get(v, 1));
-vector_drop(shared);
-vector_drop(v);
+drop(shared);
+drop(v);
 ```
+
+`Matrix`, heap anonymous vectors `T<>`, and dynamic lists `List[T]` support
+language-level `.clone()` and `drop(x)`. The older low-level helpers such as
+`matrix_clone`, `matrix_drop`, `vector_clone`, and `vector_drop` remain
+available for compatibility and internal lowering.
 
 ### Dynamic Lists
 
@@ -870,6 +875,8 @@ Good places to start:
 | `examples/abilities/drop_flags.nia` | uninitialized locals, overwrites, and drop flags |
 | `examples/abilities/aggregate_drop.nia` | derived struct/enum drop for user-defined values |
 | `examples/abilities/closure_captures.nia` | copy-safe closure captures and function values |
+| `examples/abilities/primitive_abilities.nia` | clone/drop for runtime primitives and aggregates |
+| `examples/abilities/move_closure_captures.nia` | `move ||` captures and closure environment cleanup |
 | `examples/sample_extern_lib.nia` | C ABI exports and shared-library mode |
 | `examples/quantum/qubit_create.nia` | QIR gates, rotations, measurement, and result recording |
 | `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |

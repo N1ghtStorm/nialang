@@ -181,6 +181,12 @@ fn lex_thin_arrow_for_function_types() {
 }
 
 #[test]
+fn lex_move_closure_keyword() {
+    let toks = collect("move ||");
+    assert_eq!(toks, vec![Token::Move, Token::Pipe, Token::Pipe]);
+}
+
+#[test]
 fn lex_bitwise_remainder_and_compound() {
     let toks = collect("a % b & c | d ^ ~e << f >> g %= h &= i |= j ^= k <<= l >>= m");
     assert_eq!(

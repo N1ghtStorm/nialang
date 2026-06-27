@@ -1,0 +1,22 @@
+// Abilities phase 14 sample:
+// - `move ||` captures a non-copy droppable value by value,
+// - the source local is moved into the closure environment,
+// - dropping the function value drops the captured environment.
+
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+        println(self.fd);
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 14 };
+    let read_fd: fn() -> i32 = move || handle.fd + 1;
+
+    println(read_fd());
+    0
+}

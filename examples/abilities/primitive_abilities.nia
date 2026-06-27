@@ -1,0 +1,41 @@
+// Abilities phase 13 sample:
+// - scalar and fixed aggregate clone/drop are language-level operations,
+// - Matrix, heap vectors, and List[T] use `.clone()` and `drop(x)`,
+// - structs can derive clone/drop through runtime-owned fields.
+
+struct RuntimeOwner has clone, drop {
+    matrix: f64[],
+    values: i32<>
+}
+
+fn main() i32 {
+    let m: f64[] = matrix([[1.0, 2.0], [3.0, 4.0]]);
+    let m_shared = m.clone();
+    println(matrix_rows(m_shared));
+    drop(m_shared);
+
+    let v: i32<> = <1, 2, 3>;
+    let v_shared = v.clone();
+    println(len(v_shared));
+    drop(v_shared);
+
+    let xs = list_new[i32]();
+    xs.push(10);
+    xs.push(20);
+    let ys = xs.clone();
+    println(ys.get(1));
+    drop(ys);
+    drop(xs);
+
+    let owner = RuntimeOwner {
+        matrix: matrix([[5.0]]),
+        values: <8, 13>
+    };
+    let owner_copy = owner.clone();
+    drop(owner_copy);
+    drop(owner);
+
+    drop(v);
+    drop(m);
+    0
+}

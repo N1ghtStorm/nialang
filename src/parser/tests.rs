@@ -660,6 +660,18 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_move_closure_literal() {
+    let src = r#"
+fn main() i32 {
+    let base: i32 = 10;
+    let add_base: fn(i32) -> i32 = move |x| x + base;
+    add_base(1)
+}
+"#;
+    parse_ok(src);
+}
+
+#[test]
 fn parse_inline_if_return_bool() {
     let src = r#"
 fn bar(foo: bool) i32 {

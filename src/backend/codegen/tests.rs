@@ -83,7 +83,7 @@ fn main() i32 {
         "IR:\n{ll}"
     );
     assert!(
-        ll.contains("insertvalue { ptr, ptr } poison, ptr @__nia_closure_0, 0"),
+        ll.contains("insertvalue { ptr, ptr, ptr } poison, ptr @__nia_closure_0, 0"),
         "IR:\n{ll}"
     );
     assert!(ll.contains("call i32 %"), "IR:\n{ll}");
@@ -110,6 +110,35 @@ fn main() i32 {
         "IR:\n{ll}"
     );
     assert!(ll.contains("call i32 %"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_move_closure_env_drop_glue() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 3 };
+    let read_fd: fn() -> i32 = move || handle.fd;
+    read_fd()
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal void @__nia_closure_0_drop(ptr %env)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call void @FileHandle__drop"), "IR:\n{ll}");
+    assert!(ll.contains("call void @free(ptr %env)"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue { ptr, ptr, ptr } %"), "IR:\n{ll}");
 }
 
 #[test]
@@ -338,33 +367,31 @@ fn main() i32 {
 fn codegen_explicit_drop_calls_custom_struct_drop() {
     let ll = emit(
         r#"
-struct MatrixOwner has drop {
-    m: f64[],
+struct FileHandle has drop {
+    fd: i32,
 }
 
-impl MatrixOwner {
+impl FileHandle {
     fn drop(self) {
-        matrix_drop(self.m);
+        println(self.fd);
     }
 }
 
 fn main() i32 {
-    let m: f64[] = matrix([[1.0]]);
-    let owner = MatrixOwner { m: m };
-    drop(owner);
+    let h = FileHandle { fd: 3 };
+    drop(h);
     0
 }
 "#,
     );
     assert!(
-        ll.contains("define internal void @MatrixOwner__drop(%struct.MatrixOwner %self)"),
+        ll.contains("define internal void @FileHandle__drop(%struct.FileHandle %self)"),
         "IR:\n{ll}"
     );
     assert!(
-        ll.contains("call void @MatrixOwner__drop(%struct.MatrixOwner %"),
+        ll.contains("call void @FileHandle__drop(%struct.FileHandle %"),
         "IR:\n{ll}"
     );
-    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
 }
 
 #[test]
@@ -835,6 +862,110 @@ fn main() i32 {
     assert!(ll.contains("list.get.bounds.ok"), "IR:\n{ll}");
     assert!(ll.contains("trunc i64"), "IR:\n{ll}");
     assert!(ll.contains("list.push.grow"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_matrix_clone_method_and_language_drop_use_rc_helpers() {
+    let src = r#"
+fn main() i32 {
+    let m: f64[] = matrix([[1.0, 2.0]]);
+    let shared = m.clone();
+    drop(shared);
+    drop(m);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("add i64"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
+    assert!(ll.contains("call void @free(ptr"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_heap_vector_clone_method_and_language_drop_use_rc_helpers() {
+    let src = r#"
+fn main() i32 {
+    let v: i32<> = <1, 2, 3>;
+    let shared = v.clone();
+    drop(shared);
+    drop(v);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("add i64"), "IR:\n{ll}");
+    assert!(ll.contains("heap.vector.drop.free"), "IR:\n{ll}");
+    assert!(ll.contains("call void @free(ptr"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_list_clone_and_language_drop_allocate_and_free() {
+    let src = r#"
+struct Token has clone, drop {
+    id: i32,
+}
+
+impl Token {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let xs = list_new[Token]();
+    xs.push(Token { id: 1 });
+    xs.push(Token { id: 2 });
+    let ys = xs.clone();
+    drop(ys);
+    drop(xs);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("list.clone.loop"), "IR:\n{ll}");
+    assert!(ll.contains("list.drop.loop"), "IR:\n{ll}");
+    assert!(
+        ll.matches("call ptr @malloc(i64 24)").count() >= 2,
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call void @free(ptr"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_derived_struct_drop_drops_runtime_handle_field() {
+    let src = r#"
+struct Owner has drop {
+    m: f64[],
+}
+
+fn main() i32 {
+    let owner = Owner { m: matrix([[1.0]]) };
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("%owner.drop = alloca i1"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_derived_struct_clone_clones_runtime_handle_field() {
+    let src = r#"
+struct Owner has clone, drop {
+    m: f64[],
+}
+
+fn main() i32 {
+    let owner = Owner { m: matrix([[1.0]]) };
+    let cloned = owner.clone();
+    drop(cloned);
+    drop(owner);
+    0
+}
+"#;
+    let ll = emit(src);
+    assert!(ll.contains("extractvalue %struct.Owner"), "IR:\n{ll}");
+    assert!(ll.contains("add i64"), "IR:\n{ll}");
+    assert!(ll.contains("matrix.drop.free"), "IR:\n{ll}");
 }
 
 #[test]

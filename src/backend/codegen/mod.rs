@@ -672,7 +672,7 @@ fn emit_vector_print_constants(vectors: &[VectorDef]) -> String {
 
 /// Maps high-level nialang type into LLVM IR textual type.
 fn fn_value_ll_ty() -> &'static str {
-    "{ ptr, ptr }"
+    "{ ptr, ptr, ptr }"
 }
 
 fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
@@ -848,6 +848,23 @@ fn supports_clone_method_ty(
     vectors: &[VectorDef],
 ) -> bool {
     match t {
+        Ty::Unit
+        | Ty::Bool
+        | Ty::I8
+        | Ty::U8
+        | Ty::I16
+        | Ty::U16
+        | Ty::I32
+        | Ty::I64
+        | Ty::U64
+        | Ty::I128
+        | Ty::Isize
+        | Ty::Usize
+        | Ty::U128
+        | Ty::F16
+        | Ty::F32
+        | Ty::F64
+        | Ty::String => true,
         Ty::Struct(name) => {
             vectors
                 .iter()
@@ -867,6 +884,9 @@ fn supports_clone_method_ty(
             .find(|v| v.name == *name)
             .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Clone)),
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
+            supports_clone_method_ty(elem, structs, enums, vectors)
+        }
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
             supports_clone_method_ty(elem, structs, enums, vectors)
         }
         _ => false,
@@ -1022,7 +1042,7 @@ impl<'a> Gen<'a> {
         format!("{prefix}.{n}")
     }
 
-    fn emit_fn_value(&mut self, code: &str, env: &str) -> String {
+    fn emit_fn_value(&mut self, code: &str, env: &str, drop: &str) -> String {
         let with_code = self.fresh();
         writeln!(
             self.out,
@@ -1042,7 +1062,17 @@ impl<'a> Gen<'a> {
             env
         )
         .unwrap();
-        format!("%{with_env}")
+        let with_drop = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = insertvalue {} %{}, ptr {}, 2",
+            with_drop,
+            fn_value_ll_ty(),
+            with_env,
+            drop
+        )
+        .unwrap();
+        format!("%{with_drop}")
     }
 
     fn closure_env_ll_ty(captures: &[(String, Ty)]) -> String {
@@ -1154,14 +1184,47 @@ impl<'a> Gen<'a> {
 
     fn is_language_drop_ty(&self, ty: &Ty) -> bool {
         match method_receiver_owner_ty(ty) {
-            Ty::Struct(name) => self
-                .struct_def(name)
-                .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop)),
+            Ty::Struct(name) if self.vectors.iter().any(|v| v.name == *name) => self
+                .vectors
+                .iter()
+                .find(|v| v.name == *name)
+                .is_some_and(|v| {
+                    has_declared_ability(&v.abilities, Ability::Drop)
+                        && self.is_language_drop_ty(&v.ty)
+                }),
+            Ty::Struct(name) => self.struct_def(name).is_some_and(|s| {
+                has_declared_ability(&s.abilities, Ability::Drop)
+                    && (self.has_custom_drop_ty(ty)
+                        || s.fields
+                            .iter()
+                            .any(|(_, field_ty)| self.is_language_drop_ty(field_ty)))
+            }),
             Ty::Enum(name) => self
                 .enums
                 .iter()
                 .find(|e| e.name == *name)
-                .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Drop)),
+                .is_some_and(|e| {
+                    has_declared_ability(&e.abilities, Ability::Drop)
+                        && e.variants.iter().any(|variant| match &variant.fields {
+                            EnumVariantFields::Unit => false,
+                            EnumVariantFields::Tuple(fields) => fields
+                                .iter()
+                                .any(|field_ty| self.is_language_drop_ty(field_ty)),
+                            EnumVariantFields::Struct(fields) => fields
+                                .iter()
+                                .any(|(_, field_ty)| self.is_language_drop_ty(field_ty)),
+                        })
+                }),
+            Ty::Vector(name, elem) => {
+                self.vectors
+                    .iter()
+                    .find(|v| v.name == *name)
+                    .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Drop))
+                    && self.is_language_drop_ty(elem)
+            }
+            Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_language_drop_ty(elem),
+            Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => true,
+            Ty::Fn(_, _) => true,
             _ => false,
         }
     }
@@ -1185,6 +1248,443 @@ impl<'a> Gen<'a> {
         .unwrap();
     }
 
+    fn emit_matrix_clone_value(&mut self, matrix_ty: &Ty, matrix: &str) -> String {
+        let rc_ptr = self.matrix_field_ptr(matrix, 0);
+        let old = self.fresh();
+        let new = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", new, old).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
+        debug_assert!(matches!(matrix_ty, Ty::Matrix(_, _)));
+        matrix.to_string()
+    }
+
+    fn emit_matrix_drop_value(&mut self, matrix: &str) {
+        let rc_ptr = self.matrix_field_ptr(matrix, 0);
+        let old = self.fresh();
+        let new = self.fresh();
+        let is_zero = self.fresh();
+        let free_lbl = self.fresh_label("matrix.drop.free");
+        let cont_lbl = self.fresh_label("matrix.drop.cont");
+        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = sub i64 %{}, 1", new, old).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_zero, new).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_zero, free_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", free_lbl).unwrap();
+        let data = self.matrix_load_data_ptr(matrix);
+        writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
+        writeln!(self.out, "  call void @free(ptr {})", matrix).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
+    fn emit_heap_vector_clone_value(&mut self, vector_ty: &Ty, vector: &str) -> String {
+        let rc_ptr = self.heap_vector_field_ptr(vector, 0);
+        let old = self.fresh();
+        let new = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", new, old).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
+        debug_assert!(matches!(vector_ty, Ty::HeapVector(_)));
+        vector.to_string()
+    }
+
+    fn emit_drop_linear_elements(
+        &mut self,
+        data: &str,
+        len: &str,
+        elem_ty: &Ty,
+        label_prefix: &str,
+    ) {
+        if !self.is_language_drop_ty(elem_ty) {
+            return;
+        }
+        let idx_addr = self.fresh();
+        let loop_lbl = self.fresh_label(&format!("{label_prefix}.drop.loop"));
+        let body_lbl = self.fresh_label(&format!("{label_prefix}.drop.body"));
+        let cont_lbl = self.fresh_label(&format!("{label_prefix}.drop.cont"));
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", loop_lbl).unwrap();
+        writeln!(self.out, "{}:", loop_lbl).unwrap();
+        let idx = self.fresh();
+        let keep_going = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, {}",
+            keep_going, idx, len
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            keep_going, body_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let cell = self.heap_vector_data_cell_ptr(data, &format!("%{idx}"), elem_ty);
+        let value = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            value,
+            llvm_ty(elem_ty, self.structs),
+            cell
+        )
+        .unwrap();
+        self.emit_drop_value(elem_ty, format!("%{value}"));
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", loop_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
+    fn emit_heap_vector_drop_value(&mut self, elem_ty: &Ty, vector: &str) {
+        let rc_ptr = self.heap_vector_field_ptr(vector, 0);
+        let old = self.fresh();
+        let new = self.fresh();
+        let is_zero = self.fresh();
+        let free_lbl = self.fresh_label("heap.vector.drop.free");
+        let cont_lbl = self.fresh_label("heap.vector.drop.cont");
+        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = sub i64 %{}, 1", new, old).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_zero, new).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_zero, free_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", free_lbl).unwrap();
+        let len = self.heap_vector_load_i64_field(vector, 2);
+        let data = self.heap_vector_load_data_ptr(vector);
+        self.emit_drop_linear_elements(&data, &len, elem_ty, "heap.vector");
+        writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
+        writeln!(self.out, "  call void @free(ptr {})", vector).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
+    fn emit_list_drop_value(&mut self, elem_ty: &Ty, list: &str) {
+        let len = self.list_load_i64_field(list, 1);
+        let data = self.list_load_data_ptr(list);
+        self.emit_drop_linear_elements(&data, &len, elem_ty, "list");
+        writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
+        writeln!(self.out, "  call void @free(ptr {})", list).unwrap();
+    }
+
+    fn emit_list_clone_value(&mut self, elem_ty: &Ty, list: &str) -> String {
+        let len = self.list_load_i64_field(list, 1);
+        let out = self.emit_list_alloc(elem_ty, &len);
+        let idx_addr = self.fresh();
+        let loop_lbl = self.fresh_label("list.clone.loop");
+        let body_lbl = self.fresh_label("list.clone.body");
+        let cont_lbl = self.fresh_label("list.clone.cont");
+        writeln!(self.out, "  %{} = alloca i64", idx_addr).unwrap();
+        writeln!(self.out, "  store i64 0, ptr %{}", idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", loop_lbl).unwrap();
+        writeln!(self.out, "{}:", loop_lbl).unwrap();
+        let idx = self.fresh();
+        let keep_going = self.fresh();
+        writeln!(self.out, "  %{} = load i64, ptr %{}", idx, idx_addr).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = icmp slt i64 %{}, {}",
+            keep_going, idx, len
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            keep_going, body_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", body_lbl).unwrap();
+        let data = self.list_load_data_ptr(list);
+        let cell = self.heap_vector_data_cell_ptr(&data, &format!("%{idx}"), elem_ty);
+        let value = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            value,
+            llvm_ty(elem_ty, self.structs),
+            cell
+        )
+        .unwrap();
+        let cloned = self.emit_clone_value(elem_ty, &format!("%{value}"));
+        self.emit_list_push_value(&out, elem_ty, &cloned);
+        let next = self.fresh();
+        writeln!(self.out, "  %{} = add i64 %{}, 1", next, idx).unwrap();
+        writeln!(self.out, "  store i64 %{}, ptr %{}", next, idx_addr).unwrap();
+        writeln!(self.out, "  br label %{}", loop_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        out
+    }
+
+    fn emit_clone_array_value(&mut self, elem_ty: &Ty, n: usize, value: &str, ty: &Ty) -> String {
+        let arr_ll = llvm_ty(ty, self.structs);
+        let elem_ll = llvm_ty(elem_ty, self.structs);
+        let mut agg = "poison".to_string();
+        for idx in 0..n {
+            let field = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                field, arr_ll, value, idx
+            )
+            .unwrap();
+            let cloned = self.emit_clone_value(elem_ty, &format!("%{field}"));
+            let next = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} {}, {}",
+                next, arr_ll, agg, elem_ll, cloned, idx
+            )
+            .unwrap();
+            agg = format!("%{next}");
+        }
+        agg
+    }
+
+    fn emit_clone_struct_fields(
+        &mut self,
+        out_ty: &Ty,
+        fields: &[(String, Ty)],
+        value: &str,
+    ) -> String {
+        let struct_ll = llvm_ty(out_ty, self.structs);
+        let mut agg = "poison".to_string();
+        for (idx, (_, field_ty)) in fields.iter().enumerate() {
+            let field = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                field, struct_ll, value, idx
+            )
+            .unwrap();
+            let cloned = self.emit_clone_value(field_ty, &format!("%{field}"));
+            let next = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} {}, {} {}, {}",
+                next,
+                struct_ll,
+                agg,
+                llvm_ty(field_ty, self.structs),
+                cloned,
+                idx
+            )
+            .unwrap();
+            agg = format!("%{next}");
+        }
+        agg
+    }
+
+    fn emit_clone_enum_value(&mut self, enum_name: &str, value: &str) -> String {
+        let edef = self
+            .enums
+            .iter()
+            .find(|e| e.name == enum_name)
+            .cloned()
+            .expect("typechecked enum clone");
+        let enum_ll = format!("%enum.{}", sanitize(enum_name));
+        let out_slot = self.fresh();
+        writeln!(self.out, "  %{} = alloca {}", out_slot, enum_ll).unwrap();
+        let tag = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 0",
+            tag, enum_ll, value
+        )
+        .unwrap();
+        let cont_lbl = self.fresh_label("clone.enum.cont");
+        let default_lbl = self.fresh_label("clone.enum.default");
+        let arm_labels = edef
+            .variants
+            .iter()
+            .map(|_| self.fresh_label("clone.enum.arm"))
+            .collect::<Vec<_>>();
+        writeln!(self.out, "  switch i32 %{}, label %{} [", tag, default_lbl).unwrap();
+        for (idx, lbl) in arm_labels.iter().enumerate() {
+            writeln!(self.out, "    i32 {}, label %{}", idx, lbl).unwrap();
+        }
+        writeln!(self.out, "  ]").unwrap();
+        writeln!(self.out, "{}:", default_lbl).unwrap();
+        writeln!(self.out, "  store {} {}, ptr %{}", enum_ll, value, out_slot).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        for (idx, (variant, lbl)) in edef.variants.iter().zip(&arm_labels).enumerate() {
+            writeln!(self.out, "{}:", lbl).unwrap();
+            let with_tag = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} poison, i32 {}, 0",
+                with_tag, enum_ll, idx
+            )
+            .unwrap();
+            let payload_idx = idx + 1;
+            let payload = match &variant.fields {
+                EnumVariantFields::Unit => {
+                    let payload_ll = enum_variant_payload_ty(variant, self.structs);
+                    (payload_ll, "zeroinitializer".to_string())
+                }
+                EnumVariantFields::Tuple(ts) if ts.len() == 1 => {
+                    let payload_ll = llvm_ty(&ts[0], self.structs);
+                    let raw = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        raw, enum_ll, value, payload_idx
+                    )
+                    .unwrap();
+                    let cloned = self.emit_clone_value(&ts[0], &format!("%{raw}"));
+                    (payload_ll, cloned)
+                }
+                EnumVariantFields::Tuple(ts) => {
+                    let payload_ll = enum_variant_payload_ty(variant, self.structs);
+                    let raw_payload = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        raw_payload, enum_ll, value, payload_idx
+                    )
+                    .unwrap();
+                    let mut agg = "poison".to_string();
+                    for (field_idx, field_ty) in ts.iter().enumerate() {
+                        let raw = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = extractvalue {} %{}, {}",
+                            raw, payload_ll, raw_payload, field_idx
+                        )
+                        .unwrap();
+                        let cloned = self.emit_clone_value(field_ty, &format!("%{raw}"));
+                        let next = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = insertvalue {} {}, {} {}, {}",
+                            next,
+                            payload_ll,
+                            agg,
+                            llvm_ty(field_ty, self.structs),
+                            cloned,
+                            field_idx
+                        )
+                        .unwrap();
+                        agg = format!("%{next}");
+                    }
+                    (payload_ll, agg)
+                }
+                EnumVariantFields::Struct(fs) => {
+                    let payload_ll = enum_variant_payload_ty(variant, self.structs);
+                    let raw_payload = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        raw_payload, enum_ll, value, payload_idx
+                    )
+                    .unwrap();
+                    let mut agg = "poison".to_string();
+                    for (field_idx, (_, field_ty)) in fs.iter().enumerate() {
+                        let raw = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = extractvalue {} %{}, {}",
+                            raw, payload_ll, raw_payload, field_idx
+                        )
+                        .unwrap();
+                        let cloned = self.emit_clone_value(field_ty, &format!("%{raw}"));
+                        let next = self.fresh();
+                        writeln!(
+                            self.out,
+                            "  %{} = insertvalue {} {}, {} {}, {}",
+                            next,
+                            payload_ll,
+                            agg,
+                            llvm_ty(field_ty, self.structs),
+                            cloned,
+                            field_idx
+                        )
+                        .unwrap();
+                        agg = format!("%{next}");
+                    }
+                    (payload_ll, agg)
+                }
+            };
+            let out = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = insertvalue {} %{}, {} {}, {}",
+                out, enum_ll, with_tag, payload.0, payload.1, payload_idx
+            )
+            .unwrap();
+            writeln!(self.out, "  store {} %{}, ptr %{}", enum_ll, out, out_slot).unwrap();
+            writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        }
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load {}, ptr %{}", out, enum_ll, out_slot).unwrap();
+        format!("%{out}")
+    }
+
+    fn emit_clone_value(&mut self, ty: &Ty, value: &str) -> String {
+        let symbol = method_symbol(method_receiver_owner_ty(ty), CLONE_METHOD);
+        if let Some((params, Some(ret_ty))) = self
+            .fn_sigs
+            .get(&symbol)
+            .map(|sig| (sig.params.clone(), sig.ret.clone()))
+        {
+            debug_assert_eq!(params.len(), 1);
+            let (self_arg_ty, self_arg_val) =
+                self.emit_method_self_arg(ty, value.to_string(), &params[0]);
+            let tmp = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = call {} @{}({} {})",
+                tmp,
+                llvm_ty(&ret_ty, self.structs),
+                sanitize(&symbol),
+                llvm_ty(&self_arg_ty, self.structs),
+                self_arg_val
+            )
+            .unwrap();
+            return format!("%{tmp}");
+        }
+        match method_receiver_owner_ty(ty) {
+            Ty::Array(elem_ty, n) | Ty::AnonVector(elem_ty, n) => {
+                self.emit_clone_array_value(elem_ty, *n, value, ty)
+            }
+            Ty::HeapVector(_) => self.emit_heap_vector_clone_value(ty, value),
+            Ty::List(elem_ty) => self.emit_list_clone_value(elem_ty, value),
+            Ty::Matrix(_, _) => self.emit_matrix_clone_value(ty, value),
+            Ty::Struct(name) if self.vector_def(name).is_some() => {
+                let vdef = self.vector_def(name).cloned().expect("checked vector");
+                let fields = vdef
+                    .fields
+                    .iter()
+                    .map(|field| (field.clone(), vdef.ty.clone()))
+                    .collect::<Vec<_>>();
+                self.emit_clone_struct_fields(ty, &fields, value)
+            }
+            Ty::Struct(name) => {
+                let Some(sdef) = self.struct_def(name).cloned() else {
+                    return value.to_string();
+                };
+                self.emit_clone_struct_fields(ty, &sdef.fields, value)
+            }
+            Ty::Enum(name) => self.emit_clone_enum_value(name, value),
+            _ => value.to_string(),
+        }
+    }
+
     fn is_copy_like_ty(&self, ty: &Ty) -> bool {
         match ty {
             Ty::Unit
@@ -1206,10 +1706,10 @@ impl<'a> Gen<'a> {
             | Ty::String
             | Ty::Qubit
             | Ty::Result
-            | Ty::Ptr(_)
-            | Ty::Fn(_, _) => true,
+            | Ty::Ptr(_) => true,
+            Ty::Fn(_, _) => false,
             Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_copy_like_ty(elem),
-            Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => true,
+            Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
             Ty::Struct(name) if name == crate::nia_std::COMPLEX_TYPE => true,
             Ty::Struct(name) => {
                 self.structs
@@ -1260,8 +1760,98 @@ impl<'a> Gen<'a> {
         .unwrap();
     }
 
+    fn emit_fn_value_drop(&mut self, value: &str) {
+        let drop_fn = self.fresh();
+        let has_drop = self.fresh();
+        let drop_lbl = self.fresh_label("fn.drop.env");
+        let cont_lbl = self.fresh_label("fn.drop.cont");
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 2",
+            drop_fn,
+            fn_value_ll_ty(),
+            value
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = icmp ne ptr %{}, null", has_drop, drop_fn).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            has_drop, drop_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", drop_lbl).unwrap();
+        let env = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = extractvalue {} {}, 1",
+            env,
+            fn_value_ll_ty(),
+            value
+        )
+        .unwrap();
+        writeln!(self.out, "  call void %{}(ptr %{})", drop_fn, env).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
     fn emit_drop_value(&mut self, ty: &Ty, value: String) {
         match method_receiver_owner_ty(ty) {
+            Ty::Array(elem_ty, n) | Ty::AnonVector(elem_ty, n) => {
+                if !self.is_language_drop_ty(elem_ty) {
+                    return;
+                }
+                let arr_ll = llvm_ty(ty, self.structs);
+                for idx in (0..*n).rev() {
+                    let elem = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        elem, arr_ll, value, idx
+                    )
+                    .unwrap();
+                    self.emit_drop_value(elem_ty, format!("%{elem}"));
+                }
+            }
+            Ty::HeapVector(elem_ty) => self.emit_heap_vector_drop_value(elem_ty, &value),
+            Ty::List(elem_ty) => self.emit_list_drop_value(elem_ty, &value),
+            Ty::Matrix(_, _) => self.emit_matrix_drop_value(&value),
+            Ty::Vector(name, elem_ty) => {
+                let Some(vdef) = self.vector_def(name).cloned() else {
+                    return;
+                };
+                if !self.is_language_drop_ty(elem_ty) {
+                    return;
+                }
+                let vector_ll = llvm_ty(ty, self.structs);
+                for idx in (0..vdef.fields.len()).rev() {
+                    let field = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        field, vector_ll, value, idx
+                    )
+                    .unwrap();
+                    self.emit_drop_value(elem_ty, format!("%{field}"));
+                }
+            }
+            Ty::Struct(name) if self.vector_def(name).is_some() => {
+                let vdef = self.vector_def(name).cloned().expect("checked vector");
+                if !self.is_language_drop_ty(&vdef.ty) {
+                    return;
+                }
+                let vector_ll = format!("%struct.{}", sanitize(name));
+                for idx in (0..vdef.fields.len()).rev() {
+                    let field = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} {}, {}",
+                        field, vector_ll, value, idx
+                    )
+                    .unwrap();
+                    self.emit_drop_value(&vdef.ty, format!("%{field}"));
+                }
+            }
             Ty::Struct(name) => {
                 if self.has_custom_drop_ty(ty) {
                     self.emit_custom_drop_call(ty, value.clone());
@@ -1269,6 +1859,7 @@ impl<'a> Gen<'a> {
                 self.emit_drop_struct_fields(name, &value);
             }
             Ty::Enum(name) => self.emit_drop_enum_value(name, &value),
+            Ty::Fn(_, _) => self.emit_fn_value_drop(&value),
             _ => {}
         }
     }
@@ -1499,6 +2090,25 @@ impl<'a> Gen<'a> {
         }
     }
 
+    fn is_runtime_owner_ty(&self, ty: &Ty) -> bool {
+        matches!(ty, Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _))
+    }
+
+    fn clear_runtime_read_or_consumed_expr(
+        &mut self,
+        expr: &Expr,
+        locals: &HashMap<String, (Ty, String)>,
+        drop_flags: &HashMap<String, String>,
+    ) {
+        let ty = self.expr_codegen_ty(expr, locals);
+        self.clear_consumed_custom_drop_locals_expr(
+            expr,
+            locals,
+            drop_flags,
+            !self.is_runtime_owner_ty(&ty),
+        );
+    }
+
     fn clear_consumed_custom_drop_locals_expr(
         &mut self,
         expr: &Expr,
@@ -1523,11 +2133,11 @@ impl<'a> Gen<'a> {
             Expr::AddrOf(inner) | Expr::Deref(inner) | Expr::Field(inner, _) => {
                 self.clear_consumed_custom_drop_locals_expr(inner, locals, drop_flags, false);
             }
-            Expr::Add(l, r)
-            | Expr::Sub(l, r)
-            | Expr::Mul(l, r)
-            | Expr::VecDot(l, r)
-            | Expr::Div(l, r)
+            Expr::Add(l, r) | Expr::Sub(l, r) | Expr::Mul(l, r) | Expr::VecDot(l, r) => {
+                self.clear_runtime_read_or_consumed_expr(l, locals, drop_flags);
+                self.clear_runtime_read_or_consumed_expr(r, locals, drop_flags);
+            }
+            Expr::Div(l, r)
             | Expr::Rem(l, r)
             | Expr::BitAnd(l, r)
             | Expr::BitOr(l, r)
@@ -1545,11 +2155,53 @@ impl<'a> Gen<'a> {
                 self.clear_consumed_custom_drop_locals_expr(r, locals, drop_flags, true);
             }
             Expr::Call { name, args } => {
-                if name == DROP_METHOD {
+                if name == DROP_METHOD || name == MATRIX_DROP || name == VECTOR_DROP {
                     if let Some(Expr::Ident(arg_name)) = args.first() {
                         self.clear_drop_flag_for_local(arg_name, locals, drop_flags, true);
                     } else if let Some(arg) = args.first() {
                         self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                    }
+                    return;
+                }
+                if name == MATRIX_CLONE
+                    || name == MATRIX_ROWS
+                    || name == MATRIX_COLS
+                    || name == MATRIX_LEN
+                    || name == MATRIX_REFCOUNT
+                    || name == VECTOR_CLONE
+                    || name == VECTOR_LEN
+                    || name == VECTOR_REFCOUNT
+                {
+                    for arg in args {
+                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, false);
+                    }
+                    return;
+                }
+                if name == MATRIX_GET || name == VECTOR_GET {
+                    if let Some(first) = args.first() {
+                        self.clear_consumed_custom_drop_locals_expr(
+                            first, locals, drop_flags, false,
+                        );
+                    }
+                    for arg in args.iter().skip(1) {
+                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                    }
+                    return;
+                }
+                if name == MATRIX_SET || name == VECTOR_SET {
+                    if let Some(first) = args.first() {
+                        self.clear_consumed_custom_drop_locals_expr(
+                            first, locals, drop_flags, false,
+                        );
+                    }
+                    for arg in args.iter().skip(1) {
+                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                    }
+                    return;
+                }
+                if name == OUTER {
+                    for arg in args {
+                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, false);
                     }
                     return;
                 }
@@ -1602,7 +2254,16 @@ impl<'a> Gen<'a> {
                 name,
                 args,
             } => {
-                if name == CLONE_METHOD || name == TO_MATRIX || name == TO_ARRAY || name == TO_VEC {
+                if name == CLONE_METHOD
+                    || name == TO_MATRIX
+                    || name == TO_ARRAY
+                    || name == TO_VEC
+                    || name == "det"
+                    || name == LIST_LEN
+                    || name == LIST_CAPACITY
+                    || name == LIST_GET
+                    || name == LIST_PUSH
+                {
                     self.clear_consumed_custom_drop_locals_expr(
                         receiver, locals, drop_flags, false,
                     );
@@ -1656,7 +2317,27 @@ impl<'a> Gen<'a> {
                     self.clear_consumed_custom_drop_locals_expr(arm, locals, drop_flags, true);
                 }
             }
-            Expr::Closure { .. } => {}
+            Expr::Closure {
+                is_move,
+                params,
+                body,
+                ..
+            } => {
+                if *is_move {
+                    let outer_env = locals
+                        .iter()
+                        .map(|(name, (ty, _))| (name.clone(), ty.clone()))
+                        .collect::<HashMap<_, _>>();
+                    let (captures, _) = closure_capture_names(params, body, &outer_env);
+                    for name in captures {
+                        if let Some((ty, _)) = locals.get(&name) {
+                            if !self.is_copy_like_ty(ty) {
+                                self.clear_drop_flag_for_local(&name, locals, drop_flags, true);
+                            }
+                        }
+                    }
+                }
+            }
             Expr::Quant { body } | Expr::Gpu { body } => {
                 for st in &body.stmts {
                     self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
@@ -1819,8 +2500,55 @@ impl<'a> Gen<'a> {
         wrapper
     }
 
+    fn emit_closure_drop_def(&self, name: &str, captures: &[(String, Ty)]) -> String {
+        let mut drop_gen = Gen::new(
+            self.structs,
+            self.enums,
+            self.vectors,
+            self.fn_sigs,
+            self.str_lit_syms,
+            self.mode,
+            self.closures.clone(),
+        );
+        let env_ll = Self::closure_env_ll_ty(captures);
+        writeln!(
+            drop_gen.out,
+            "define internal void @{}(ptr %env) {{",
+            sanitize(name)
+        )
+        .unwrap();
+        writeln!(drop_gen.out, "entry:").unwrap();
+        for (idx, (_, capture_ty)) in captures.iter().enumerate().rev() {
+            if !drop_gen.is_language_drop_ty(capture_ty) {
+                continue;
+            }
+            let field_ptr = drop_gen.fresh();
+            writeln!(
+                drop_gen.out,
+                "  %{} = getelementptr inbounds {}, ptr %env, i32 0, i32 {}",
+                field_ptr, env_ll, idx
+            )
+            .unwrap();
+            let value = drop_gen.fresh();
+            writeln!(
+                drop_gen.out,
+                "  %{} = load {}, ptr %{}",
+                value,
+                llvm_ty(capture_ty, drop_gen.structs),
+                field_ptr
+            )
+            .unwrap();
+            drop_gen.emit_drop_value(capture_ty, format!("%{value}"));
+        }
+        writeln!(drop_gen.out, "  call void @free(ptr %env)").unwrap();
+        writeln!(drop_gen.out, "  ret void").unwrap();
+        writeln!(drop_gen.out, "}}").unwrap();
+        drop_gen.out
+    }
+
     fn emit_closure_literal(
         &mut self,
+        _is_move: bool,
         params: &[(String, Option<Ty>)],
         explicit_ret: Option<&Ty>,
         body: &Block,
@@ -1862,8 +2590,8 @@ impl<'a> Gen<'a> {
             .filter_map(|name| outer_env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect::<Vec<_>>();
         let env_ll = Self::closure_env_ll_ty(&captures);
-        let env_value = if captures.is_empty() {
-            "null".to_string()
+        let (env_value, drop_value) = if captures.is_empty() {
+            ("null".to_string(), "null".to_string())
         } else {
             let sz = self.emit_sizeof_ll_ty_i64(&env_ll);
             let env = self.fresh();
@@ -1887,7 +2615,10 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
             }
-            format!("%{env}")
+            let drop_name = format!("{name}_drop");
+            let drop_def = self.emit_closure_drop_def(&drop_name, &captures);
+            self.closures.borrow_mut().defs.push(drop_def);
+            (format!("%{env}"), format!("@{}", sanitize(&drop_name)))
         };
         let f = FnDef {
             name: name.clone(),
@@ -1922,7 +2653,7 @@ impl<'a> Gen<'a> {
         self.closures.borrow_mut().defs.push(def);
         (
             Ty::Fn(param_tys, Box::new(ret_ty)),
-            self.emit_fn_value(&format!("@{}", sanitize(&name)), &env_value),
+            self.emit_fn_value(&format!("@{}", sanitize(&name)), &env_value, &drop_value),
         )
     }
 
@@ -1968,6 +2699,10 @@ impl<'a> Gen<'a> {
     /// Looks up struct definition by source-level name.
     fn struct_def(&self, name: &str) -> Option<&StructDef> {
         self.structs.iter().find(|s| s.name == name)
+    }
+
+    fn vector_def(&self, name: &str) -> Option<&VectorDef> {
+        self.vectors.iter().find(|v| v.name == name)
     }
 
     fn enum_tag(&self, enum_name: &str, variant: &str) -> Option<i32> {
@@ -4128,13 +4863,8 @@ impl<'a> Gen<'a> {
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
         let (matrix_ty, matrix) = self.emit_expr(&args[0], locals, None);
-        let rc_ptr = self.matrix_field_ptr(&matrix, 0);
-        let old = self.fresh();
-        let new = self.fresh();
-        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = add i64 %{}, 1", new, old).unwrap();
-        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
-        (matrix_ty, matrix)
+        let cloned = self.emit_matrix_clone_value(&matrix_ty, &matrix);
+        (matrix_ty, cloned)
     }
 
     fn emit_matrix_drop(
@@ -4143,28 +4873,7 @@ impl<'a> Gen<'a> {
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
         let (_, matrix) = self.emit_expr(&args[0], locals, None);
-        let rc_ptr = self.matrix_field_ptr(&matrix, 0);
-        let old = self.fresh();
-        let new = self.fresh();
-        let is_zero = self.fresh();
-        let free_lbl = self.fresh_label("matrix.drop.free");
-        let cont_lbl = self.fresh_label("matrix.drop.cont");
-        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = sub i64 %{}, 1", new, old).unwrap();
-        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_zero, new).unwrap();
-        writeln!(
-            self.out,
-            "  br i1 %{}, label %{}, label %{}",
-            is_zero, free_lbl, cont_lbl
-        )
-        .unwrap();
-        writeln!(self.out, "{}:", free_lbl).unwrap();
-        let data = self.matrix_load_data_ptr(&matrix);
-        writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
-        writeln!(self.out, "  call void @free(ptr {})", matrix).unwrap();
-        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
-        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        self.emit_matrix_drop_value(&matrix);
         (Ty::Unit, String::new())
     }
 
@@ -4248,13 +4957,8 @@ impl<'a> Gen<'a> {
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
         let (vector_ty, vector) = self.emit_expr(&args[0], locals, None);
-        let rc_ptr = self.heap_vector_field_ptr(&vector, 0);
-        let old = self.fresh();
-        let new = self.fresh();
-        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = add i64 %{}, 1", new, old).unwrap();
-        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
-        (vector_ty, vector)
+        let cloned = self.emit_heap_vector_clone_value(&vector_ty, &vector);
+        (vector_ty, cloned)
     }
 
     fn emit_heap_vector_drop(
@@ -4262,29 +4966,11 @@ impl<'a> Gen<'a> {
         args: &[Expr],
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
-        let (_, vector) = self.emit_expr(&args[0], locals, None);
-        let rc_ptr = self.heap_vector_field_ptr(&vector, 0);
-        let old = self.fresh();
-        let new = self.fresh();
-        let is_zero = self.fresh();
-        let free_lbl = self.fresh_label("heap.vector.drop.free");
-        let cont_lbl = self.fresh_label("heap.vector.drop.cont");
-        writeln!(self.out, "  %{} = load i64, ptr {}", old, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = sub i64 %{}, 1", new, old).unwrap();
-        writeln!(self.out, "  store i64 %{}, ptr {}", new, rc_ptr).unwrap();
-        writeln!(self.out, "  %{} = icmp eq i64 %{}, 0", is_zero, new).unwrap();
-        writeln!(
-            self.out,
-            "  br i1 %{}, label %{}, label %{}",
-            is_zero, free_lbl, cont_lbl
-        )
-        .unwrap();
-        writeln!(self.out, "{}:", free_lbl).unwrap();
-        let data = self.heap_vector_load_data_ptr(&vector);
-        writeln!(self.out, "  call void @free(ptr {})", data).unwrap();
-        writeln!(self.out, "  call void @free(ptr {})", vector).unwrap();
-        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
-        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        let (vector_ty, vector) = self.emit_expr(&args[0], locals, None);
+        let Ty::HeapVector(elem_ty) = vector_ty else {
+            unreachable!("typechecked vector_drop")
+        };
+        self.emit_heap_vector_drop_value(&elem_ty, &vector);
         (Ty::Unit, String::new())
     }
 
@@ -7296,7 +7982,8 @@ impl<'a> Gen<'a> {
                         let params = sig.params.clone();
                         let ret = sig.ret.clone().unwrap_or(Ty::Unit);
                         let wrapper = self.ensure_function_value_wrapper(name);
-                        let value = self.emit_fn_value(&format!("@{}", sanitize(&wrapper)), "null");
+                        let value =
+                            self.emit_fn_value(&format!("@{}", sanitize(&wrapper)), "null", "null");
                         return (Ty::Fn(params, Box::new(ret)), value);
                     }
                     if let Some((enum_name, variant)) = split_variant_path(name) {
@@ -7936,9 +8623,12 @@ impl<'a> Gen<'a> {
                 }
                 unreachable!("typechecked generic call")
             }
-            Expr::Closure { params, ret, body } => {
-                self.emit_closure_literal(params, ret.as_ref(), body, locals, hint)
-            }
+            Expr::Closure {
+                is_move,
+                params,
+                ret,
+                body,
+            } => self.emit_closure_literal(*is_move, params, ret.as_ref(), body, locals, hint),
             Expr::CallExpr { callee, args } => {
                 let (callee_ty, callee_val) = self.emit_expr(callee, locals, None);
                 let Ty::Fn(params, ret) = callee_ty else {
@@ -8251,29 +8941,8 @@ impl<'a> Gen<'a> {
                         self.enums,
                         self.vectors
                     ));
-                    let symbol = method_symbol(method_receiver_owner_ty(&recv_ty), CLONE_METHOD);
-                    if let Some((params, Some(ret_ty))) = self
-                        .fn_sigs
-                        .get(&symbol)
-                        .map(|sig| (sig.params.clone(), sig.ret.clone()))
-                    {
-                        debug_assert_eq!(params.len(), 1);
-                        let (self_arg_ty, self_arg_val) =
-                            self.emit_method_self_arg(&recv_ty, recv_val, &params[0]);
-                        let tmp = self.fresh();
-                        writeln!(
-                            self.out,
-                            "  %{} = call {} @{}({} {})",
-                            tmp,
-                            llvm_ty(&ret_ty, self.structs),
-                            sanitize(&symbol),
-                            llvm_ty(&self_arg_ty, self.structs),
-                            self_arg_val
-                        )
-                        .unwrap();
-                        return (ret_ty, format!("%{tmp}"));
-                    }
-                    return (recv_ty, recv_val);
+                    let cloned = self.emit_clone_value(&recv_ty, &recv_val);
+                    return (recv_ty, cloned);
                 }
                 if let Ty::List(elem_ty) = &recv_ty {
                     let elem_ty = elem_ty.as_ref();
