@@ -369,9 +369,12 @@ fn expr_contains_direct_self_clone(e: &Expr) -> bool {
 
 fn stmt_contains_direct_self_clone(st: &Stmt) -> bool {
     match st {
-        Stmt::Let { init, .. } | Stmt::Expr(init) | Stmt::Return(init) => {
-            expr_contains_direct_self_clone(init)
+        Stmt::Let {
+            init: Some(init), ..
         }
+        | Stmt::Expr(init)
+        | Stmt::Return(init) => expr_contains_direct_self_clone(init),
+        Stmt::Let { init: None, .. } => false,
         Stmt::Assign { target, value } => {
             expr_contains_direct_self_clone(target) || expr_contains_direct_self_clone(value)
         }
@@ -966,7 +969,9 @@ pub fn check_fn(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalMoveState {
+    Uninitialized,
     Available,
+    MaybeInitialized,
     Moved,
 }
 
@@ -1041,9 +1046,27 @@ fn check_moves_block(
 fn merge_moved_from_child(parent: &mut MoveStates, child: &MoveStates) {
     let names = parent.keys().cloned().collect::<Vec<_>>();
     for name in names {
-        if matches!(child.get(&name), Some(LocalMoveState::Moved)) {
-            parent.insert(name, LocalMoveState::Moved);
-        }
+        let Some(child_state) = child.get(&name).copied() else {
+            continue;
+        };
+        let Some(parent_state) = parent.get(&name).copied() else {
+            continue;
+        };
+        let merged = match (parent_state, child_state) {
+            (LocalMoveState::Moved, _) | (_, LocalMoveState::Moved) => LocalMoveState::Moved,
+            (LocalMoveState::MaybeInitialized, _) | (_, LocalMoveState::MaybeInitialized) => {
+                LocalMoveState::MaybeInitialized
+            }
+            (LocalMoveState::Uninitialized, LocalMoveState::Available)
+            | (LocalMoveState::Available, LocalMoveState::Uninitialized) => {
+                LocalMoveState::MaybeInitialized
+            }
+            (LocalMoveState::Uninitialized, LocalMoveState::Uninitialized) => {
+                LocalMoveState::Uninitialized
+            }
+            (LocalMoveState::Available, LocalMoveState::Available) => LocalMoveState::Available,
+        };
+        parent.insert(name, merged);
     }
 }
 
@@ -1064,25 +1087,35 @@ fn check_moves_stmt(
                 Some(t) => Some(normalize_ty(t, ctx.structs, ctx.enums, ctx.vectors)?),
                 None => None,
             };
-            check_moves_expr(
-                init,
-                env,
-                states,
-                ctx,
-                ann_norm.as_ref(),
-                ExprMoveMode::Consume,
-            )?;
-            let t = infer_expr(
-                init,
-                env,
-                ctx.structs,
-                ctx.enums,
-                ctx.vectors,
-                ctx.fns,
-                ann_norm.as_ref(),
-            )?;
+            let (t, state) = if let Some(init) = init {
+                check_moves_expr(
+                    init,
+                    env,
+                    states,
+                    ctx,
+                    ann_norm.as_ref(),
+                    ExprMoveMode::Consume,
+                )?;
+                let t = infer_expr(
+                    init,
+                    env,
+                    ctx.structs,
+                    ctx.enums,
+                    ctx.vectors,
+                    ctx.fns,
+                    ann_norm.as_ref(),
+                )?;
+                (t, LocalMoveState::Available)
+            } else {
+                let Some(t) = ann_norm else {
+                    return Err(format!(
+                        "let `{name}` without an initializer requires a type annotation"
+                    ));
+                };
+                (t, LocalMoveState::Uninitialized)
+            };
             env.insert(name.clone(), t);
-            states.insert(name.clone(), LocalMoveState::Available);
+            states.insert(name.clone(), state);
         }
         Stmt::Expr(e) => {
             check_moves_expr(e, env, states, ctx, None, ExprMoveMode::Consume)?;
@@ -1244,8 +1277,15 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
 }
 
 fn ensure_local_available(name: &str, states: &MoveStates) -> Result<(), String> {
-    if matches!(states.get(name), Some(LocalMoveState::Moved)) {
-        return Err(format!("use of moved local `{name}`"));
+    match states.get(name) {
+        Some(LocalMoveState::Moved) => return Err(format!("use of moved local `{name}`")),
+        Some(LocalMoveState::Uninitialized) => {
+            return Err(format!("use of uninitialized local `{name}`"));
+        }
+        Some(LocalMoveState::MaybeInitialized) => {
+            return Err(format!("use of maybe-initialized local `{name}`"));
+        }
+        Some(LocalMoveState::Available) | None => {}
     }
     Ok(())
 }
@@ -4695,31 +4735,44 @@ fn check_stmt(
                     reject_quantum_ty(a, &format!("let `{name}` type annotation"))?;
                 }
             }
-            let t = infer_expr(
-                init,
-                env,
-                struct_fields,
-                enums,
-                vectors,
-                fn_sigs,
-                ann_norm.as_ref(),
-            )?;
-            if matches!(t, Ty::Unit) {
-                return Err(format!(
-                    "let {name}: cannot bind a void value (missing return?)"
-                ));
-            }
-            if !is_in_quant_scope(env) {
-                reject_quantum_ty(&t, &format!("let `{name}` initializer"))?;
-            }
-            if let Some(a_raw) = ann {
-                let a = normalize_ty(a_raw, struct_fields, enums, vectors)?;
-                if !types_equal(&a, &t) {
+            let t = if let Some(init) = init {
+                let t = infer_expr(
+                    init,
+                    env,
+                    struct_fields,
+                    enums,
+                    vectors,
+                    fn_sigs,
+                    ann_norm.as_ref(),
+                )?;
+                if matches!(t, Ty::Unit) {
                     return Err(format!(
-                        "let {name}: type annotation mismatch: expected {a:?}, got {t:?}"
+                        "let {name}: cannot bind a void value (missing return?)"
                     ));
                 }
-            }
+                if !is_in_quant_scope(env) {
+                    reject_quantum_ty(&t, &format!("let `{name}` initializer"))?;
+                }
+                if let Some(a_raw) = ann {
+                    let a = normalize_ty(a_raw, struct_fields, enums, vectors)?;
+                    if !types_equal(&a, &t) {
+                        return Err(format!(
+                            "let {name}: type annotation mismatch: expected {a:?}, got {t:?}"
+                        ));
+                    }
+                }
+                t
+            } else {
+                let Some(t) = ann_norm else {
+                    return Err(format!(
+                        "let `{name}` without an initializer requires a type annotation"
+                    ));
+                };
+                if matches!(t, Ty::Unit) {
+                    return Err(format!("let {name}: cannot declare a void local"));
+                }
+                t
+            };
             if env.contains_key(name) {
                 return Err(format!(
                     "variable `{name}` shadows an existing binding; shadowing is not allowed"

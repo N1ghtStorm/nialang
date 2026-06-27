@@ -63,6 +63,12 @@ fn compile_fixtures_pipeline() {
         "examples/sample_dft_list.nia",
         "examples/sample_extern_fn.nia",
         "examples/sample_extern_lib.nia",
+        "examples/abilities/copy_move_basics.nia",
+        "examples/abilities/custom_clone.nia",
+        "examples/abilities/custom_deref.nia",
+        "examples/abilities/explicit_drop.nia",
+        "examples/abilities/auto_drop_scope.nia",
+        "examples/abilities/drop_flags.nia",
         "examples/crypto/merkle_builtin.nia",
     ];
     for f in files {

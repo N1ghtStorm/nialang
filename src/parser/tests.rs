@@ -84,7 +84,10 @@ fn main() i32 {
 "#;
     let toks = tokenize(src);
     let (_structs, _enums, fns, _vectors) = Parser::new(toks).parse_file().unwrap();
-    let Stmt::Let { init, .. } = &fns[0].body.stmts[1] else {
+    let Stmt::Let {
+        init: Some(init), ..
+    } = &fns[0].body.stmts[1]
+    else {
         panic!("expected clone let statement");
     };
     let Expr::MethodCall { name, args, .. } = init else {
@@ -108,6 +111,32 @@ fn main() {
     };
     assert_eq!(name, "drop");
     assert_eq!(args.len(), 1);
+}
+
+#[test]
+fn parse_uninitialized_typed_let() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+fn main() i32 {
+    let h: FileHandle;
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let (_structs, _enums, fns, _vectors) = Parser::new(toks).parse_file().unwrap();
+    let Stmt::Let {
+        name,
+        ty: Some(Ty::Struct(ty_name)),
+        init: None,
+    } = &fns[0].body.stmts[0]
+    else {
+        panic!("expected uninitialized typed let");
+    };
+    assert_eq!(name, "h");
+    assert_eq!(ty_name, "FileHandle");
 }
 
 #[test]
@@ -448,7 +477,9 @@ fn main() i32 {
     let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
     match &fns[0].body.stmts[0] {
         Stmt::Let {
-            ty: Some(ty), init, ..
+            ty: Some(ty),
+            init: Some(init),
+            ..
         } => {
             assert_eq!(ty, &Ty::List(Box::new(Ty::U8)));
             assert!(matches!(

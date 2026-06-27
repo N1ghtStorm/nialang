@@ -1,0 +1,31 @@
+// Abilities phase 10 sample:
+// - `let x: T;` starts uninitialized,
+// - assignment initializes a custom-drop local and sets its hidden drop flag,
+// - overwrite drops the old value first,
+// - explicit `drop(x)` clears the flag so auto-drop does not run twice.
+
+struct TraceHandle has drop {
+    id: i32
+}
+
+impl TraceHandle {
+    fn drop(self) {
+        println(self.id);
+    }
+}
+
+fn main() i32 {
+    let conditional: TraceHandle;
+
+    if true {
+        conditional = TraceHandle { id: 10 };
+    }
+
+    let overwritten = TraceHandle { id: 20 };
+    overwritten = TraceHandle { id: 21 };
+
+    let consumed = TraceHandle { id: 30 };
+    drop(consumed);
+
+    0
+}

@@ -1819,6 +1819,95 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_allows_assigning_uninitialized_custom_drop_local() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let h: FileHandle;
+    h = FileHandle { fd: 3 };
+    h.fd
+}
+"#;
+    check_all(src).expect("assignment should initialize typed local");
+}
+
+#[test]
+fn typecheck_rejects_use_of_uninitialized_local() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let h: FileHandle;
+    h.fd
+}
+"#;
+    let err = check_all(src).expect_err("uninitialized local should not be readable");
+    assert!(err.contains("use of uninitialized local `h`"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_use_of_maybe_initialized_local() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main(flag: bool) i32 {
+    let h: FileHandle;
+    if flag {
+        h = FileHandle { fd: 3 };
+    }
+    h.fd
+}
+"#;
+    let err = check_all(src).expect_err("maybe-initialized local should not be readable");
+    assert!(err.contains("use of maybe-initialized local `h`"), "{err}");
+}
+
+#[test]
+fn typecheck_allows_conditional_init_for_scope_exit_only() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main(flag: bool) i32 {
+    let h: FileHandle;
+    if flag {
+        h = FileHandle { fd: 3 };
+    }
+    0
+}
+"#;
+    check_all(src).expect("maybe-initialized custom-drop local can be left to drop flags");
+}
+
+#[test]
 fn typecheck_rejects_moving_field_out_inside_custom_drop() {
     let src = r#"
 struct Token {

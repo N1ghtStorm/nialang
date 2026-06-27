@@ -200,7 +200,7 @@ pub enum Stmt {
     Let {
         name: String,
         ty: Option<Ty>,
-        init: Expr,
+        init: Option<Expr>,
     },
     /// Expression followed by `;` (e.g. `println(1);`).
     Expr(Expr),

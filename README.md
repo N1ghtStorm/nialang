@@ -862,6 +862,12 @@ Good places to start:
 | `examples/sample_matrix_rc.nia` | explicit matrix lifetime management |
 | `examples/sample_impl_methods.nia` | `impl`, `self`, and `&self` |
 | `examples/sample_closures.nia` | non-capturing closure/function-value smoke test |
+| `examples/abilities/copy_move_basics.nia` | `has copy, clone` and copy-preserving moves |
+| `examples/abilities/custom_clone.nia` | ability-backed `x.clone()` and custom clone glue |
+| `examples/abilities/custom_deref.nia` | custom `deref` ability through `*x` |
+| `examples/abilities/explicit_drop.nia` | custom `drop(self)` and language-level `drop(x)` |
+| `examples/abilities/auto_drop_scope.nia` | automatic custom-drop at scope exit |
+| `examples/abilities/drop_flags.nia` | uninitialized locals, overwrites, and drop flags |
 | `examples/sample_extern_lib.nia` | C ABI exports and shared-library mode |
 | `examples/quantum/qubit_create.nia` | QIR gates, rotations, measurement, and result recording |
 | `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |

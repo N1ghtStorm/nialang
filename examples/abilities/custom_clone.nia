@@ -1,0 +1,27 @@
+// Abilities phase 4-5 sample:
+// - `x.clone()` is method syntax, not a global function,
+// - custom `fn clone(&self) Owner` borrows the source and keeps it usable.
+
+struct Token has clone {
+    id: i32
+}
+
+impl Token {
+    fn clone(&self) Token {
+        Token {
+            id: self.id + 100
+        }
+    }
+}
+
+fn main() i32 {
+    let original = Token { id: 7 };
+    let cloned = original.clone();
+    let total = original.id + cloned.id;
+
+    println(original);
+    println(cloned);
+    println(total);
+
+    0
+}

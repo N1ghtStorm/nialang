@@ -1,0 +1,28 @@
+// Abilities phase 9 sample:
+// - live custom-drop locals are dropped automatically at scope exit,
+// - block locals are dropped when the block exits,
+// - function locals are dropped in reverse declaration order before return.
+
+struct TraceHandle has drop {
+    id: i32
+}
+
+impl TraceHandle {
+    fn drop(self) {
+        println(self.id);
+    }
+}
+
+fn main() i32 {
+    let outer_a = TraceHandle { id: 1 };
+
+    if true {
+        let inner = TraceHandle { id: 2 };
+        println(100);
+    }
+
+    let outer_b = TraceHandle { id: 3 };
+    println(200);
+
+    0
+}

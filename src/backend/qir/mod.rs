@@ -197,7 +197,7 @@ fn collect_stmt(
         Stmt::Let {
             name,
             ty,
-            init,
+            init: Some(init),
             ..
         } if in_quant => {
             collect_quant_let(name, ty.as_ref(), init, plan, resources, fns, fn_sigs, call_stack)
@@ -211,9 +211,12 @@ fn collect_stmt(
         } if in_quant => {
             collect_quant_for(var, start, end, body, plan, resources, fns, fn_sigs, call_stack)
         }
-        Stmt::Let { init, .. } => {
+        Stmt::Let {
+            init: Some(init), ..
+        } => {
             collect_expr(init, false, plan, resources, fns, fn_sigs, call_stack)
         }
+        Stmt::Let { init: None, .. } => Ok(()),
         Stmt::Expr(e) => collect_expr(e, false, plan, resources, fns, fn_sigs, call_stack),
         Stmt::Assign { target, value } if !in_quant => {
             collect_expr(target, false, plan, resources, fns, fn_sigs, call_stack)?;

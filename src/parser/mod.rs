@@ -763,13 +763,17 @@ impl Parser {
         let (ty, init) = if matches!(self.peek(), Token::Colon) {
             self.bump();
             let t = self.parse_ty()?;
-            self.expect(&Token::Eq)?;
-            let init = self.parse_expr()?;
-            (Some(t), init)
+            if matches!(self.peek(), Token::Semi) {
+                (Some(t), None)
+            } else {
+                self.expect(&Token::Eq)?;
+                let init = self.parse_expr()?;
+                (Some(t), Some(init))
+            }
         } else {
             self.expect(&Token::Eq)?;
             let init = self.parse_expr()?;
-            (None, init)
+            (None, Some(init))
         };
         self.expect(&Token::Semi)?;
         Ok(Stmt::Let { name, ty, init })

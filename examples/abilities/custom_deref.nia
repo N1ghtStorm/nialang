@@ -1,0 +1,26 @@
+// Abilities phase 6 sample:
+// - `has deref` requires `fn deref(&self) &Target`,
+// - `*value` lowers through custom deref glue,
+// - deref borrows the owner and does not move it.
+
+struct BoxI32 has deref {
+    ptr: &i32
+}
+
+impl BoxI32 {
+    fn deref(&self) &i32 {
+        self.ptr
+    }
+}
+
+fn main() i32 {
+    let value = 21;
+    let boxed = BoxI32 { ptr: &value };
+
+    let left = *boxed;
+    let right = *boxed;
+    let sum = left + right;
+
+    println(sum);
+    0
+}

@@ -327,9 +327,12 @@ fn block_contains_quantum(block: &Block) -> bool {
 
 fn stmt_contains_quantum(st: &Stmt) -> bool {
     match st {
-        Stmt::Let { init, .. } | Stmt::Expr(init) | Stmt::Return(init) => {
-            expr_contains_quantum(init)
+        Stmt::Let {
+            init: Some(init), ..
         }
+        | Stmt::Expr(init)
+        | Stmt::Return(init) => expr_contains_quantum(init),
+        Stmt::Let { init: None, .. } => false,
         Stmt::Assign { target, value } => {
             expr_contains_quantum(target) || expr_contains_quantum(value)
         }

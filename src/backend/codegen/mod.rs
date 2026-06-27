@@ -133,7 +133,10 @@ fn collect_string_literals_block(b: &Block, out: &mut BTreeSet<String>) {
 
 fn collect_string_literals_stmt(st: &Stmt, out: &mut BTreeSet<String>) {
     match st {
-        Stmt::Let { init, .. } => collect_string_literals_expr(init, out),
+        Stmt::Let {
+            init: Some(init), ..
+        } => collect_string_literals_expr(init, out),
+        Stmt::Let { init: None, .. } => {}
         Stmt::Expr(e) | Stmt::Return(e) => collect_string_literals_expr(e, out),
         Stmt::Assign { target, value } => {
             collect_string_literals_expr(target, out);
@@ -965,6 +968,8 @@ struct Gen<'a> {
     terminated: bool,
     /// Labels of `loop.exit` for nested `loop`; `break` branches to the top.
     loop_exit_stack: Vec<String>,
+    /// Visible-order index where each active `loop` body scope starts.
+    loop_scope_start_stack: Vec<usize>,
     closures: Rc<RefCell<ClosureState>>,
 }
 
@@ -992,6 +997,7 @@ impl<'a> Gen<'a> {
             qir_next_result: 0,
             terminated: false,
             loop_exit_stack: Vec::new(),
+            loop_scope_start_stack: Vec::new(),
             closures,
         }
     }
@@ -1107,6 +1113,413 @@ impl<'a> Gen<'a> {
         )
         .unwrap();
         (Ty::Unit, String::new())
+    }
+
+    fn is_custom_drop_ty(&self, ty: &Ty) -> bool {
+        let Ty::Struct(name) = method_receiver_owner_ty(ty) else {
+            return false;
+        };
+        self.structs
+            .iter()
+            .find(|s| s.name == *name)
+            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop))
+            && self
+                .fn_sigs
+                .contains_key(&method_symbol(&Ty::Struct(name.clone()), DROP_METHOD))
+    }
+
+    fn is_copy_like_ty(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Unit
+            | Ty::Bool
+            | Ty::I8
+            | Ty::U8
+            | Ty::I16
+            | Ty::U16
+            | Ty::I32
+            | Ty::I64
+            | Ty::U64
+            | Ty::I128
+            | Ty::Isize
+            | Ty::Usize
+            | Ty::U128
+            | Ty::F16
+            | Ty::F32
+            | Ty::F64
+            | Ty::String
+            | Ty::Qubit
+            | Ty::Result
+            | Ty::Ptr(_)
+            | Ty::Fn(_, _) => true,
+            Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_copy_like_ty(elem),
+            Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => true,
+            Ty::Struct(name) if name == crate::nia_std::COMPLEX_TYPE => true,
+            Ty::Struct(name) => {
+                self.structs
+                    .iter()
+                    .find(|s| s.name == *name)
+                    .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Copy))
+                    || self
+                        .vectors
+                        .iter()
+                        .find(|v| v.name == *name)
+                        .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Copy))
+            }
+            Ty::Enum(name) => self
+                .enums
+                .iter()
+                .find(|e| e.name == *name)
+                .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Copy)),
+            Ty::Vector(name, elem) => {
+                self.vectors
+                    .iter()
+                    .find(|v| v.name == *name)
+                    .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Copy))
+                    || self.is_copy_like_ty(elem)
+            }
+        }
+    }
+
+    fn emit_alloc_drop_flag(&mut self, name: &str, initial: bool) -> String {
+        let flag = format!("%{}.drop", sanitize(name));
+        writeln!(self.out, "  {} = alloca i1", flag).unwrap();
+        writeln!(
+            self.out,
+            "  store i1 {}, ptr {}",
+            if initial { "true" } else { "false" },
+            flag
+        )
+        .unwrap();
+        flag
+    }
+
+    fn emit_set_drop_flag(&mut self, flag: &str, value: bool) {
+        writeln!(
+            self.out,
+            "  store i1 {}, ptr {}",
+            if value { "true" } else { "false" },
+            flag
+        )
+        .unwrap();
+    }
+
+    fn emit_drop_value(&mut self, ty: &Ty, value: String) {
+        let symbol = method_symbol(method_receiver_owner_ty(ty), DROP_METHOD);
+        let (params, ret) = {
+            let sig = self.fn_sigs.get(&symbol).expect("typechecked drop glue");
+            (sig.params.clone(), sig.ret.clone())
+        };
+        debug_assert_eq!(params.len(), 1);
+        debug_assert!(matches!(ret, None | Some(Ty::Unit)));
+        let (self_arg_ty, self_arg_val) = self.emit_method_self_arg(ty, value, &params[0]);
+        writeln!(
+            self.out,
+            "  call void @{}({} {})",
+            sanitize(&symbol),
+            llvm_ty(&self_arg_ty, self.structs),
+            self_arg_val
+        )
+        .unwrap();
+    }
+
+    fn emit_drop_local_if_live(
+        &mut self,
+        name: &str,
+        locals: &HashMap<String, (Ty, String)>,
+        drop_flags: &HashMap<String, String>,
+    ) {
+        let Some(flag) = drop_flags.get(name) else {
+            return;
+        };
+        let Some((ty, ptr)) = locals.get(name) else {
+            return;
+        };
+        let live = self.fresh();
+        let drop_lbl = self.fresh_label("drop.live");
+        let cont_lbl = self.fresh_label("drop.cont");
+        writeln!(self.out, "  %{} = load i1, ptr {}", live, flag).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            live, drop_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", drop_lbl).unwrap();
+        let value = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = load {}, ptr {}",
+            value,
+            llvm_ty(ty, self.structs),
+            ptr
+        )
+        .unwrap();
+        self.emit_drop_value(ty, format!("%{value}"));
+        self.emit_set_drop_flag(flag, false);
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
+    fn emit_drop_scope_from(
+        &mut self,
+        start: usize,
+        visible_order: &[String],
+        locals: &HashMap<String, (Ty, String)>,
+        drop_flags: &HashMap<String, String>,
+    ) {
+        for name in visible_order.iter().skip(start).rev() {
+            self.emit_drop_local_if_live(name, locals, drop_flags);
+        }
+    }
+
+    fn clear_drop_flag_for_local(
+        &mut self,
+        name: &str,
+        locals: &HashMap<String, (Ty, String)>,
+        drop_flags: &HashMap<String, String>,
+        force: bool,
+    ) {
+        let Some(flag) = drop_flags.get(name) else {
+            return;
+        };
+        let Some((ty, _)) = locals.get(name) else {
+            return;
+        };
+        if force || (self.is_custom_drop_ty(ty) && !self.is_copy_like_ty(ty)) {
+            self.emit_set_drop_flag(flag, false);
+        }
+    }
+
+    fn expr_codegen_ty(&self, expr: &Expr, locals: &HashMap<String, (Ty, String)>) -> Ty {
+        match expr {
+            Expr::Ident(name) => locals
+                .get(name)
+                .map(|(ty, _)| ty.clone())
+                .unwrap_or_else(|| Ty::Struct(name.clone())),
+            Expr::AddrOf(inner) => Ty::Ptr(Box::new(self.expr_codegen_ty(inner, locals))),
+            Expr::Deref(inner) => match self.expr_codegen_ty(inner, locals) {
+                Ty::Ptr(inner) => inner.as_ref().clone(),
+                other => other,
+            },
+            Expr::Field(inner, _) => self.expr_codegen_ty(inner, locals),
+            _ => Ty::Unit,
+        }
+    }
+
+    fn clear_consumed_custom_drop_locals_expr(
+        &mut self,
+        expr: &Expr,
+        locals: &HashMap<String, (Ty, String)>,
+        drop_flags: &HashMap<String, String>,
+        consume_result: bool,
+    ) {
+        match expr {
+            Expr::Ident(name) => {
+                if consume_result {
+                    self.clear_drop_flag_for_local(name, locals, drop_flags, false);
+                }
+            }
+            Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::Bool(_)
+            | Expr::String(_)
+            | Expr::EnumVariant { .. } => {}
+            Expr::Neg(inner) | Expr::Not(inner) | Expr::BitNot(inner) => {
+                self.clear_consumed_custom_drop_locals_expr(inner, locals, drop_flags, true);
+            }
+            Expr::AddrOf(inner) | Expr::Deref(inner) | Expr::Field(inner, _) => {
+                self.clear_consumed_custom_drop_locals_expr(inner, locals, drop_flags, false);
+            }
+            Expr::Add(l, r)
+            | Expr::Sub(l, r)
+            | Expr::Mul(l, r)
+            | Expr::VecDot(l, r)
+            | Expr::Div(l, r)
+            | Expr::Rem(l, r)
+            | Expr::BitAnd(l, r)
+            | Expr::BitOr(l, r)
+            | Expr::BitXor(l, r)
+            | Expr::Shl(l, r)
+            | Expr::Shr(l, r)
+            | Expr::Eq(l, r)
+            | Expr::Ne(l, r)
+            | Expr::Lt(l, r)
+            | Expr::Le(l, r)
+            | Expr::Gt(l, r)
+            | Expr::Ge(l, r)
+            | Expr::Index(l, r) => {
+                self.clear_consumed_custom_drop_locals_expr(l, locals, drop_flags, true);
+                self.clear_consumed_custom_drop_locals_expr(r, locals, drop_flags, true);
+            }
+            Expr::Call { name, args } => {
+                if name == DROP_METHOD {
+                    if let Some(Expr::Ident(arg_name)) = args.first() {
+                        self.clear_drop_flag_for_local(arg_name, locals, drop_flags, true);
+                    } else if let Some(arg) = args.first() {
+                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                    }
+                    return;
+                }
+                if name == PRINTLN || name == LEN {
+                    for arg in args {
+                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, false);
+                    }
+                    return;
+                }
+                if let Some((Ty::Fn(params, _), _)) = locals.get(name) {
+                    for (arg, param_ty) in args.iter().zip(params) {
+                        self.clear_consumed_custom_drop_locals_expr(
+                            arg,
+                            locals,
+                            drop_flags,
+                            !matches!(param_ty, Ty::Ptr(_)),
+                        );
+                    }
+                    return;
+                }
+                if let Some(sig) = self.fn_sigs.get(name) {
+                    let params = sig.params.clone();
+                    for (arg, param_ty) in args.iter().zip(params) {
+                        self.clear_consumed_custom_drop_locals_expr(
+                            arg,
+                            locals,
+                            drop_flags,
+                            !matches!(param_ty, Ty::Ptr(_)),
+                        );
+                    }
+                    return;
+                }
+                for arg in args {
+                    self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                }
+            }
+            Expr::GenericCall { args, .. } | Expr::EnumTuple { args, .. } => {
+                for arg in args {
+                    self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                }
+            }
+            Expr::CallExpr { callee, args } => {
+                self.clear_consumed_custom_drop_locals_expr(callee, locals, drop_flags, true);
+                for arg in args {
+                    self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                }
+            }
+            Expr::MethodCall {
+                receiver,
+                name,
+                args,
+            } => {
+                if name == CLONE_METHOD || name == TO_MATRIX || name == TO_ARRAY || name == TO_VEC {
+                    self.clear_consumed_custom_drop_locals_expr(
+                        receiver, locals, drop_flags, false,
+                    );
+                    for arg in args {
+                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                    }
+                    return;
+                }
+                let recv_ty = self.expr_codegen_ty(receiver, locals);
+                let symbol = method_symbol(method_receiver_owner_ty(&recv_ty), name);
+                if let Some(sig) = self.fn_sigs.get(&symbol) {
+                    let params = sig.params.clone();
+                    let receiver_consumed =
+                        params.first().is_some_and(|t| !matches!(t, Ty::Ptr(_)));
+                    self.clear_consumed_custom_drop_locals_expr(
+                        receiver,
+                        locals,
+                        drop_flags,
+                        receiver_consumed,
+                    );
+                    for (arg, param_ty) in args.iter().zip(params.iter().skip(1)) {
+                        self.clear_consumed_custom_drop_locals_expr(
+                            arg,
+                            locals,
+                            drop_flags,
+                            !matches!(param_ty, Ty::Ptr(_)),
+                        );
+                    }
+                    return;
+                }
+                self.clear_consumed_custom_drop_locals_expr(receiver, locals, drop_flags, true);
+                for arg in args {
+                    self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                }
+            }
+            Expr::StructLit { fields, .. }
+            | Expr::VectorLit { fields, .. }
+            | Expr::EnumStruct { fields, .. } => {
+                for (_, value) in fields {
+                    self.clear_consumed_custom_drop_locals_expr(value, locals, drop_flags, true);
+                }
+            }
+            Expr::AnonVectorLit(elems) | Expr::ArrayLit(elems) => {
+                for elem in elems {
+                    self.clear_consumed_custom_drop_locals_expr(elem, locals, drop_flags, true);
+                }
+            }
+            Expr::Match { scrutinee, arms } => {
+                self.clear_consumed_custom_drop_locals_expr(scrutinee, locals, drop_flags, true);
+                for (_, arm) in arms {
+                    self.clear_consumed_custom_drop_locals_expr(arm, locals, drop_flags, true);
+                }
+            }
+            Expr::Closure { .. } => {}
+            Expr::Quant { body } | Expr::Gpu { body } => {
+                for st in &body.stmts {
+                    self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
+                }
+                if let Some(tail) = &body.tail {
+                    self.clear_consumed_custom_drop_locals_expr(tail, locals, drop_flags, true);
+                }
+            }
+        }
+    }
+
+    fn clear_consumed_custom_drop_locals_stmt(
+        &mut self,
+        stmt: &Stmt,
+        locals: &HashMap<String, (Ty, String)>,
+        drop_flags: &HashMap<String, String>,
+    ) {
+        match stmt {
+            Stmt::Let {
+                init: Some(init), ..
+            }
+            | Stmt::Expr(init)
+            | Stmt::Return(init) => {
+                self.clear_consumed_custom_drop_locals_expr(init, locals, drop_flags, true);
+            }
+            Stmt::Assign { value, .. } => {
+                self.clear_consumed_custom_drop_locals_expr(value, locals, drop_flags, true);
+            }
+            Stmt::If { cond, then_block } => {
+                self.clear_consumed_custom_drop_locals_expr(cond, locals, drop_flags, true);
+                for st in &then_block.stmts {
+                    self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
+                }
+            }
+            Stmt::While { cond, body } => {
+                self.clear_consumed_custom_drop_locals_expr(cond, locals, drop_flags, true);
+                for st in &body.stmts {
+                    self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
+                }
+            }
+            Stmt::For {
+                start, end, body, ..
+            } => {
+                self.clear_consumed_custom_drop_locals_expr(start, locals, drop_flags, true);
+                self.clear_consumed_custom_drop_locals_expr(end, locals, drop_flags, true);
+                for st in &body.stmts {
+                    self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
+                }
+            }
+            Stmt::Loop { body } | Stmt::Quant { body } | Stmt::Gpu { body } => {
+                for st in &body.stmts {
+                    self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
+                }
+            }
+            Stmt::Let { init: None, .. } | Stmt::Break => {}
+        }
     }
 
     fn emit_fn_value_call(
@@ -5901,6 +6314,8 @@ impl<'a> Gen<'a> {
         // Allocate and initialize stack slots for all parameters to unify load/store path
         // with local variables.
         let mut local_ptr: HashMap<String, (Ty, String)> = HashMap::new();
+        let mut drop_flags: HashMap<String, String> = HashMap::new();
+        let mut visible_order: Vec<String> = Vec::new();
         for ((pname, _), pty) in f.params.iter().zip(&sig.params) {
             let ps = sanitize(pname);
             let ptr = format!("%{ps}.addr");
@@ -5919,10 +6334,25 @@ impl<'a> Gen<'a> {
             )
             .unwrap();
             local_ptr.insert(pname.clone(), (pty.clone(), ptr));
+            let is_drop_self = pname == "self"
+                && f.name.ends_with("__drop")
+                && self.is_custom_drop_ty(pty)
+                && sig.params.len() == 1;
+            if self.is_custom_drop_ty(pty) && !is_drop_self {
+                let flag = self.emit_alloc_drop_flag(pname, true);
+                drop_flags.insert(pname.clone(), flag);
+                visible_order.push(pname.clone());
+            }
         }
 
         for st in &f.body.stmts {
-            self.emit_stmt(st, &mut local_ptr, sig.ret.as_ref());
+            self.emit_stmt(
+                st,
+                &mut local_ptr,
+                &mut drop_flags,
+                &mut visible_order,
+                sig.ret.as_ref(),
+            );
             if self.terminated {
                 break;
             }
@@ -5937,6 +6367,8 @@ impl<'a> Gen<'a> {
             let tail = f.body.tail.as_ref().unwrap();
             let (t, v) = self.emit_expr(tail, &local_ptr, Some(ret_ty));
             debug_assert!(types_match(&t, ret_ty));
+            self.clear_consumed_custom_drop_locals_expr(tail, &local_ptr, &drop_flags, true);
+            self.emit_drop_scope_from(0, &visible_order, &local_ptr, &drop_flags);
             if matches!(ret_ty, Ty::Unit) {
                 writeln!(self.out, "  ret void").unwrap();
             } else {
@@ -5946,7 +6378,9 @@ impl<'a> Gen<'a> {
             if let Some(tail) = &f.body.tail {
                 let (t, _) = self.emit_expr(tail, &local_ptr, Some(&Ty::Unit));
                 debug_assert!(types_match(&t, &Ty::Unit));
+                self.clear_consumed_custom_drop_locals_expr(tail, &local_ptr, &drop_flags, true);
             }
+            self.emit_drop_scope_from(0, &visible_order, &local_ptr, &drop_flags);
             writeln!(self.out, "  ret void").unwrap();
         }
 
@@ -5962,30 +6396,56 @@ impl<'a> Gen<'a> {
         &mut self,
         st: &Stmt,
         locals: &mut HashMap<String, (Ty, String)>,
+        drop_flags: &mut HashMap<String, String>,
+        visible_order: &mut Vec<String>,
         fn_ret: Option<&Ty>,
     ) {
         match st {
             Stmt::Let { name, ty, init } => {
                 let normalized_hint = ty.as_ref().map(normalize_codegen_ty);
-                let (t, v) = self.emit_expr(init, locals, normalized_hint.as_ref());
+                let t = if let Some(init) = init {
+                    let (t, v) = self.emit_expr(init, locals, normalized_hint.as_ref());
+                    self.clear_consumed_custom_drop_locals_expr(init, locals, drop_flags, true);
+                    let ptr = format!("%{}.addr", sanitize(name));
+                    writeln!(self.out, "  {} = alloca {}", ptr, llvm_ty(&t, self.structs)).unwrap();
+                    writeln!(
+                        self.out,
+                        "  store {} {}, ptr {}",
+                        llvm_ty(&t, self.structs),
+                        v,
+                        ptr
+                    )
+                    .unwrap();
+                    locals.insert(name.clone(), (t.clone(), ptr));
+                    if self.is_custom_drop_ty(&t) {
+                        let flag = self.emit_alloc_drop_flag(name, true);
+                        drop_flags.insert(name.clone(), flag);
+                        visible_order.push(name.clone());
+                    }
+                    return;
+                } else {
+                    normalized_hint.expect("typechecked uninitialized let")
+                };
                 let ptr = format!("%{}.addr", sanitize(name));
                 writeln!(self.out, "  {} = alloca {}", ptr, llvm_ty(&t, self.structs)).unwrap();
-                writeln!(
-                    self.out,
-                    "  store {} {}, ptr {}",
-                    llvm_ty(&t, self.structs),
-                    v,
-                    ptr
-                )
-                .unwrap();
-                locals.insert(name.clone(), (t, ptr));
+                locals.insert(name.clone(), (t.clone(), ptr));
+                if self.is_custom_drop_ty(&t) {
+                    let flag = self.emit_alloc_drop_flag(name, false);
+                    drop_flags.insert(name.clone(), flag);
+                    visible_order.push(name.clone());
+                }
             }
             Stmt::Expr(e) => {
                 self.emit_expr(e, locals, None);
+                self.clear_consumed_custom_drop_locals_expr(e, locals, drop_flags, true);
             }
             Stmt::Assign { target, value } => {
                 let (tt, ptr_v) = self.emit_assign_ptr(target, locals);
+                if let Expr::Ident(name) = target {
+                    self.emit_drop_local_if_live(name, locals, drop_flags);
+                }
                 let (vt, vv) = self.emit_expr(value, locals, Some(&tt));
+                self.clear_consumed_custom_drop_locals_expr(value, locals, drop_flags, true);
                 debug_assert!(types_match(&tt, &vt));
                 writeln!(
                     self.out,
@@ -5995,6 +6455,11 @@ impl<'a> Gen<'a> {
                     ptr_v
                 )
                 .unwrap();
+                if let Expr::Ident(name) = target {
+                    if let Some(flag) = drop_flags.get(name) {
+                        self.emit_set_drop_flag(flag, true);
+                    }
+                }
             }
             Stmt::Return(e) => {
                 let Some(ret_ty) = fn_ret else {
@@ -6002,6 +6467,8 @@ impl<'a> Gen<'a> {
                 };
                 let (t, v) = self.emit_expr(e, locals, Some(ret_ty));
                 debug_assert!(types_match(&t, ret_ty));
+                self.clear_consumed_custom_drop_locals_expr(e, locals, drop_flags, true);
+                self.emit_drop_scope_from(0, visible_order, locals, drop_flags);
                 if matches!(ret_ty, Ty::Unit) {
                     writeln!(self.out, "  ret void").unwrap();
                 } else {
@@ -6013,6 +6480,9 @@ impl<'a> Gen<'a> {
                 let Some(exit) = self.loop_exit_stack.last() else {
                     panic!("internal: `break` should be rejected by typecheck outside `loop`");
                 };
+                let exit = exit.clone();
+                let start = *self.loop_scope_start_stack.last().unwrap_or(&0);
+                self.emit_drop_scope_from(start, visible_order, locals, drop_flags);
                 writeln!(self.out, "  br label %{}", exit).unwrap();
                 self.terminated = true;
             }
@@ -6029,9 +6499,18 @@ impl<'a> Gen<'a> {
                 .unwrap();
                 writeln!(self.out, "{}:", then_lbl).unwrap();
                 let mut then_locals = locals.clone();
+                let mut then_drop_flags = drop_flags.clone();
+                let mut then_visible_order = visible_order.clone();
+                let then_scope_start = then_visible_order.len();
                 self.terminated = false;
                 for st in &then_block.stmts {
-                    self.emit_stmt(st, &mut then_locals, fn_ret);
+                    self.emit_stmt(
+                        st,
+                        &mut then_locals,
+                        &mut then_drop_flags,
+                        &mut then_visible_order,
+                        fn_ret,
+                    );
                     if self.terminated {
                         break;
                     }
@@ -6039,7 +6518,19 @@ impl<'a> Gen<'a> {
                 if !self.terminated {
                     if let Some(tail) = &then_block.tail {
                         self.emit_expr(tail, &then_locals, None);
+                        self.clear_consumed_custom_drop_locals_expr(
+                            tail,
+                            &then_locals,
+                            &then_drop_flags,
+                            true,
+                        );
                     }
+                    self.emit_drop_scope_from(
+                        then_scope_start,
+                        &then_visible_order,
+                        &then_locals,
+                        &then_drop_flags,
+                    );
                     writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
                 }
                 self.terminated = false;
@@ -6066,9 +6557,18 @@ impl<'a> Gen<'a> {
 
                 writeln!(self.out, "{}:", body_lbl).unwrap();
                 let mut body_locals = locals.clone();
+                let mut body_drop_flags = drop_flags.clone();
+                let mut body_visible_order = visible_order.clone();
+                let body_scope_start = body_visible_order.len();
                 self.terminated = false;
                 for st in &body.stmts {
-                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    self.emit_stmt(
+                        st,
+                        &mut body_locals,
+                        &mut body_drop_flags,
+                        &mut body_visible_order,
+                        fn_ret,
+                    );
                     if self.terminated {
                         break;
                     }
@@ -6076,7 +6576,19 @@ impl<'a> Gen<'a> {
                 if !self.terminated {
                     if let Some(tail) = &body.tail {
                         self.emit_expr(tail, &body_locals, None);
+                        self.clear_consumed_custom_drop_locals_expr(
+                            tail,
+                            &body_locals,
+                            &body_drop_flags,
+                            true,
+                        );
                     }
+                    self.emit_drop_scope_from(
+                        body_scope_start,
+                        &body_visible_order,
+                        &body_locals,
+                        &body_drop_flags,
+                    );
                     writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
                 }
                 self.terminated = false;
@@ -6093,9 +6605,19 @@ impl<'a> Gen<'a> {
                 writeln!(self.out, "  br label %{}", iter_lbl).unwrap();
                 writeln!(self.out, "{}:", iter_lbl).unwrap();
                 let mut body_locals = locals.clone();
+                let mut body_drop_flags = drop_flags.clone();
+                let mut body_visible_order = visible_order.clone();
+                let body_scope_start = body_visible_order.len();
+                self.loop_scope_start_stack.push(body_scope_start);
                 self.terminated = false;
                 for st in &body.stmts {
-                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    self.emit_stmt(
+                        st,
+                        &mut body_locals,
+                        &mut body_drop_flags,
+                        &mut body_visible_order,
+                        fn_ret,
+                    );
                     if self.terminated {
                         break;
                     }
@@ -6103,9 +6625,22 @@ impl<'a> Gen<'a> {
                 if !self.terminated {
                     if let Some(tail) = &body.tail {
                         self.emit_expr(tail, &body_locals, None);
+                        self.clear_consumed_custom_drop_locals_expr(
+                            tail,
+                            &body_locals,
+                            &body_drop_flags,
+                            true,
+                        );
                     }
+                    self.emit_drop_scope_from(
+                        body_scope_start,
+                        &body_visible_order,
+                        &body_locals,
+                        &body_drop_flags,
+                    );
                     writeln!(self.out, "  br label %{}", iter_lbl).unwrap();
                 }
+                self.loop_scope_start_stack.pop();
                 self.loop_exit_stack.pop();
                 self.terminated = false;
                 writeln!(self.out, "{}:", exit_lbl).unwrap();
@@ -6162,10 +6697,19 @@ impl<'a> Gen<'a> {
                 writeln!(self.out, "{}:", body_lbl).unwrap();
                 writeln!(self.out, "  store {} %{}, ptr {}", ll, iv, var_ptr).unwrap();
                 let mut body_locals = locals.clone();
+                let mut body_drop_flags = drop_flags.clone();
+                let mut body_visible_order = visible_order.clone();
+                let body_scope_start = body_visible_order.len();
                 body_locals.insert(var.clone(), (t_ev.clone(), var_ptr));
                 self.terminated = false;
                 for st in &body.stmts {
-                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    self.emit_stmt(
+                        st,
+                        &mut body_locals,
+                        &mut body_drop_flags,
+                        &mut body_visible_order,
+                        fn_ret,
+                    );
                     if self.terminated {
                         break;
                     }
@@ -6173,7 +6717,19 @@ impl<'a> Gen<'a> {
                 if !self.terminated {
                     if let Some(tail) = &body.tail {
                         self.emit_expr(tail, &body_locals, None);
+                        self.clear_consumed_custom_drop_locals_expr(
+                            tail,
+                            &body_locals,
+                            &body_drop_flags,
+                            true,
+                        );
                     }
+                    self.emit_drop_scope_from(
+                        body_scope_start,
+                        &body_visible_order,
+                        &body_locals,
+                        &body_drop_flags,
+                    );
                     writeln!(self.out, "  br label %{}", latch).unwrap();
                 }
                 let body_term = self.terminated;
@@ -6230,9 +6786,18 @@ impl<'a> Gen<'a> {
                     return;
                 }
                 let mut body_locals = locals.clone();
+                let mut body_drop_flags = drop_flags.clone();
+                let mut body_visible_order = visible_order.clone();
+                let body_scope_start = body_visible_order.len();
                 self.terminated = false;
                 for st in &body.stmts {
-                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    self.emit_stmt(
+                        st,
+                        &mut body_locals,
+                        &mut body_drop_flags,
+                        &mut body_visible_order,
+                        fn_ret,
+                    );
                     if self.terminated {
                         break;
                     }
@@ -6240,7 +6805,19 @@ impl<'a> Gen<'a> {
                 if !self.terminated {
                     if let Some(tail) = &body.tail {
                         self.emit_expr(tail, &body_locals, None);
+                        self.clear_consumed_custom_drop_locals_expr(
+                            tail,
+                            &body_locals,
+                            &body_drop_flags,
+                            true,
+                        );
                     }
+                    self.emit_drop_scope_from(
+                        body_scope_start,
+                        &body_visible_order,
+                        &body_locals,
+                        &body_drop_flags,
+                    );
                 }
             }
             Stmt::Gpu { body } => {
@@ -6248,9 +6825,18 @@ impl<'a> Gen<'a> {
                     return;
                 }
                 let mut body_locals = locals.clone();
+                let mut body_drop_flags = drop_flags.clone();
+                let mut body_visible_order = visible_order.clone();
+                let body_scope_start = body_visible_order.len();
                 self.terminated = false;
                 for st in &body.stmts {
-                    self.emit_stmt(st, &mut body_locals, fn_ret);
+                    self.emit_stmt(
+                        st,
+                        &mut body_locals,
+                        &mut body_drop_flags,
+                        &mut body_visible_order,
+                        fn_ret,
+                    );
                     if self.terminated {
                         break;
                     }
@@ -6258,7 +6844,19 @@ impl<'a> Gen<'a> {
                 if !self.terminated {
                     if let Some(tail) = &body.tail {
                         self.emit_expr(tail, &body_locals, None);
+                        self.clear_consumed_custom_drop_locals_expr(
+                            tail,
+                            &body_locals,
+                            &body_drop_flags,
+                            true,
+                        );
                     }
+                    self.emit_drop_scope_from(
+                        body_scope_start,
+                        &body_visible_order,
+                        &body_locals,
+                        &body_drop_flags,
+                    );
                 }
             }
         }
@@ -7919,33 +8517,53 @@ impl<'a> Gen<'a> {
             }
             Expr::Quant { body } => {
                 let mut body_locals = locals.clone();
+                let mut body_drop_flags = HashMap::new();
+                let mut body_visible_order = Vec::new();
                 for st in &body.stmts {
-                    self.emit_stmt(st, &mut body_locals, None);
+                    self.emit_stmt(
+                        st,
+                        &mut body_locals,
+                        &mut body_drop_flags,
+                        &mut body_visible_order,
+                        None,
+                    );
                     debug_assert!(
                         !self.terminated,
                         "typecheck rejects terminating statements in quant expressions"
                     );
                 }
-                if let Some(tail) = &body.tail {
+                let result = if let Some(tail) = &body.tail {
                     self.emit_expr(tail, &body_locals, hint)
                 } else {
                     (Ty::Unit, String::new())
-                }
+                };
+                self.emit_drop_scope_from(0, &body_visible_order, &body_locals, &body_drop_flags);
+                result
             }
             Expr::Gpu { body } => {
                 let mut body_locals = locals.clone();
+                let mut body_drop_flags = HashMap::new();
+                let mut body_visible_order = Vec::new();
                 for st in &body.stmts {
-                    self.emit_stmt(st, &mut body_locals, None);
+                    self.emit_stmt(
+                        st,
+                        &mut body_locals,
+                        &mut body_drop_flags,
+                        &mut body_visible_order,
+                        None,
+                    );
                     debug_assert!(
                         !self.terminated,
                         "typecheck rejects terminating statements in gpu expressions"
                     );
                 }
-                if let Some(tail) = &body.tail {
+                let result = if let Some(tail) = &body.tail {
                     self.emit_expr(tail, &body_locals, hint)
                 } else {
                     (Ty::Unit, String::new())
-                }
+                };
+                self.emit_drop_scope_from(0, &body_visible_order, &body_locals, &body_drop_flags);
+                result
             }
             Expr::ArrayLit(elems) => {
                 let (elem_ty, n) = match hint {

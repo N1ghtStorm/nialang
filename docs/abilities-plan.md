@@ -724,6 +724,8 @@ Implemented notes:
 
 ## Phase 9: automatic drop at lexical scope exit for custom-drop structs
 
+Status: complete.
+
 Insert drop glue automatically for live custom-drop locals:
 
 ```nia
@@ -765,7 +767,23 @@ Deliverables:
 - tests that heap vectors and matrices still require their existing manual
   cleanup functions
 
+Implemented notes:
+
+- custom-drop locals are automatically dropped in reverse declaration order on
+  normal function/block exit
+- early `return` drops all currently live custom-drop locals before returning
+- `break` from `loop` drops locals declared inside the loop body before
+  branching to the loop exit
+- `if`, `while`, `loop`, `for`, `quant`, and `gpu` statement bodies clean up
+  locals declared inside the body on normal block exit
+- `continue` is still future work because Nia does not currently expose a
+  `continue` statement
+- runtime primitives such as `Matrix`, `T<>`, and `List[T]` are still excluded
+  from language-level auto-drop
+
 ## Phase 10: drop flags and maybe-initialized custom-drop locals
+
+Status: complete.
 
 Support conditional initialization:
 
@@ -802,6 +820,18 @@ Deliverables:
 - maybe-initialized diagnostics
 - conditional custom-drop codegen tests
 - overwrite custom-drop tests
+
+Implemented notes:
+
+- `let x: T;` is accepted for typed locals and starts as uninitialized
+- reading an uninitialized local is rejected
+- after conditional initialization, reading the local is rejected as
+  maybe-initialized
+- custom-drop locals carry a hidden `i1` drop flag in codegen
+- assignments to custom-drop locals set the flag after storing the new value
+- overwriting a live custom-drop local conditionally drops the old value first
+- moving or explicitly dropping a custom-drop local clears its flag so automatic
+  cleanup does not double-drop it
 
 ## Phase 11: structs, enums, aggregate drop, and partial initialization
 

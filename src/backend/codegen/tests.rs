@@ -319,6 +319,146 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_auto_drops_custom_drop_local_on_scope_exit() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let h = FileHandle { fd: 3 };
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal void @FileHandle__drop(%struct.FileHandle %self)"),
+        "IR:\n{ll}"
+    );
+    assert_eq!(
+        ll.matches("call void @FileHandle__drop").count(),
+        1,
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
+fn codegen_auto_drops_custom_drop_local_before_return() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let h = FileHandle { fd: 3 };
+    return 7;
+    0
+}
+"#,
+    );
+    let drop_pos = ll.find("call void @FileHandle__drop").expect("drop call");
+    let ret_pos = ll.find("ret i32 7").expect("return");
+    assert!(drop_pos < ret_pos, "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_auto_drops_loop_body_local_before_break() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    loop {
+        let h = FileHandle { fd: 3 };
+        break;
+    }
+    0
+}
+"#,
+    );
+    assert!(ll.contains("call void @FileHandle__drop"), "IR:\n{ll}");
+    let drop_pos = ll.find("call void @FileHandle__drop").expect("drop call");
+    let exit_branch_pos = ll[drop_pos..]
+        .find("br label %loop.exit")
+        .map(|idx| drop_pos + idx)
+        .expect("break branch");
+    assert!(drop_pos < exit_branch_pos, "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_conditional_custom_drop_init_uses_drop_flag() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main(flag: bool) i32 {
+    let h: FileHandle;
+    if flag {
+        h = FileHandle { fd: 3 };
+    }
+    0
+}
+"#,
+    );
+    assert!(ll.contains("%h.drop = alloca i1"), "IR:\n{ll}");
+    assert!(ll.contains("store i1 false, ptr %h.drop"), "IR:\n{ll}");
+    assert!(ll.contains("store i1 true, ptr %h.drop"), "IR:\n{ll}");
+    assert!(ll.contains("call void @FileHandle__drop"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_overwrite_drops_old_custom_drop_value() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+fn main() i32 {
+    let h = FileHandle { fd: 3 };
+    h = FileHandle { fd: 4 };
+    0
+}
+"#,
+    );
+    assert!(
+        ll.matches("call void @FileHandle__drop").count() >= 2,
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_contains_if_branching() {
     let ll = emit(include_str!("../../../examples/tests/ok_if_return.nia"));
     assert!(ll.contains("br i1"));

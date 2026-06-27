@@ -1,0 +1,21 @@
+// Abilities phase 7-8 sample:
+// - `has drop` requires custom `fn drop(self)`,
+// - language-level `drop(value)` consumes the value,
+// - direct `value.drop()` is intentionally not the surface syntax.
+
+struct FileHandle has drop {
+    fd: i32
+}
+
+impl FileHandle {
+    fn drop(self) {
+        println(self.fd);
+    }
+}
+
+fn main() i32 {
+    let handle = FileHandle { fd: 3 };
+    drop(handle);
+
+    0
+}
