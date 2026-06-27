@@ -17,11 +17,11 @@ impl SomeSmartPointer {
 
 fn main() i32 {
     let a = alloc(1000000);
-    // let outer_a = SomeSmartPointer { id: 1, prt: a };
+    let outer_a = SomeSmartPointer { id: 1, prt: a };
 
-    // if true{
-    //     let inner = SomeSmartPointer { id: 2, prt: a };
-    // }
+    if true{
+        let inner = SomeSmartPointer { id: 2, prt: a };
+    }
 
     let outer_b = SomeSmartPointer { id: 3, prt: a };
 

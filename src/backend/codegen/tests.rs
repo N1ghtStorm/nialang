@@ -459,6 +459,113 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_derived_struct_drop_drops_language_drop_fields() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+struct Pair has drop {
+    first: FileHandle,
+    second: FileHandle,
+}
+
+fn main() i32 {
+    let pair = Pair {
+        first: FileHandle { fd: 1 },
+        second: FileHandle { fd: 2 }
+    };
+    0
+}
+"#,
+    );
+    assert!(!ll.contains("@Pair__drop"), "IR:\n{ll}");
+    assert!(ll.contains("%pair.drop = alloca i1"), "IR:\n{ll}");
+    assert_eq!(
+        ll.matches("call void @FileHandle__drop").count(),
+        2,
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
+fn codegen_derived_enum_drop_switches_on_active_payload() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+enum Slot has drop {
+    Full(FileHandle),
+    Empty,
+}
+
+fn main() i32 {
+    let slot = Slot::Full(FileHandle { fd: 7 });
+    0
+}
+"#,
+    );
+    assert!(ll.contains("%slot.drop = alloca i1"), "IR:\n{ll}");
+    assert!(ll.contains("switch i32"), "IR:\n{ll}");
+    assert_eq!(
+        ll.matches("call void @FileHandle__drop").count(),
+        1,
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
+fn codegen_custom_drop_runs_before_language_drop_fields() {
+    let ll = emit(
+        r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+struct Owner has drop {
+    handle: FileHandle,
+}
+
+impl Owner {
+    fn drop(self) {
+        println(99);
+    }
+}
+
+fn main() i32 {
+    let owner = Owner {
+        handle: FileHandle { fd: 3 }
+    };
+    0
+}
+"#,
+    );
+    let owner_drop = ll.find("call void @Owner__drop").expect("owner drop call");
+    let field_drop = ll
+        .find("call void @FileHandle__drop")
+        .expect("field drop call");
+    assert!(owner_drop < field_drop, "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_contains_if_branching() {
     let ll = emit(include_str!("../../../examples/tests/ok_if_return.nia"));
     assert!(ll.contains("br i1"));

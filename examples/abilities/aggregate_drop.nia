@@ -1,0 +1,38 @@
+// Abilities phase 11 sample:
+// - structs can derive drop from language-level drop fields,
+// - enums drop only the active payload,
+// - runtime primitive handles are still excluded until primitive integration.
+
+struct TraceHandle has drop {
+    id: i32
+}
+
+impl TraceHandle {
+    fn drop(self) {
+        println(self.id);
+    }
+}
+
+struct Pair has drop {
+    first: TraceHandle,
+    second: TraceHandle
+}
+
+enum Slot has drop {
+    Full(TraceHandle),
+    Empty
+}
+
+fn main() i32 {
+    let pair = Pair {
+        first: TraceHandle { id: 1 },
+        second: TraceHandle { id: 2 }
+    };
+
+    let slot = Slot::Full(TraceHandle { id: 7 });
+    drop(slot);
+
+    println(100);
+
+    0
+}

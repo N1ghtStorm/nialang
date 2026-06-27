@@ -1096,13 +1096,43 @@ impl<'a> Gen<'a> {
     ) -> (Ty, String) {
         debug_assert_eq!(args.len(), 1);
         let (arg_ty, arg_val) = self.emit_expr(&args[0], locals, None);
-        let symbol = method_symbol(method_receiver_owner_ty(&arg_ty), DROP_METHOD);
+        self.emit_drop_value(&arg_ty, arg_val);
+        (Ty::Unit, String::new())
+    }
+
+    fn has_custom_drop_ty(&self, ty: &Ty) -> bool {
+        let Ty::Struct(name) = method_receiver_owner_ty(ty) else {
+            return false;
+        };
+        self.struct_def(name)
+            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop))
+            && self
+                .fn_sigs
+                .contains_key(&method_symbol(&Ty::Struct(name.clone()), DROP_METHOD))
+    }
+
+    fn is_language_drop_ty(&self, ty: &Ty) -> bool {
+        match method_receiver_owner_ty(ty) {
+            Ty::Struct(name) => self
+                .struct_def(name)
+                .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop)),
+            Ty::Enum(name) => self
+                .enums
+                .iter()
+                .find(|e| e.name == *name)
+                .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Drop)),
+            _ => false,
+        }
+    }
+
+    fn emit_custom_drop_call(&mut self, ty: &Ty, value: String) {
+        let symbol = method_symbol(method_receiver_owner_ty(ty), DROP_METHOD);
         let (params, ret) = {
             let sig = self.fn_sigs.get(&symbol).expect("typechecked drop");
             (sig.params.clone(), sig.ret.clone())
         };
         debug_assert_eq!(params.len(), 1);
-        let (self_arg_ty, self_arg_val) = self.emit_method_self_arg(&arg_ty, arg_val, &params[0]);
+        let (self_arg_ty, self_arg_val) = self.emit_method_self_arg(ty, value, &params[0]);
         debug_assert!(matches!(ret, None | Some(Ty::Unit)));
         writeln!(
             self.out,
@@ -1112,20 +1142,6 @@ impl<'a> Gen<'a> {
             self_arg_val
         )
         .unwrap();
-        (Ty::Unit, String::new())
-    }
-
-    fn is_custom_drop_ty(&self, ty: &Ty) -> bool {
-        let Ty::Struct(name) = method_receiver_owner_ty(ty) else {
-            return false;
-        };
-        self.structs
-            .iter()
-            .find(|s| s.name == *name)
-            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop))
-            && self
-                .fn_sigs
-                .contains_key(&method_symbol(&Ty::Struct(name.clone()), DROP_METHOD))
     }
 
     fn is_copy_like_ty(&self, ty: &Ty) -> bool {
@@ -1204,22 +1220,158 @@ impl<'a> Gen<'a> {
     }
 
     fn emit_drop_value(&mut self, ty: &Ty, value: String) {
-        let symbol = method_symbol(method_receiver_owner_ty(ty), DROP_METHOD);
-        let (params, ret) = {
-            let sig = self.fn_sigs.get(&symbol).expect("typechecked drop glue");
-            (sig.params.clone(), sig.ret.clone())
+        match method_receiver_owner_ty(ty) {
+            Ty::Struct(name) => {
+                if self.has_custom_drop_ty(ty) {
+                    self.emit_custom_drop_call(ty, value.clone());
+                }
+                self.emit_drop_struct_fields(name, &value);
+            }
+            Ty::Enum(name) => self.emit_drop_enum_value(name, &value),
+            _ => {}
+        }
+    }
+
+    fn emit_drop_struct_fields(&mut self, name: &str, value: &str) {
+        let Some(sdef) = self.struct_def(name).cloned() else {
+            return;
         };
-        debug_assert_eq!(params.len(), 1);
-        debug_assert!(matches!(ret, None | Some(Ty::Unit)));
-        let (self_arg_ty, self_arg_val) = self.emit_method_self_arg(ty, value, &params[0]);
+        let struct_ll = format!("%struct.{}", sanitize(name));
+        for (i, (_, fty)) in sdef.fields.iter().enumerate().rev() {
+            if !self.is_language_drop_ty(fty) {
+                continue;
+            }
+            let field = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = extractvalue {} {}, {}",
+                field, struct_ll, value, i
+            )
+            .unwrap();
+            self.emit_drop_value(fty, format!("%{field}"));
+        }
+    }
+
+    fn emit_drop_enum_value(&mut self, name: &str, value: &str) {
+        let edef = self
+            .enums
+            .iter()
+            .find(|e| e.name == name)
+            .cloned()
+            .expect("typechecked enum drop");
+        let enum_ll = format!("%enum.{}", sanitize(name));
+        let tag = self.fresh();
         writeln!(
             self.out,
-            "  call void @{}({} {})",
-            sanitize(&symbol),
-            llvm_ty(&self_arg_ty, self.structs),
-            self_arg_val
+            "  %{} = extractvalue {} {}, 0",
+            tag, enum_ll, value
         )
         .unwrap();
+        let cont_lbl = self.fresh_label("drop.enum.cont");
+        let default_lbl = self.fresh_label("drop.enum.default");
+        let arm_labels = edef
+            .variants
+            .iter()
+            .map(|_| self.fresh_label("drop.enum.arm"))
+            .collect::<Vec<_>>();
+        writeln!(self.out, "  switch i32 %{}, label %{} [", tag, default_lbl).unwrap();
+        for (i, lbl) in arm_labels.iter().enumerate() {
+            writeln!(self.out, "    i32 {}, label %{}", i, lbl).unwrap();
+        }
+        writeln!(self.out, "  ]").unwrap();
+        writeln!(self.out, "{}:", default_lbl).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        for (idx, (variant, lbl)) in edef.variants.iter().zip(&arm_labels).enumerate() {
+            writeln!(self.out, "{}:", lbl).unwrap();
+            self.emit_drop_enum_payload(&enum_ll, value, idx + 1, &variant.fields);
+            writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        }
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
+    fn emit_drop_enum_payload(
+        &mut self,
+        enum_ll: &str,
+        value: &str,
+        payload_idx: usize,
+        fields: &EnumVariantFields,
+    ) {
+        match fields {
+            EnumVariantFields::Unit => {}
+            EnumVariantFields::Tuple(ts) if ts.len() == 1 => {
+                if !self.is_language_drop_ty(&ts[0]) {
+                    return;
+                }
+                let payload = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {} {}, {}",
+                    payload, enum_ll, value, payload_idx
+                )
+                .unwrap();
+                self.emit_drop_value(&ts[0], format!("%{payload}"));
+            }
+            EnumVariantFields::Tuple(ts) => {
+                let payload_ll = {
+                    let inner = ts
+                        .iter()
+                        .map(|t| llvm_ty(t, self.structs))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{{ {inner} }}")
+                };
+                let payload = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {} {}, {}",
+                    payload, enum_ll, value, payload_idx
+                )
+                .unwrap();
+                for (i, ty) in ts.iter().enumerate().rev() {
+                    if !self.is_language_drop_ty(ty) {
+                        continue;
+                    }
+                    let field = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} %{}, {}",
+                        field, payload_ll, payload, i
+                    )
+                    .unwrap();
+                    self.emit_drop_value(ty, format!("%{field}"));
+                }
+            }
+            EnumVariantFields::Struct(fs) => {
+                let payload_ll = {
+                    let inner = fs
+                        .iter()
+                        .map(|(_, t)| llvm_ty(t, self.structs))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{{ {inner} }}")
+                };
+                let payload = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {} {}, {}",
+                    payload, enum_ll, value, payload_idx
+                )
+                .unwrap();
+                for (i, (_, ty)) in fs.iter().enumerate().rev() {
+                    if !self.is_language_drop_ty(ty) {
+                        continue;
+                    }
+                    let field = self.fresh();
+                    writeln!(
+                        self.out,
+                        "  %{} = extractvalue {} %{}, {}",
+                        field, payload_ll, payload, i
+                    )
+                    .unwrap();
+                    self.emit_drop_value(ty, format!("%{field}"));
+                }
+            }
+        }
     }
 
     fn emit_drop_local_if_live(
@@ -1285,7 +1437,7 @@ impl<'a> Gen<'a> {
         let Some((ty, _)) = locals.get(name) else {
             return;
         };
-        if force || (self.is_custom_drop_ty(ty) && !self.is_copy_like_ty(ty)) {
+        if force || (self.is_language_drop_ty(ty) && !self.is_copy_like_ty(ty)) {
             self.emit_set_drop_flag(flag, false);
         }
     }
@@ -6336,9 +6488,9 @@ impl<'a> Gen<'a> {
             local_ptr.insert(pname.clone(), (pty.clone(), ptr));
             let is_drop_self = pname == "self"
                 && f.name.ends_with("__drop")
-                && self.is_custom_drop_ty(pty)
+                && self.has_custom_drop_ty(pty)
                 && sig.params.len() == 1;
-            if self.is_custom_drop_ty(pty) && !is_drop_self {
+            if self.is_language_drop_ty(pty) && !is_drop_self {
                 let flag = self.emit_alloc_drop_flag(pname, true);
                 drop_flags.insert(pname.clone(), flag);
                 visible_order.push(pname.clone());
@@ -6417,7 +6569,7 @@ impl<'a> Gen<'a> {
                     )
                     .unwrap();
                     locals.insert(name.clone(), (t.clone(), ptr));
-                    if self.is_custom_drop_ty(&t) {
+                    if self.is_language_drop_ty(&t) {
                         let flag = self.emit_alloc_drop_flag(name, true);
                         drop_flags.insert(name.clone(), flag);
                         visible_order.push(name.clone());
@@ -6429,7 +6581,7 @@ impl<'a> Gen<'a> {
                 let ptr = format!("%{}.addr", sanitize(name));
                 writeln!(self.out, "  {} = alloca {}", ptr, llvm_ty(&t, self.structs)).unwrap();
                 locals.insert(name.clone(), (t.clone(), ptr));
-                if self.is_custom_drop_ty(&t) {
+                if self.is_language_drop_ty(&t) {
                     let flag = self.emit_alloc_drop_flag(name, false);
                     drop_flags.insert(name.clone(), flag);
                     visible_order.push(name.clone());

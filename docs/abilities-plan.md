@@ -835,6 +835,8 @@ Implemented notes:
 
 ## Phase 11: structs, enums, aggregate drop, and partial initialization
 
+Status: complete.
+
 Once custom auto-drop works for simple locals, extend drop glue to aggregate
 user-defined values whose fields or payloads already have language-level
 `drop`.
@@ -868,6 +870,19 @@ Deliverables:
 - diagnostics for unsupported partial moves
 - tests that aggregate drop does not silently drop runtime primitives before
   they are integrated
+
+Implemented notes:
+
+- structs can derive `drop` when every field is either trivial under the current
+  scalar compatibility carve-out or already has language-level `drop`
+- struct fields are dropped in reverse declaration order
+- enum drop switches on the active tag and drops only the active payload
+- custom `drop(self)` runs first, then compiler-generated cleanup drops any
+  fields with language-level `drop`
+- `Matrix`, `T<>`, `List[T]`, fixed arrays, fixed anonymous vectors, and named
+  vectors remain outside language-level drop integration until the final
+  primitive/runtime phase
+- partial moves out of structs remain rejected
 
 ## Phase 12: ability constraints for generics
 

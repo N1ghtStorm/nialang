@@ -1148,18 +1148,73 @@ fn main() i32 {
 }
 
 #[test]
-fn typecheck_rejects_drop_without_custom_drop_method() {
+fn typecheck_rejects_derived_drop_for_runtime_handle_field() {
     let src = r#"
-struct Handle has drop {
-    fd: i32,
+struct MatrixOwner has drop {
+    m: f64[],
 }
 
 fn main() i32 {
     0
 }
 "#;
-    let err = check_all(src).expect_err("drop requires custom method");
-    assert!(err.contains("does not define `fn drop(self)`"), "{err}");
+    let err = check_all(src).expect_err("runtime handles cannot derive drop yet");
+    assert!(err.contains("field `m` does not support it"), "{err}");
+}
+
+#[test]
+fn typecheck_allows_derived_struct_drop_for_language_drop_fields() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+struct Pair has drop {
+    first: FileHandle,
+    second: FileHandle,
+}
+
+fn main() i32 {
+    let pair = Pair {
+        first: FileHandle { fd: 1 },
+        second: FileHandle { fd: 2 }
+    };
+    drop(pair);
+    0
+}
+"#;
+    check_all(src).expect("derived struct drop should accept language-drop fields");
+}
+
+#[test]
+fn typecheck_allows_derived_enum_drop_and_explicit_drop() {
+    let src = r#"
+struct FileHandle has drop {
+    fd: i32,
+}
+
+impl FileHandle {
+    fn drop(self) {
+    }
+}
+
+enum Slot has drop {
+    Full(FileHandle),
+    Empty,
+}
+
+fn main() i32 {
+    let slot = Slot::Full(FileHandle { fd: 7 });
+    drop(slot);
+    0
+}
+"#;
+    check_all(src).expect("derived enum drop should be language-level drop");
 }
 
 #[test]
@@ -1658,7 +1713,7 @@ fn main() i32 {
         let err = check_all(src).expect_err("deref should not imply other abilities");
         assert!(
             err.contains("declare `clone`")
-                || err.contains("only available for custom-drop structs"),
+                || err.contains("only available for language-level drop structs/enums"),
             "{err}"
         );
     }
@@ -1812,7 +1867,7 @@ fn main() i32 {
     ] {
         let err = check_all(src).expect_err("runtime drop integration is delayed");
         assert!(
-            err.contains("only available for custom-drop structs"),
+            err.contains("only available for language-level drop structs/enums"),
             "{err}"
         );
     }

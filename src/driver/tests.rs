@@ -69,6 +69,7 @@ fn compile_fixtures_pipeline() {
         "examples/abilities/explicit_drop.nia",
         "examples/abilities/auto_drop_scope.nia",
         "examples/abilities/drop_flags.nia",
+        "examples/abilities/aggregate_drop.nia",
         "examples/crypto/merkle_builtin.nia",
     ];
     for f in files {

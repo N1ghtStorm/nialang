@@ -193,7 +193,7 @@ fn has_formal_ability(
             .get(name)
             .is_some_and(|v| has_declared_ability(&v.abilities, ability)),
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
-            !matches!(ability, Ability::Deref)
+            !matches!(ability, Ability::Deref | Ability::Drop)
                 && has_formal_ability(elem, ability, structs, enums, vectors)
         }
         _ => false,
@@ -233,6 +233,9 @@ fn supports_decl_ability(
     enums: &HashMap<String, EnumDef>,
     vectors: &HashMap<String, VectorDef>,
 ) -> bool {
+    if matches!(ability, Ability::Drop) {
+        return supports_decl_drop_ability(t, structs, enums, vectors);
+    }
     if has_formal_ability(t, ability, structs, enums, vectors)
         || is_legacy_scalar_ability_carveout(t, ability)
     {
@@ -242,6 +245,27 @@ fn supports_decl_ability(
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) if !matches!(ability, Ability::Deref) => {
             supports_decl_ability(elem, ability, structs, enums, vectors)
         }
+        _ => false,
+    }
+}
+
+fn supports_decl_drop_ability(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    if is_legacy_scalar_ability_carveout(t, Ability::Drop) {
+        return true;
+    }
+    match t {
+        Ty::Struct(name) if vectors.contains_key(name) => false,
+        Ty::Struct(name) => structs
+            .get(name)
+            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop)),
+        Ty::Enum(name) => enums
+            .get(name)
+            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Drop)),
         _ => false,
     }
 }
@@ -283,15 +307,19 @@ fn custom_deref_target_ty(
 fn supports_language_drop(
     t: &Ty,
     structs: &HashMap<String, StructDef>,
-    fn_sigs: &HashMap<String, FnSig>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
 ) -> bool {
-    let Ty::Struct(name) = t else {
-        return false;
-    };
-    structs
-        .get(name)
-        .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop))
-        && fn_sigs.contains_key(&custom_method_name(name, DROP_METHOD))
+    match method_receiver_owner_ty(t) {
+        Ty::Struct(name) if vectors.contains_key(name) => false,
+        Ty::Struct(name) => structs
+            .get(name)
+            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Drop)),
+        Ty::Enum(name) => enums
+            .get(name)
+            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Drop)),
+        _ => false,
+    }
 }
 
 fn expr_contains_direct_self_clone(e: &Expr) -> bool {
@@ -541,7 +569,18 @@ fn validate_abilities(
                     }
                 }
                 Ability::Clone => {}
-                Ability::Drop => validate_custom_drop_sig(s, fn_sigs)?,
+                Ability::Drop if has_custom_drop => validate_custom_drop_sig(s, fn_sigs)?,
+                Ability::Drop => {
+                    for (field, ty) in &s.fields {
+                        if !supports_decl_ability(ty, ability, structs, enums, vectors) {
+                            let ability = ability_label(ability);
+                            return Err(format!(
+                                "struct `{}` has `{ability}` but field `{field}` does not support it",
+                                s.name
+                            ));
+                        }
+                    }
+                }
                 Ability::Deref => validate_custom_deref_sig(s, fn_sigs)?,
             }
         }
@@ -3118,9 +3157,9 @@ fn infer_expr(
                     ));
                 }
                 let value_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
-                if !supports_language_drop(&value_ty, structs, fns) {
+                if !supports_language_drop(&value_ty, structs, enums, vectors) {
                     return Err(format!(
-                        "`drop(x)` is only available for custom-drop structs in this phase; got {value_ty:?}"
+                        "`drop(x)` is only available for language-level drop structs/enums in this phase; got {value_ty:?}"
                     ));
                 }
                 return Ok(Ty::Unit);
