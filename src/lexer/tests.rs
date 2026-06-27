@@ -57,13 +57,15 @@ fn lex_keywords_and_types() {
 #[test]
 fn lex_ability_keywords() {
     assert_eq!(
-        collect("has copy clone drop deref"),
+        collect("has copy clone drop deref send sync"),
         vec![
             Token::Has,
             Token::Copy,
             Token::Clone,
             Token::Drop,
             Token::Deref,
+            Token::Send,
+            Token::Sync,
         ]
     );
 }

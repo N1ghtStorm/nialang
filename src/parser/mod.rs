@@ -367,6 +367,8 @@ impl Parser {
             Token::Clone => Ok(Ability::Clone),
             Token::Drop => Ok(Ability::Drop),
             Token::Deref => Ok(Ability::Deref),
+            Token::Send => Ok(Ability::Send),
+            Token::Sync => Ok(Ability::Sync),
             other => Err(format!("expected ability after `has`, got {other:?}")),
         }
     }
@@ -377,6 +379,8 @@ impl Parser {
             Ability::Clone => "clone",
             Ability::Drop => "drop",
             Ability::Deref => "deref",
+            Ability::Send => "send",
+            Ability::Sync => "sync",
         }
     }
 

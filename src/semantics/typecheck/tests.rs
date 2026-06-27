@@ -1325,7 +1325,7 @@ fn main() i32 {
 #[test]
 fn typecheck_accepts_phase2_ability_declarations() {
     let src = r#"
-struct Token has copy, clone {
+struct Token has copy, clone, send, sync {
     id: i32,
 }
 
@@ -1342,12 +1342,12 @@ impl Handle {
     }
 }
 
-enum Maybe has copy, clone, drop {
+enum Maybe has copy, clone, drop, send, sync {
     Some(i32),
     None,
 }
 
-vector Point i32 [X, Y] has copy, clone, drop
+vector Point i32 [X, Y] has copy, clone, drop, send, sync
 
 fn main() i32 {
     0

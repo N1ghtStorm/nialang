@@ -144,6 +144,8 @@ fn ability_label(ability: Ability) -> &'static str {
         Ability::Clone => "clone",
         Ability::Drop => "drop",
         Ability::Deref => "deref",
+        Ability::Send => "send",
+        Ability::Sync => "sync",
     }
 }
 
@@ -731,6 +733,7 @@ fn validate_abilities(
                     }
                 }
                 Ability::Deref => validate_custom_deref_sig(s, fn_sigs)?,
+                Ability::Send | Ability::Sync => {}
             }
         }
     }
@@ -762,7 +765,7 @@ fn validate_abilities(
             ));
         }
         for ability in e.abilities.clone() {
-            if matches!(ability, Ability::Deref) {
+            if matches!(ability, Ability::Deref | Ability::Send | Ability::Sync) {
                 continue;
             }
             for variant in &e.variants {
@@ -826,7 +829,7 @@ fn validate_abilities(
             ));
         }
         for ability in v.abilities.clone() {
-            if matches!(ability, Ability::Deref) {
+            if matches!(ability, Ability::Deref | Ability::Send | Ability::Sync) {
                 continue;
             }
             if !supports_decl_ability(&v.ty, ability, structs, enums, vectors) {

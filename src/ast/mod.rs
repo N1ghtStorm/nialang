@@ -78,6 +78,8 @@ pub enum Ability {
     Clone,
     Drop,
     Deref,
+    Send,
+    Sync,
 }
 
 #[derive(Debug, Clone)]

@@ -30,7 +30,7 @@ fn parse_fixture_named_struct() {
 #[test]
 fn parse_struct_enum_and_vector_abilities() {
     let src = r#"
-struct BoxI32 has deref, drop {
+struct BoxI32 has deref, drop, send, sync {
     ptr: &i32,
 }
 
@@ -48,7 +48,10 @@ fn main() i32 { 0 }
     let toks = tokenize(src);
     let (structs, enums, _fns, vectors) = Parser::new(toks).parse_file().unwrap();
 
-    assert_eq!(structs[0].abilities, vec![Ability::Deref, Ability::Drop]);
+    assert_eq!(
+        structs[0].abilities,
+        vec![Ability::Deref, Ability::Drop, Ability::Send, Ability::Sync]
+    );
     assert_eq!(structs[1].abilities, vec![Ability::Copy, Ability::Clone]);
     assert_eq!(
         enums[0].abilities,
