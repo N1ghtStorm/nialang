@@ -59,6 +59,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_bitwise.nia"),
         include_str!("../../../examples/tests/ok_atomic_bool.nia"),
+        include_str!("../../../examples/tests/ok_threads_minimal.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_struct_methods_big.nia"),
@@ -299,6 +300,79 @@ fn main() i32 {
 "#;
     let err = check_all(field).expect_err("AtomicBool field should fail for Phase 1");
     assert!(err.contains("atomic storage by value"), "{err}");
+}
+
+#[test]
+fn typecheck_threads_minimal_surface() {
+    let src = include_str!("../../../examples/tests/ok_threads_minimal.nia");
+    check_all(src).expect("minimal thread spawn/join should typecheck");
+}
+
+#[test]
+fn typecheck_threads_reject_capturing_spawn_closure() {
+    let src = r#"
+fn main() i32 {
+    let x = 1;
+    let t = spawn(|| {
+        println(x);
+    });
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("capturing spawn closure should fail in MVP");
+    assert!(err.contains("cannot capture"), "{err}");
+}
+
+#[test]
+fn typecheck_threads_reject_local_function_value_spawn() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let f: fn() -> () = worker;
+    let t = spawn(f);
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("local function value spawn should fail in MVP");
+    assert!(err.contains("local function value"), "{err}");
+}
+
+#[test]
+fn typecheck_threads_join_consumes_handle() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let t = spawn(worker);
+    join(t);
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("join should consume Thread");
+    assert!(err.contains("use of moved local `t`"), "{err}");
+}
+
+#[test]
+fn typecheck_threads_reject_wrong_spawn_signature() {
+    let src = r#"
+fn worker(x: i32) {
+    println(x);
+}
+
+fn main() i32 {
+    let t = spawn(worker);
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("spawn target must be fn() -> ()");
+    assert!(err.contains("fn() -> ()"), "{err}");
 }
 
 #[test]

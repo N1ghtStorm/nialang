@@ -10,12 +10,12 @@ use crate::nia_std::{
     DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ,
     GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1,
     GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y,
-    GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
+    GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
     MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS,
     MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT,
     MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
-    VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    RECORD, RESULT, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE,
+    VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -62,6 +62,8 @@ fn normalize_ty(
                 Ok(Ty::Result)
             } else if name == ATOMIC_BOOL_TYPE {
                 Ok(Ty::AtomicBool)
+            } else if name == THREAD_TYPE {
+                Ok(Ty::Thread)
             } else if name == MATRIX_TYPE {
                 Err(format!(
                     "type `Matrix` is no longer a valid annotation; use `T[]` (e.g. `i32[]`)"
@@ -113,6 +115,7 @@ fn normalize_ty(
             }
             Ok(Ty::Matrix(Box::new(norm), *shape))
         }
+        Ty::Thread => Ok(Ty::Thread),
         other => Ok(other.clone()),
     }
 }
@@ -380,6 +383,59 @@ fn infer_atomic_bool_method(
     }
 }
 
+fn thread_entry_ty() -> Ty {
+    Ty::Fn(Vec::new(), Box::new(Ty::Unit))
+}
+
+fn is_unit_sig_ret(ret: &Option<Ty>) -> bool {
+    matches!(ret, None | Some(Ty::Unit))
+}
+
+fn check_plain_thread_spawn_target(
+    target: &Expr,
+    env: &HashMap<String, Ty>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<(), String> {
+    match target {
+        Expr::Ident(name) => {
+            if env.contains_key(name) {
+                return Err(format!(
+                    "`{SPAWN}` target must be a top-level function or non-capturing closure; local function value `{name}` is not supported yet"
+                ));
+            }
+            let Some(sig) = fns.get(name) else {
+                return Err(format!(
+                    "`{SPAWN}` target must be a top-level function or non-capturing closure"
+                ));
+            };
+            if sig.is_quantum {
+                return Err(format!("`{SPAWN}` target `{name}` cannot be quantum"));
+            }
+            if sig.params.is_empty() && is_unit_sig_ret(&sig.ret) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{SPAWN}` target `{name}` must have type `fn() -> ()`"
+                ))
+            }
+        }
+        Expr::Closure { params, body, .. } => {
+            let (captures, _) = closure_capture_names(params, body, env);
+            if captures.is_empty() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{SPAWN}` closure target cannot capture `{}` yet",
+                    captures[0]
+                ))
+            }
+        }
+        _ => Err(format!(
+            "`{SPAWN}` target must be a top-level function or non-capturing closure"
+        )),
+    }
+}
+
 fn path_leaf(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path)
 }
@@ -482,7 +538,7 @@ fn has_formal_ability(
         Ty::Matrix(elem, _) if matches!(ability, Ability::Clone | Ability::Drop) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
-        Ty::Fn(_, _) => matches!(ability, Ability::Drop),
+        Ty::Thread | Ty::Fn(_, _) => matches!(ability, Ability::Drop),
         _ => false,
     }
 }
@@ -539,6 +595,7 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::F64 => "f64".into(),
         Ty::String => "String".into(),
         Ty::AtomicBool => "AtomicBool".into(),
+        Ty::Thread => "Thread".into(),
         Ty::Qubit => "Qubit".into(),
         Ty::Result => "Result".into(),
         Ty::Struct(name) => format!("struct `{name}`"),
@@ -635,6 +692,9 @@ fn ability_failure_reason(
         }
         Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
             "Matrix is a runtime owner and is not `copy`; use `.clone()` to duplicate it".into()
+        }
+        Ty::Thread if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "Thread handles are move-only; use `join(t)` or `drop(t)` to consume them".into()
         }
         Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _)
             if matches!(ability, Ability::Clone | Ability::Drop) =>
@@ -1898,7 +1958,7 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::Qubit
         | Ty::Result
         | Ty::Ptr(_) => true,
-        Ty::AtomicBool | Ty::Fn(_, _) => false,
+        Ty::AtomicBool | Ty::Thread | Ty::Fn(_, _) => false,
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
         Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
         Ty::Struct(name) if name == COMPLEX_TYPE => true,
@@ -2249,6 +2309,32 @@ fn check_moves_call(
 
     if name == ATOMIC_FENCE && args.len() == 1 {
         return Ok(());
+    }
+
+    if name == SPAWN && args.len() == 1 {
+        return check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            Some(&thread_entry_ty()),
+            ExprMoveMode::ReadOnly,
+        )
+        .map(|_| ());
+    }
+
+    if name == JOIN && args.len() == 1 {
+        return check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            Some(&Ty::Thread),
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )
+        .map(|_| ());
     }
 
     if name == MATRIX_DROP || name == VECTOR_DROP {
@@ -3206,6 +3292,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::F64, Ty::F64)
         | (Ty::String, Ty::String)
         | (Ty::AtomicBool, Ty::AtomicBool)
+        | (Ty::Thread, Ty::Thread)
         | (Ty::Qubit, Ty::Qubit)
         | (Ty::Result, Ty::Result)
         | (Ty::Unit, Ty::Unit) => true,
@@ -4806,6 +4893,45 @@ fn infer_expr(
                 }
                 let ordering = parse_ordering_literal(&args[0])?;
                 check_atomic_ordering_for_op(AtomicOrderingUse::Fence, ordering)?;
+                return Ok(Ty::Unit);
+            }
+            if name == SPAWN {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{SPAWN}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let entry_ty = thread_entry_ty();
+                let target_ty =
+                    infer_expr(&args[0], env, structs, enums, vectors, fns, Some(&entry_ty))?;
+                if !types_equal(&target_ty, &entry_ty) {
+                    return Err(format!(
+                        "`{SPAWN}` expects `fn() -> ()`, got {}",
+                        ty_diag_label(&target_ty)
+                    ));
+                }
+                check_plain_thread_spawn_target(&args[0], env, fns)?;
+                return Ok(Ty::Thread);
+            }
+            if name == JOIN {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{JOIN}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                expect_arg_ty(
+                    name,
+                    args,
+                    0,
+                    &Ty::Thread,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                )?;
                 return Ok(Ty::Unit);
             }
             if name == QUBIT {

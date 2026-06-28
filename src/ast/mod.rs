@@ -65,6 +65,8 @@ pub enum Ty {
     List(Box<Ty>),
     /// Built-in atomic boolean storage cell, written as `AtomicBool`.
     AtomicBool,
+    /// Built-in native thread handle, written as `Thread`.
+    Thread,
     /// Built-in unique heap-owned matrix with one numeric cell type.
     ///
     /// The optional `(rows, cols)` shape is known for matrix literals and derived
@@ -144,6 +146,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
         Ty::AtomicBool => "atomic_bool".into(),
+        Ty::Thread => "thread".into(),
         Ty::Matrix(_, _) => "Matrix".into(),
         Ty::Fn(params, ret) => {
             let params = params

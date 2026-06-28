@@ -189,6 +189,38 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_threads_minimal_spawn_join_and_drop() {
+    let ll = emit(
+        r#"
+fn worker() {
+    println(1);
+}
+
+fn main() i32 {
+    let joined: Thread = spawn(worker);
+    join(joined);
+
+    let detached: Thread = spawn(|| {
+        println(2);
+    });
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_create(ptr, ptr, ptr, ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("define ptr @nialang.thread.entry(ptr %arg)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("call i32 @pthread_create(ptr %"), "IR:\n{ll}");
+    assert!(ll.contains("pthread_join"), "IR:\n{ll}");
+    assert!(ll.contains("call i32 @pthread_detach(ptr %"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_capturing_closure_function_value() {
     let ll = emit(
         r#"

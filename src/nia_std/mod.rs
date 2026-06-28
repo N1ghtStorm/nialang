@@ -81,6 +81,9 @@ pub const ATOMIC_ISIZE: &str = "atomic_isize";
 pub const ATOMIC_USIZE: &str = "atomic_usize";
 pub const ATOMIC_PTR: &str = "atomic_ptr";
 pub const ATOMIC_FENCE: &str = "atomic_fence";
+pub const THREAD_TYPE: &str = "Thread";
+pub const SPAWN: &str = "spawn";
+pub const JOIN: &str = "join";
 pub const GATE_I: &str = "I";
 pub const GATE_H: &str = "H";
 pub const GATE_X: &str = "X";
@@ -230,6 +233,7 @@ pub fn is_reserved_type_name(name: &str) -> bool {
             | ATOMIC_ISIZE_TYPE
             | ATOMIC_USIZE_TYPE
             | ATOMIC_PTR_TYPE
+            | THREAD_TYPE
     )
 }
 
@@ -281,6 +285,8 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | ATOMIC_USIZE
             | ATOMIC_PTR
             | ATOMIC_FENCE
+            | SPAWN
+            | JOIN
             | QUBIT
             | RESULT
             | GATE_I
@@ -389,6 +395,29 @@ declare ptr @realloc(ptr, i64)
 declare void @abort()
 declare double @sin(double)
 declare double @cos(double)
+declare i32 @pthread_create(ptr, ptr, ptr, ptr)
+declare i32 @pthread_join(ptr, ptr)
+declare i32 @"\01_pthread_join"(ptr, ptr)
+declare i32 @pthread_detach(ptr)
+
+define ptr @nialang.thread.entry(ptr %arg) {
+entry:
+  %fnv = load { ptr, ptr, ptr, ptr }, ptr %arg
+  call void @free(ptr %arg)
+  %code = extractvalue { ptr, ptr, ptr, ptr } %fnv, 0
+  %env = extractvalue { ptr, ptr, ptr, ptr } %fnv, 1
+  call void %code(ptr %env)
+  %drop = extractvalue { ptr, ptr, ptr, ptr } %fnv, 2
+  %has_drop = icmp ne ptr %drop, null
+  br i1 %has_drop, label %drop.env, label %done
+
+drop.env:
+  call void %drop(ptr %env)
+  br label %done
+
+done:
+  ret ptr null
+}
 
 "#,
     );

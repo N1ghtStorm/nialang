@@ -374,6 +374,11 @@ fn parse_fixture_atomic_bool() {
 }
 
 #[test]
+fn parse_fixture_threads_minimal() {
+    parse_ok(include_str!("../../examples/tests/ok_threads_minimal.nia"));
+}
+
+#[test]
 fn parse_fixture_ptr_write() {
     parse_ok(include_str!("../../examples/tests/ok_ptr_write.nia"));
 }

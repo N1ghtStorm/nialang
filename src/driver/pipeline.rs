@@ -987,6 +987,7 @@ fn run_executable_mode(ll: &str, out_ll: Option<PathBuf>) -> Result<i32, String>
     if should_link_explicit_libm() {
         cmd.arg("-lm");
     }
+    configure_clang_threads(&mut cmd);
     let clang_ok = cmd.status().map_err(|e| {
         format!(
             "failed to run `clang`: {e}\n\
@@ -1038,6 +1039,7 @@ fn build_shared_library(ll: &str, out_lib: &Path) -> Result<(), String> {
     if should_link_explicit_libm() {
         cmd.arg("-lm");
     }
+    configure_clang_threads(&mut cmd);
     let clang_ok = cmd.status().map_err(|e| {
         format!(
             "failed to run `clang`: {e}\n\
@@ -1062,6 +1064,12 @@ fn write_text_file(path: &Path, text: &str) -> Result<(), String> {
 
 fn should_link_explicit_libm() -> bool {
     !cfg!(any(windows, target_os = "macos"))
+}
+
+fn configure_clang_threads(cmd: &mut Command) {
+    if !cfg!(windows) {
+        cmd.arg("-pthread");
+    }
 }
 
 fn configure_clang_sdk(cmd: &mut Command) -> Result<(), String> {

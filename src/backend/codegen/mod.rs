@@ -12,12 +12,12 @@ use crate::nia_std::{
     COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ,
     GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP,
     GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ,
-    GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY,
-    LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS,
-    MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
+    GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN,
+    LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
+    MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
     MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER,
-    PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC,
-    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY,
+    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -509,6 +509,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::U128 => "u128".into(),
         Ty::Bool => "bool".into(),
         Ty::AtomicBool => "AtomicBool".into(),
+        Ty::Thread => "Thread".into(),
         Ty::F16 => "f16".into(),
         Ty::F32 => "f32".into(),
         Ty::F64 => "f64".into(),
@@ -685,6 +686,14 @@ fn fn_value_ll_ty() -> &'static str {
     "{ ptr, ptr, ptr, ptr }"
 }
 
+fn pthread_join_symbol() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "@\"\\01_pthread_join\""
+    } else {
+        "@pthread_join"
+    }
+}
+
 fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
     match t {
         Ty::I8 => "i8".into(),
@@ -700,6 +709,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::U128 => "i128".into(),
         Ty::Bool => "i1".into(),
         Ty::AtomicBool => "i1".into(),
+        Ty::Thread => "ptr".into(),
         Ty::F16 => "half".into(),
         Ty::F32 => "float".into(),
         Ty::F64 => "double".into(),
@@ -725,6 +735,7 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         Ty::Struct(name) if name == QUBIT => Ty::Qubit,
         Ty::Struct(name) if name == "result" => Ty::Result,
         Ty::Struct(name) if name == crate::nia_std::ATOMIC_BOOL_TYPE => Ty::AtomicBool,
+        Ty::Struct(name) if name == THREAD_TYPE => Ty::Thread,
         Ty::Array(elem, n) => Ty::Array(Box::new(normalize_codegen_ty(elem)), *n),
         Ty::Ptr(inner) => Ty::Ptr(Box::new(normalize_codegen_ty(inner))),
         Ty::Vector(name, inner) => Ty::Vector(name.clone(), Box::new(normalize_codegen_ty(inner))),
@@ -1289,7 +1300,7 @@ impl<'a> Gen<'a> {
                     && self.is_language_drop_ty(elem)
             }
             Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_language_drop_ty(elem),
-            Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => true,
+            Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) | Ty::Thread => true,
             Ty::Fn(_, _) => true,
             _ => false,
         }
@@ -1863,7 +1874,7 @@ impl<'a> Gen<'a> {
             | Ty::Qubit
             | Ty::Result
             | Ty::Ptr(_) => true,
-            Ty::AtomicBool | Ty::Fn(_, _) => false,
+            Ty::AtomicBool | Ty::Thread | Ty::Fn(_, _) => false,
             Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_copy_like_ty(elem),
             Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
             Ty::Struct(name) if name == crate::nia_std::COMPLEX_TYPE => true,
@@ -2073,6 +2084,7 @@ impl<'a> Gen<'a> {
             Ty::HeapVector(elem_ty) => self.emit_heap_vector_drop_value(elem_ty, &value),
             Ty::List(elem_ty) => self.emit_list_drop_value(elem_ty, &value),
             Ty::Matrix(_, _) => self.emit_matrix_drop_value(&value),
+            Ty::Thread => self.emit_thread_detach_drop(&value),
             Ty::Vector(name, elem_ty) => {
                 let Some(vdef) = self.vector_def(name).cloned() else {
                     return;
@@ -2412,11 +2424,18 @@ impl<'a> Gen<'a> {
                 self.clear_consumed_custom_drop_locals_expr(r, locals, drop_flags, true);
             }
             Expr::Call { name, args } => {
-                if name == DROP_METHOD || name == MATRIX_DROP || name == VECTOR_DROP {
+                if name == DROP_METHOD || name == JOIN || name == MATRIX_DROP || name == VECTOR_DROP
+                {
                     if let Some(Expr::Ident(arg_name)) = args.first() {
                         self.clear_drop_flag_for_local(arg_name, locals, drop_flags, true);
                     } else if let Some(arg) = args.first() {
                         self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
+                    }
+                    return;
+                }
+                if name == SPAWN {
+                    for arg in args {
+                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, false);
                     }
                     return;
                 }
@@ -2699,6 +2718,88 @@ impl<'a> Gen<'a> {
             .unwrap();
             (ret.clone(), format!("%{tmp}"))
         }
+    }
+
+    fn emit_abort_if_pthread_error(&mut self, status: &str, label: &str) {
+        let failed = self.fresh();
+        let abort_lbl = self.fresh_label(label);
+        let ok_lbl = self.fresh_label(&format!("{label}.ok"));
+        writeln!(self.out, "  %{} = icmp ne i32 {}, 0", failed, status).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            failed, abort_lbl, ok_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", abort_lbl).unwrap();
+        writeln!(self.out, "  call void @abort()").unwrap();
+        writeln!(self.out, "  unreachable").unwrap();
+        writeln!(self.out, "{}:", ok_lbl).unwrap();
+    }
+
+    fn emit_thread_spawn(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        debug_assert_eq!(args.len(), 1);
+        let entry_ty = Ty::Fn(Vec::new(), Box::new(Ty::Unit));
+        let (fn_ty, fn_value) = self.emit_expr(&args[0], locals, Some(&entry_ty));
+        debug_assert!(types_match(&fn_ty, &entry_ty));
+
+        let payload = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 32)", payload).unwrap();
+        writeln!(
+            self.out,
+            "  store {} {}, ptr %{}",
+            fn_value_ll_ty(),
+            fn_value,
+            payload
+        )
+        .unwrap();
+
+        let thread = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 8)", thread).unwrap();
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_create(ptr %{}, ptr null, ptr @nialang.thread.entry, ptr %{})",
+            rc, thread, payload
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "thread.spawn.abort");
+        (Ty::Thread, format!("%{thread}"))
+    }
+
+    fn emit_thread_join(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        debug_assert_eq!(args.len(), 1);
+        let (thread_ty, thread) = self.emit_expr(&args[0], locals, Some(&Ty::Thread));
+        debug_assert!(matches!(thread_ty, Ty::Thread));
+        let thread_id = self.fresh();
+        writeln!(self.out, "  %{} = load ptr, ptr {}", thread_id, thread).unwrap();
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 {}(ptr {}, ptr null)",
+            rc,
+            pthread_join_symbol(),
+            format!("%{thread_id}")
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "thread.join.abort");
+        writeln!(self.out, "  call void @free(ptr {})", thread).unwrap();
+        (Ty::Unit, String::new())
+    }
+
+    fn emit_thread_detach_drop(&mut self, thread: &str) {
+        let thread_id = self.fresh();
+        writeln!(self.out, "  %{} = load ptr, ptr {}", thread_id, thread).unwrap();
+        writeln!(self.out, "  call i32 @pthread_detach(ptr %{})", thread_id).unwrap();
+        writeln!(self.out, "  call void @free(ptr {})", thread).unwrap();
     }
 
     fn ensure_function_value_wrapper(&mut self, name: &str) -> String {
@@ -4076,6 +4177,7 @@ impl<'a> Gen<'a> {
             }
             Ty::Array(_, _)
             | Ty::AtomicBool
+            | Ty::Thread
             | Ty::Struct(_)
             | Ty::Enum(_)
             | Ty::Qubit
@@ -4191,6 +4293,7 @@ impl<'a> Gen<'a> {
             }
             Ty::Array(_, _)
             | Ty::AtomicBool
+            | Ty::Thread
             | Ty::Struct(_)
             | Ty::Enum(_)
             | Ty::Qubit
@@ -8072,6 +8175,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::Thread
                     | Ty::Struct(_)
                     | Ty::Enum(_)
                     | Ty::Unit
@@ -8219,6 +8323,7 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Ptr(_))
                 | Some(Ty::Bool)
                 | Some(Ty::AtomicBool)
+                | Some(Ty::Thread)
                 | Some(Ty::Qubit)
                 | Some(Ty::Result)
                 | Some(Ty::String)
@@ -8323,6 +8428,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::Thread
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8396,6 +8502,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::Thread
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8456,6 +8563,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::Thread
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8580,6 +8688,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::Thread
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8726,6 +8835,7 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::Thread
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8970,6 +9080,12 @@ impl<'a> Gen<'a> {
                     let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[0]));
                     writeln!(self.out, "  fence {}", ordering).unwrap();
                     return (Ty::Unit, String::new());
+                }
+                if name == SPAWN {
+                    return self.emit_thread_spawn(args, locals);
+                }
+                if name == JOIN {
+                    return self.emit_thread_join(args, locals);
                 }
                 if let Some(result) = self.emit_crypto_builtin_call(name, args, locals) {
                     return result;
