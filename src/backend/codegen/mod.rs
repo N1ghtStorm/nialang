@@ -8,16 +8,18 @@ use crate::ast::{
     VectorDef, method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, ATOMIC_BOOL, ATOMIC_FENCE, ATOMIC_PTR, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV,
-    COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT,
-    GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG,
-    GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY,
-    GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN,
-    LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
-    MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
-    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER,
-    PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY,
-    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    ALLOC, ATOMIC_BOOL, ATOMIC_FENCE, ATOMIC_I32, ATOMIC_I32_TYPE, ATOMIC_I64, ATOMIC_I64_TYPE,
+    ATOMIC_ISIZE, ATOMIC_ISIZE_TYPE, ATOMIC_PTR, ATOMIC_U32, ATOMIC_U32_TYPE, ATOMIC_USIZE,
+    ATOMIC_USIZE_TYPE, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW,
+    COMPLEX_SCALE, COMPLEX_SUB, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT,
+    GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG,
+    GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG,
+    GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET,
+    LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP,
+    MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE, MERKLE_LEAF_HASH,
+    MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT,
+    READ, REALLOC, RECORD, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC,
+    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -28,6 +30,8 @@ const ATOMIC_LOAD_METHOD: &str = "load";
 const ATOMIC_STORE_METHOD: &str = "store";
 const ATOMIC_SWAP_METHOD: &str = "swap";
 const ATOMIC_COMPARE_EXCHANGE_METHOD: &str = "compare_exchange";
+const ATOMIC_FETCH_ADD_METHOD: &str = "fetch_add";
+const ATOMIC_FETCH_SUB_METHOD: &str = "fetch_sub";
 const ATOMIC_FETCH_AND_METHOD: &str = "fetch_and";
 const ATOMIC_FETCH_OR_METHOD: &str = "fetch_or";
 const ATOMIC_FETCH_XOR_METHOD: &str = "fetch_xor";
@@ -511,6 +515,11 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::U128 => "u128".into(),
         Ty::Bool => "bool".into(),
         Ty::AtomicBool => "AtomicBool".into(),
+        Ty::AtomicI32 => "AtomicI32".into(),
+        Ty::AtomicU32 => "AtomicU32".into(),
+        Ty::AtomicI64 => "AtomicI64".into(),
+        Ty::AtomicIsize => "AtomicIsize".into(),
+        Ty::AtomicUsize => "AtomicUsize".into(),
         Ty::AtomicPtr(elem) => format!("AtomicPtr[{}]", ty_print_label(elem)),
         Ty::Thread => "Thread".into(),
         Ty::F16 => "f16".into(),
@@ -714,6 +723,8 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::U128 => "i128".into(),
         Ty::Bool => "i1".into(),
         Ty::AtomicBool => "i1".into(),
+        Ty::AtomicI32 | Ty::AtomicU32 => "i32".into(),
+        Ty::AtomicI64 | Ty::AtomicIsize | Ty::AtomicUsize => "i64".into(),
         Ty::AtomicPtr(_) => "ptr".into(),
         Ty::Thread => "ptr".into(),
         Ty::F16 => "half".into(),
@@ -741,6 +752,11 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         Ty::Struct(name) if name == QUBIT => Ty::Qubit,
         Ty::Struct(name) if name == "result" => Ty::Result,
         Ty::Struct(name) if name == crate::nia_std::ATOMIC_BOOL_TYPE => Ty::AtomicBool,
+        Ty::Struct(name) if name == ATOMIC_I32_TYPE => Ty::AtomicI32,
+        Ty::Struct(name) if name == ATOMIC_U32_TYPE => Ty::AtomicU32,
+        Ty::Struct(name) if name == ATOMIC_I64_TYPE => Ty::AtomicI64,
+        Ty::Struct(name) if name == ATOMIC_ISIZE_TYPE => Ty::AtomicIsize,
+        Ty::Struct(name) if name == ATOMIC_USIZE_TYPE => Ty::AtomicUsize,
         Ty::Struct(name) if name == THREAD_TYPE => Ty::Thread,
         Ty::Array(elem, n) => Ty::Array(Box::new(normalize_codegen_ty(elem)), *n),
         Ty::Ptr(inner) => Ty::Ptr(Box::new(normalize_codegen_ty(inner))),
@@ -783,13 +799,43 @@ fn atomic_exchange_failure_ordering(ordering: AtomicOrdering) -> AtomicOrdering 
     }
 }
 
+fn atomic_int_constructor_tys(name: &str) -> Option<(Ty, Ty)> {
+    match name {
+        ATOMIC_I32 => Some((Ty::AtomicI32, Ty::I32)),
+        ATOMIC_U32 => Some((Ty::AtomicU32, Ty::U32)),
+        ATOMIC_I64 => Some((Ty::AtomicI64, Ty::I64)),
+        ATOMIC_ISIZE => Some((Ty::AtomicIsize, Ty::Isize)),
+        ATOMIC_USIZE => Some((Ty::AtomicUsize, Ty::Usize)),
+        _ => None,
+    }
+}
+
+fn atomic_int_value_ty(t: &Ty) -> Option<Ty> {
+    match t {
+        Ty::AtomicI32 => Some(Ty::I32),
+        Ty::AtomicU32 => Some(Ty::U32),
+        Ty::AtomicI64 => Some(Ty::I64),
+        Ty::AtomicIsize => Some(Ty::Isize),
+        Ty::AtomicUsize => Some(Ty::Usize),
+        _ => None,
+    }
+}
+
 #[allow(dead_code)]
 fn atomic_storage_align_bytes(storage_ty: &Ty) -> usize {
     match storage_ty {
         Ty::Bool | Ty::AtomicBool | Ty::I8 | Ty::U8 => 1,
         Ty::I16 | Ty::U16 => 2,
-        Ty::I32 | Ty::U32 => 4,
-        Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize | Ty::Ptr(_) | Ty::AtomicPtr(_) => 8,
+        Ty::I32 | Ty::U32 | Ty::AtomicI32 | Ty::AtomicU32 => 4,
+        Ty::I64
+        | Ty::U64
+        | Ty::Isize
+        | Ty::Usize
+        | Ty::Ptr(_)
+        | Ty::AtomicI64
+        | Ty::AtomicIsize
+        | Ty::AtomicUsize
+        | Ty::AtomicPtr(_) => 8,
         Ty::I128 | Ty::U128 => 16,
         other => unreachable!("unsupported atomic storage type: {other:?}"),
     }
@@ -818,8 +864,25 @@ fn is_atomic_ptr_method_name(name: &str) -> bool {
     )
 }
 
+fn is_atomic_int_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        ATOMIC_LOAD_METHOD
+            | ATOMIC_STORE_METHOD
+            | ATOMIC_SWAP_METHOD
+            | ATOMIC_COMPARE_EXCHANGE_METHOD
+            | ATOMIC_FETCH_ADD_METHOD
+            | ATOMIC_FETCH_SUB_METHOD
+            | ATOMIC_FETCH_AND_METHOD
+            | ATOMIC_FETCH_OR_METHOD
+            | ATOMIC_FETCH_XOR_METHOD
+    )
+}
+
 fn is_atomic_method_name(name: &str) -> bool {
-    is_atomic_bool_method_name(name) || is_atomic_ptr_method_name(name)
+    is_atomic_bool_method_name(name)
+        || is_atomic_ptr_method_name(name)
+        || is_atomic_int_method_name(name)
 }
 
 fn atomic_ordering_from_expr(e: &Expr) -> AtomicOrdering {
@@ -1909,7 +1972,15 @@ impl<'a> Gen<'a> {
             | Ty::Qubit
             | Ty::Result
             | Ty::Ptr(_) => true,
-            Ty::AtomicBool | Ty::AtomicPtr(_) | Ty::Thread | Ty::Fn(_, _) => false,
+            Ty::AtomicBool
+            | Ty::AtomicI32
+            | Ty::AtomicU32
+            | Ty::AtomicI64
+            | Ty::AtomicIsize
+            | Ty::AtomicUsize
+            | Ty::AtomicPtr(_)
+            | Ty::Thread
+            | Ty::Fn(_, _) => false,
             Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_copy_like_ty(elem),
             Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
             Ty::Struct(name) if name == crate::nia_std::COMPLEX_TYPE => true,
@@ -4226,6 +4297,11 @@ impl<'a> Gen<'a> {
             }
             Ty::Array(_, _)
             | Ty::AtomicBool
+            | Ty::AtomicI32
+            | Ty::AtomicU32
+            | Ty::AtomicI64
+            | Ty::AtomicIsize
+            | Ty::AtomicUsize
             | Ty::AtomicPtr(_)
             | Ty::Thread
             | Ty::Struct(_)
@@ -4343,6 +4419,11 @@ impl<'a> Gen<'a> {
             }
             Ty::Array(_, _)
             | Ty::AtomicBool
+            | Ty::AtomicI32
+            | Ty::AtomicU32
+            | Ty::AtomicI64
+            | Ty::AtomicIsize
+            | Ty::AtomicUsize
             | Ty::AtomicPtr(_)
             | Ty::Thread
             | Ty::Struct(_)
@@ -8250,6 +8331,11 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::AtomicI32
+                    | Ty::AtomicU32
+                    | Ty::AtomicI64
+                    | Ty::AtomicIsize
+                    | Ty::AtomicUsize
                     | Ty::AtomicPtr(_)
                     | Ty::Thread
                     | Ty::Struct(_)
@@ -8400,6 +8486,11 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Ptr(_))
                 | Some(Ty::Bool)
                 | Some(Ty::AtomicBool)
+                | Some(Ty::AtomicI32)
+                | Some(Ty::AtomicU32)
+                | Some(Ty::AtomicI64)
+                | Some(Ty::AtomicIsize)
+                | Some(Ty::AtomicUsize)
                 | Some(Ty::AtomicPtr(_))
                 | Some(Ty::Thread)
                 | Some(Ty::Qubit)
@@ -8509,6 +8600,11 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::AtomicI32
+                    | Ty::AtomicU32
+                    | Ty::AtomicI64
+                    | Ty::AtomicIsize
+                    | Ty::AtomicUsize
                     | Ty::AtomicPtr(_)
                     | Ty::Thread
                     | Ty::Struct(_)
@@ -8587,6 +8683,11 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::AtomicI32
+                    | Ty::AtomicU32
+                    | Ty::AtomicI64
+                    | Ty::AtomicIsize
+                    | Ty::AtomicUsize
                     | Ty::AtomicPtr(_)
                     | Ty::Thread
                     | Ty::Struct(_)
@@ -8652,6 +8753,11 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::AtomicI32
+                    | Ty::AtomicU32
+                    | Ty::AtomicI64
+                    | Ty::AtomicIsize
+                    | Ty::AtomicUsize
                     | Ty::AtomicPtr(_)
                     | Ty::Thread
                     | Ty::Struct(_)
@@ -8781,6 +8887,11 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::AtomicI32
+                    | Ty::AtomicU32
+                    | Ty::AtomicI64
+                    | Ty::AtomicIsize
+                    | Ty::AtomicUsize
                     | Ty::AtomicPtr(_)
                     | Ty::Thread
                     | Ty::Struct(_)
@@ -8929,6 +9040,11 @@ impl<'a> Gen<'a> {
                     }
                     Ty::Array(_, _)
                     | Ty::AtomicBool
+                    | Ty::AtomicI32
+                    | Ty::AtomicU32
+                    | Ty::AtomicI64
+                    | Ty::AtomicIsize
+                    | Ty::AtomicUsize
                     | Ty::AtomicPtr(_)
                     | Ty::Thread
                     | Ty::Struct(_)
@@ -9170,6 +9286,10 @@ impl<'a> Gen<'a> {
                 if name == ATOMIC_BOOL {
                     let (_, value) = self.emit_expr(&args[0], locals, Some(&Ty::Bool));
                     return (Ty::AtomicBool, value);
+                }
+                if let Some((atomic_ty, value_ty)) = atomic_int_constructor_tys(name) {
+                    let (_, value) = self.emit_expr(&args[0], locals, Some(&value_ty));
+                    return (atomic_ty, value);
                 }
                 if name == ATOMIC_PTR {
                     let ptr_hint = match hint {
@@ -9422,6 +9542,9 @@ impl<'a> Gen<'a> {
                     let recv_ty = self.expr_codegen_ty(receiver, locals);
                     if matches!(recv_ty, Ty::AtomicPtr(_)) {
                         return self.emit_atomic_ptr_method(receiver, name, args, locals);
+                    }
+                    if atomic_int_value_ty(&recv_ty).is_some() {
+                        return self.emit_atomic_int_method(receiver, name, args, locals);
                     }
                     return self.emit_atomic_bool_method(receiver, name, args, locals);
                 }
@@ -10412,6 +10535,91 @@ impl<'a> Gen<'a> {
         }
     }
 
+    fn emit_atomic_int_method(
+        &mut self,
+        receiver: &Expr,
+        name: &str,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (recv_ty, cell_ptr) = self.emit_atomic_lvalue_ptr(receiver, locals);
+        let value_ty = atomic_int_value_ty(&recv_ty).expect("typechecked atomic integer receiver");
+        let ll_ty = llvm_ty(&value_ty, self.structs);
+        let align = atomic_storage_align_bytes(&recv_ty);
+        match name {
+            ATOMIC_LOAD_METHOD => {
+                let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[0]));
+                let out = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = load atomic {}, ptr {} {}, align {}",
+                    out, ll_ty, cell_ptr, ordering, align
+                )
+                .unwrap();
+                (value_ty, format!("%{out}"))
+            }
+            ATOMIC_STORE_METHOD => {
+                let (_, value) = self.emit_expr(&args[0], locals, Some(&value_ty));
+                let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[1]));
+                writeln!(
+                    self.out,
+                    "  store atomic {} {}, ptr {} {}, align {}",
+                    ll_ty, value, cell_ptr, ordering, align
+                )
+                .unwrap();
+                (Ty::Unit, String::new())
+            }
+            ATOMIC_SWAP_METHOD
+            | ATOMIC_FETCH_ADD_METHOD
+            | ATOMIC_FETCH_SUB_METHOD
+            | ATOMIC_FETCH_AND_METHOD
+            | ATOMIC_FETCH_OR_METHOD
+            | ATOMIC_FETCH_XOR_METHOD => {
+                let (_, value) = self.emit_expr(&args[0], locals, Some(&value_ty));
+                let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[1]));
+                let op = match name {
+                    ATOMIC_SWAP_METHOD => "xchg",
+                    ATOMIC_FETCH_ADD_METHOD => "add",
+                    ATOMIC_FETCH_SUB_METHOD => "sub",
+                    ATOMIC_FETCH_AND_METHOD => "and",
+                    ATOMIC_FETCH_OR_METHOD => "or",
+                    ATOMIC_FETCH_XOR_METHOD => "xor",
+                    _ => unreachable!("guarded atomic integer rmw method"),
+                };
+                let out = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = atomicrmw {} ptr {}, {} {} {}",
+                    out, op, cell_ptr, ll_ty, value, ordering
+                )
+                .unwrap();
+                (value_ty, format!("%{out}"))
+            }
+            ATOMIC_COMPARE_EXCHANGE_METHOD => {
+                let (_, current) = self.emit_expr(&args[0], locals, Some(&value_ty));
+                let (_, new) = self.emit_expr(&args[1], locals, Some(&value_ty));
+                let success = llvm_atomic_ordering(atomic_ordering_from_expr(&args[2]));
+                let failure = llvm_atomic_ordering(atomic_ordering_from_expr(&args[3]));
+                let pair = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = cmpxchg ptr {}, {} {}, {} {} {} {}",
+                    pair, cell_ptr, ll_ty, current, ll_ty, new, success, failure
+                )
+                .unwrap();
+                let ok = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {{ {}, i1 }} %{}, 1",
+                    ok, ll_ty, pair
+                )
+                .unwrap();
+                (Ty::Bool, format!("%{ok}"))
+            }
+            _ => unreachable!("guarded atomic integer method"),
+        }
+    }
+
     fn emit_atomic_ptr_method(
         &mut self,
         receiver: &Expr,
@@ -10591,6 +10799,11 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::F64, Ty::F64)
         | (Ty::Bool, Ty::Bool)
         | (Ty::AtomicBool, Ty::AtomicBool)
+        | (Ty::AtomicI32, Ty::AtomicI32)
+        | (Ty::AtomicU32, Ty::AtomicU32)
+        | (Ty::AtomicI64, Ty::AtomicI64)
+        | (Ty::AtomicIsize, Ty::AtomicIsize)
+        | (Ty::AtomicUsize, Ty::AtomicUsize)
         | (Ty::String, Ty::String)
         | (Ty::Qubit, Ty::Qubit)
         | (Ty::Result, Ty::Result)

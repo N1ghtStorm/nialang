@@ -248,6 +248,64 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_atomic_int_operations() {
+    let ll = emit(include_str!("../../../examples/tests/ok_atomic_int.nia"));
+    assert!(
+        ll.contains("store atomic i32 2, ptr %counter.addr release, align 4"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("load atomic i32, ptr %counter.addr acquire, align 4"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw xchg ptr %counter.addr, i32 3 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw add ptr %counter.addr, i32 4 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw sub ptr %counter.addr, i32 1 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw and ptr %counter.addr, i32 7 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw or ptr %counter.addr, i32 8 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw xor ptr %counter.addr, i32 1 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("cmpxchg ptr %counter.addr, i32 14, i32 1 acq_rel acquire"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("extractvalue { i32, i1 } %"), "IR:\n{ll}");
+    assert!(
+        ll.contains("atomicrmw add ptr %unsigned.addr, i32 5 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw sub ptr %wide.addr, i64 25 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw or ptr %index.addr, i64 1 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw xor ptr %size.addr, i64 3 acq_rel"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_non_capturing_closure_function_value() {
     let ll = emit(
         r#"

@@ -1,0 +1,18 @@
+fn main() i32 {
+    let counter: AtomicI32 = atomic_i32(0);
+
+    let before: i32 = counter.fetch_add(1, Ordering::AcqRel);
+    let now: i32 = counter.load(Ordering::Acquire);
+    println(before);
+    println(now);
+
+    let flags: AtomicU32 = atomic_u32(1);
+    let old_flags: u32 = flags.fetch_or(4, Ordering::AcqRel);
+    println(old_flags);
+
+    let bytes: AtomicUsize = atomic_usize(64);
+    let previous_bytes: usize = bytes.swap(128, Ordering::AcqRel);
+    println(previous_bytes);
+
+    0
+}

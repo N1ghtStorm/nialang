@@ -445,6 +445,8 @@ Tests:
 
 ### Phase 3: Small Integer Atomics
 
+Status: implemented.
+
 Goal: add the most useful integer atomics after bool and pointer atomics are
 already stable.
 
@@ -462,6 +464,7 @@ Compiler work:
 - support `load`, `store`, `swap`, `compare_exchange`
 - support `fetch_add`, `fetch_sub`, `fetch_and`, `fetch_or`, `fetch_xor`
 - lower to `i32` or `i64`
+- sample: `examples/sample_atomic_int.nia`
 
 ### Phase 4: Narrow Integer Atomics
 
@@ -507,7 +510,7 @@ Typecheck ok fixtures:
 - `ok_atomic_ptr.nia`
 - `ok_atomic_compare_exchange.nia`
 - `ok_atomic_fence.nia`
-- `ok_atomic_i32.nia`
+- `ok_atomic_int.nia`
 
 Typecheck error fixtures:
 

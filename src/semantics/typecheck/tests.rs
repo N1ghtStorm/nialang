@@ -60,11 +60,13 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_bitwise.nia"),
         include_str!("../../../examples/tests/ok_atomic_bool.nia"),
         include_str!("../../../examples/tests/ok_atomic_ptr.nia"),
+        include_str!("../../../examples/tests/ok_atomic_int.nia"),
         include_str!("../../../examples/tests/ok_threads_minimal.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_struct_methods_big.nia"),
         include_str!("../../../examples/sample_atomic_ptr.nia"),
+        include_str!("../../../examples/sample_atomic_int.nia"),
         include_str!("../../../examples/sample_matrix_rc.nia"),
         include_str!("../../../examples/sample_matrix_arith.nia"),
         include_str!("../../../examples/sample_matrix_det.nia"),
@@ -511,6 +513,107 @@ fn main() i32 {
 "#;
     let err = check_all(fetch).expect_err("AtomicPtr does not support bool fetch ops");
     assert!(err.contains("not supported for `AtomicPtr[T]`"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_int_methods() {
+    let src = include_str!("../../../examples/tests/ok_atomic_int.nia");
+    check_all(src).expect("integer atomic methods should typecheck");
+}
+
+#[test]
+fn typecheck_atomic_int_rejects_plain_reads_assignment_and_by_value() {
+    let plain_read = r#"
+fn main() i32 {
+    let counter: AtomicI32 = atomic_i32(1);
+    let snapshot = counter;
+    0
+}
+"#;
+    let err = check_all(plain_read).expect_err("atomic integer plain read should fail");
+    assert!(err.contains("cannot be read directly"), "{err}");
+
+    let assignment = r#"
+fn main() i32 {
+    let counter: AtomicI32 = atomic_i32(1);
+    counter = atomic_i32(2);
+    0
+}
+"#;
+    let err = check_all(assignment).expect_err("atomic integer assignment should fail");
+    assert!(err.contains("cannot assign to atomic value"), "{err}");
+
+    let param = r#"
+fn bad(counter: AtomicU32) u32 {
+    counter.load(Ordering::Acquire)
+}
+"#;
+    let err = check_all(param).expect_err("atomic integer parameter should fail");
+    assert!(err.contains("atomic storage by value"), "{err}");
+
+    let field = r#"
+struct Holder {
+    counter: AtomicI64,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(field).expect_err("atomic integer field should fail");
+    assert!(err.contains("atomic storage by value"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_int_rejects_invalid_orderings_types_and_bool_add() {
+    let bad_load = r#"
+fn main() i32 {
+    let counter: AtomicI32 = atomic_i32(1);
+    let value = counter.load(Ordering::Release);
+    0
+}
+"#;
+    let err = check_all(bad_load).expect_err("AtomicI32 load release should fail");
+    assert!(err.contains("not a valid ordering"), "{err}");
+
+    let bad_store = r#"
+fn main() i32 {
+    let counter: AtomicI32 = atomic_i32(1);
+    counter.store(2, Ordering::Acquire);
+    0
+}
+"#;
+    let err = check_all(bad_store).expect_err("AtomicI32 store acquire should fail");
+    assert!(err.contains("not a valid ordering"), "{err}");
+
+    let bad_cmpxchg = r#"
+fn main() i32 {
+    let counter: AtomicI32 = atomic_i32(1);
+    let ok = counter.compare_exchange(1, 2, Ordering::Release, Ordering::Acquire);
+    0
+}
+"#;
+    let err = check_all(bad_cmpxchg).expect_err("AtomicI32 bad cmpxchg should fail");
+    assert!(err.contains("stronger than success"), "{err}");
+
+    let bad_ctor = r#"
+fn main() i32 {
+    let counter = atomic_i32(true);
+    0
+}
+"#;
+    let err = check_all(bad_ctor).expect_err("atomic_i32 bool argument should fail");
+    assert!(err.contains("cannot satisfy I32"), "{err}");
+
+    let bool_add = r#"
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    let old = ready.fetch_add(true, Ordering::AcqRel);
+    0
+}
+"#;
+    let err = check_all(bool_add).expect_err("AtomicBool fetch_add should fail");
+    assert!(err.contains("not supported for `AtomicBool`"), "{err}");
 }
 
 #[test]

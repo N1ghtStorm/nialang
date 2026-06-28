@@ -1,0 +1,44 @@
+fn read_i32(cell: &AtomicI32) i32 {
+    (*cell).load(Ordering::Acquire)
+}
+
+fn main() i32 {
+    let counter: AtomicI32 = atomic_i32(1);
+    counter.store(2, Ordering::Release);
+    let loaded: i32 = counter.load(Ordering::Acquire);
+    let swapped: i32 = counter.swap(3, Ordering::AcqRel);
+    let old_add: i32 = counter.fetch_add(4, Ordering::AcqRel);
+    let old_sub: i32 = counter.fetch_sub(1, Ordering::AcqRel);
+    let old_and: i32 = counter.fetch_and(7, Ordering::AcqRel);
+    let old_or: i32 = counter.fetch_or(8, Ordering::AcqRel);
+    let old_xor: i32 = counter.fetch_xor(1, Ordering::AcqRel);
+    let changed: bool = counter.compare_exchange(14, 1, Ordering::AcqRel, Ordering::Acquire);
+    let via_ptr: i32 = read_i32(&counter);
+
+    let unsigned: AtomicU32 = atomic_u32(10);
+    let old_u32: u32 = unsigned.fetch_add(5, Ordering::AcqRel);
+
+    let wide: AtomicI64 = atomic_i64(100);
+    let old_i64: i64 = wide.fetch_sub(25, Ordering::AcqRel);
+
+    let index: AtomicIsize = atomic_isize(4);
+    let old_isize: isize = index.fetch_or(1, Ordering::AcqRel);
+
+    let size: AtomicUsize = atomic_usize(8);
+    let old_usize: usize = size.fetch_xor(3, Ordering::AcqRel);
+
+    println(loaded);
+    println(swapped);
+    println(old_add);
+    println(old_sub);
+    println(old_and);
+    println(old_or);
+    println(old_xor);
+    println(changed);
+    println(via_ptr);
+    println(old_u32);
+    println(old_i64);
+    println(old_isize);
+    println(old_usize);
+    0
+}

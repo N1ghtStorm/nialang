@@ -66,6 +66,16 @@ pub enum Ty {
     List(Box<Ty>),
     /// Built-in atomic boolean storage cell, written as `AtomicBool`.
     AtomicBool,
+    /// Built-in atomic 32-bit signed integer storage cell, written as `AtomicI32`.
+    AtomicI32,
+    /// Built-in atomic 32-bit unsigned integer storage cell, written as `AtomicU32`.
+    AtomicU32,
+    /// Built-in atomic 64-bit signed integer storage cell, written as `AtomicI64`.
+    AtomicI64,
+    /// Built-in atomic pointer-width signed integer storage cell, written as `AtomicIsize`.
+    AtomicIsize,
+    /// Built-in atomic pointer-width unsigned integer storage cell, written as `AtomicUsize`.
+    AtomicUsize,
     /// Built-in atomic pointer storage cell, written as `AtomicPtr[T]`.
     AtomicPtr(Box<Ty>),
     /// Built-in native thread handle, written as `Thread`.
@@ -150,6 +160,11 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
         Ty::AtomicBool => "atomic_bool".into(),
+        Ty::AtomicI32 => "atomic_i32".into(),
+        Ty::AtomicU32 => "atomic_u32".into(),
+        Ty::AtomicI64 => "atomic_i64".into(),
+        Ty::AtomicIsize => "atomic_isize".into(),
+        Ty::AtomicUsize => "atomic_usize".into(),
         Ty::AtomicPtr(elem) => format!("atomic_ptr_{}", ty_symbol_fragment(elem)),
         Ty::Thread => "thread".into(),
         Ty::Matrix(_, _) => "Matrix".into(),
