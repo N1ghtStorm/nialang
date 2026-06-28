@@ -369,6 +369,11 @@ fn parse_fixture_bitwise() {
 }
 
 #[test]
+fn parse_fixture_atomic_bool() {
+    parse_ok(include_str!("../../examples/tests/ok_atomic_bool.nia"));
+}
+
+#[test]
 fn parse_fixture_ptr_write() {
     parse_ok(include_str!("../../examples/tests/ok_ptr_write.nia"));
 }

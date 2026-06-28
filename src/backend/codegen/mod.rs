@@ -8,22 +8,29 @@ use crate::ast::{
     VectorDef, method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE,
-    COMPLEX_SUB, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1,
-    GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY,
-    GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP,
-    GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW,
-    LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT,
-    MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256,
-    SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
-    VECTOR_SET,
+    ALLOC, ATOMIC_BOOL, ATOMIC_FENCE, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL,
+    COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ,
+    GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP,
+    GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ,
+    GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY,
+    LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS,
+    MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
+    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER,
+    PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC,
+    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
 const CLONE_METHOD: &str = "clone";
 const DROP_METHOD: &str = "drop";
 const DEREF_METHOD: &str = "deref";
+const ATOMIC_LOAD_METHOD: &str = "load";
+const ATOMIC_STORE_METHOD: &str = "store";
+const ATOMIC_SWAP_METHOD: &str = "swap";
+const ATOMIC_COMPARE_EXCHANGE_METHOD: &str = "compare_exchange";
+const ATOMIC_FETCH_AND_METHOD: &str = "fetch_and";
+const ATOMIC_FETCH_OR_METHOD: &str = "fetch_or";
+const ATOMIC_FETCH_XOR_METHOD: &str = "fetch_xor";
 const CLOSURE_ENV_PARAM: &str = "\0nia.closure.env";
 
 /// Walks all functions and collects UTF-8 string literal payloads for module-level globals.
@@ -501,6 +508,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::Usize => "usize".into(),
         Ty::U128 => "u128".into(),
         Ty::Bool => "bool".into(),
+        Ty::AtomicBool => "AtomicBool".into(),
         Ty::F16 => "f16".into(),
         Ty::F32 => "f32".into(),
         Ty::F64 => "f64".into(),
@@ -691,6 +699,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::Usize => "i64".into(),
         Ty::U128 => "i128".into(),
         Ty::Bool => "i1".into(),
+        Ty::AtomicBool => "i1".into(),
         Ty::F16 => "half".into(),
         Ty::F32 => "float".into(),
         Ty::F64 => "double".into(),
@@ -715,6 +724,7 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
     match t {
         Ty::Struct(name) if name == QUBIT => Ty::Qubit,
         Ty::Struct(name) if name == "result" => Ty::Result,
+        Ty::Struct(name) if name == crate::nia_std::ATOMIC_BOOL_TYPE => Ty::AtomicBool,
         Ty::Array(elem, n) => Ty::Array(Box::new(normalize_codegen_ty(elem)), *n),
         Ty::Ptr(inner) => Ty::Ptr(Box::new(normalize_codegen_ty(inner))),
         Ty::Vector(name, inner) => Ty::Vector(name.clone(), Box::new(normalize_codegen_ty(inner))),
@@ -748,13 +758,33 @@ fn llvm_atomic_ordering(ordering: AtomicOrdering) -> &'static str {
 #[allow(dead_code)]
 fn atomic_storage_align_bytes(storage_ty: &Ty) -> usize {
     match storage_ty {
-        Ty::Bool | Ty::I8 | Ty::U8 => 1,
+        Ty::Bool | Ty::AtomicBool | Ty::I8 | Ty::U8 => 1,
         Ty::I16 | Ty::U16 => 2,
         Ty::I32 => 4,
         Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize | Ty::Ptr(_) => 8,
         Ty::I128 | Ty::U128 => 16,
         other => unreachable!("unsupported atomic storage type: {other:?}"),
     }
+}
+
+fn is_atomic_bool_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        ATOMIC_LOAD_METHOD
+            | ATOMIC_STORE_METHOD
+            | ATOMIC_SWAP_METHOD
+            | ATOMIC_COMPARE_EXCHANGE_METHOD
+            | ATOMIC_FETCH_AND_METHOD
+            | ATOMIC_FETCH_OR_METHOD
+            | ATOMIC_FETCH_XOR_METHOD
+    )
+}
+
+fn atomic_ordering_from_expr(e: &Expr) -> AtomicOrdering {
+    let Expr::Ident(path) = e else {
+        unreachable!("typechecked atomic ordering literal")
+    };
+    crate::nia_std::atomic_ordering_from_path(path).expect("typechecked atomic ordering")
 }
 
 fn is_float_ty(t: &Ty) -> bool {
@@ -1833,7 +1863,7 @@ impl<'a> Gen<'a> {
             | Ty::Qubit
             | Ty::Result
             | Ty::Ptr(_) => true,
-            Ty::Fn(_, _) => false,
+            Ty::AtomicBool | Ty::Fn(_, _) => false,
             Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_copy_like_ty(elem),
             Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
             Ty::Struct(name) if name == crate::nia_std::COMPLEX_TYPE => true,
@@ -4045,6 +4075,7 @@ impl<'a> Gen<'a> {
                 }
             }
             Ty::Array(_, _)
+            | Ty::AtomicBool
             | Ty::Struct(_)
             | Ty::Enum(_)
             | Ty::Qubit
@@ -4159,6 +4190,7 @@ impl<'a> Gen<'a> {
                 .unwrap();
             }
             Ty::Array(_, _)
+            | Ty::AtomicBool
             | Ty::Struct(_)
             | Ty::Enum(_)
             | Ty::Qubit
@@ -8039,6 +8071,7 @@ impl<'a> Gen<'a> {
                         unreachable!("typechecked for range")
                     }
                     Ty::Array(_, _)
+                    | Ty::AtomicBool
                     | Ty::Struct(_)
                     | Ty::Enum(_)
                     | Ty::Unit
@@ -8185,6 +8218,7 @@ impl<'a> Gen<'a> {
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
                 | Some(Ty::Bool)
+                | Some(Ty::AtomicBool)
                 | Some(Ty::Qubit)
                 | Some(Ty::Result)
                 | Some(Ty::String)
@@ -8288,6 +8322,7 @@ impl<'a> Gen<'a> {
                         writeln!(self.out, "  %{} = fneg {} {}", tmp, ll, v).unwrap();
                     }
                     Ty::Array(_, _)
+                    | Ty::AtomicBool
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8360,6 +8395,7 @@ impl<'a> Gen<'a> {
                         writeln!(self.out, "  %{} = fadd {} {}, {}", tmp, ll, vl, vr).unwrap();
                     }
                     Ty::Array(_, _)
+                    | Ty::AtomicBool
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8419,6 +8455,7 @@ impl<'a> Gen<'a> {
                         writeln!(self.out, "  %{} = fsub {} {}, {}", tmp, ll, vl, vr).unwrap();
                     }
                     Ty::Array(_, _)
+                    | Ty::AtomicBool
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8542,6 +8579,7 @@ impl<'a> Gen<'a> {
                         writeln!(self.out, "  %{} = fmul {} {}, {}", tmp, ll, vl, vr).unwrap();
                     }
                     Ty::Array(_, _)
+                    | Ty::AtomicBool
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8687,6 +8725,7 @@ impl<'a> Gen<'a> {
                         writeln!(self.out, "  %{} = fdiv {} {}, {}", tmp, ll, vl, vr).unwrap();
                     }
                     Ty::Array(_, _)
+                    | Ty::AtomicBool
                     | Ty::Struct(_)
                     | Ty::Vector(_, _)
                     | Ty::AnonVector(_, _)
@@ -8923,6 +8962,15 @@ impl<'a> Gen<'a> {
                 if name == DROP_METHOD {
                     return self.emit_language_drop(args, locals);
                 }
+                if name == ATOMIC_BOOL {
+                    let (_, value) = self.emit_expr(&args[0], locals, Some(&Ty::Bool));
+                    return (Ty::AtomicBool, value);
+                }
+                if name == ATOMIC_FENCE {
+                    let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[0]));
+                    writeln!(self.out, "  fence {}", ordering).unwrap();
+                    return (Ty::Unit, String::new());
+                }
                 if let Some(result) = self.emit_crypto_builtin_call(name, args, locals) {
                     return result;
                 }
@@ -9148,6 +9196,9 @@ impl<'a> Gen<'a> {
                 name,
                 args,
             } => {
+                if is_atomic_bool_method_name(name) {
+                    return self.emit_atomic_bool_method(receiver, name, args, locals);
+                }
                 if name == TO_MATRIX {
                     debug_assert!(args.is_empty());
                     let (recv_ty, recv_val) = self.emit_expr(receiver, locals, None);
@@ -10055,6 +10106,86 @@ impl<'a> Gen<'a> {
         }
     }
 
+    fn emit_atomic_bool_method(
+        &mut self,
+        receiver: &Expr,
+        name: &str,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+    ) -> (Ty, String) {
+        let (recv_ty, cell_ptr) = self.emit_atomic_lvalue_ptr(receiver, locals);
+        debug_assert!(matches!(recv_ty, Ty::AtomicBool));
+        let align = atomic_storage_align_bytes(&Ty::AtomicBool);
+        match name {
+            ATOMIC_LOAD_METHOD => {
+                let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[0]));
+                let out = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = load atomic i1, ptr {} {}, align {}",
+                    out, cell_ptr, ordering, align
+                )
+                .unwrap();
+                (Ty::Bool, format!("%{out}"))
+            }
+            ATOMIC_STORE_METHOD => {
+                let (_, value) = self.emit_expr(&args[0], locals, Some(&Ty::Bool));
+                let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[1]));
+                writeln!(
+                    self.out,
+                    "  store atomic i1 {}, ptr {} {}, align {}",
+                    value, cell_ptr, ordering, align
+                )
+                .unwrap();
+                (Ty::Unit, String::new())
+            }
+            ATOMIC_SWAP_METHOD
+            | ATOMIC_FETCH_AND_METHOD
+            | ATOMIC_FETCH_OR_METHOD
+            | ATOMIC_FETCH_XOR_METHOD => {
+                let (_, value) = self.emit_expr(&args[0], locals, Some(&Ty::Bool));
+                let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[1]));
+                let op = match name {
+                    ATOMIC_SWAP_METHOD => "xchg",
+                    ATOMIC_FETCH_AND_METHOD => "and",
+                    ATOMIC_FETCH_OR_METHOD => "or",
+                    ATOMIC_FETCH_XOR_METHOD => "xor",
+                    _ => unreachable!("guarded atomic rmw method"),
+                };
+                let out = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = atomicrmw {} ptr {}, i1 {} {}",
+                    out, op, cell_ptr, value, ordering
+                )
+                .unwrap();
+                (Ty::Bool, format!("%{out}"))
+            }
+            ATOMIC_COMPARE_EXCHANGE_METHOD => {
+                let (_, current) = self.emit_expr(&args[0], locals, Some(&Ty::Bool));
+                let (_, new) = self.emit_expr(&args[1], locals, Some(&Ty::Bool));
+                let success = llvm_atomic_ordering(atomic_ordering_from_expr(&args[2]));
+                let failure = llvm_atomic_ordering(atomic_ordering_from_expr(&args[3]));
+                let pair = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = cmpxchg ptr {}, i1 {}, i1 {} {} {}",
+                    pair, cell_ptr, current, new, success, failure
+                )
+                .unwrap();
+                let ok = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = extractvalue {{ i1, i1 }} %{}, 1",
+                    ok, pair
+                )
+                .unwrap();
+                (Ty::Bool, format!("%{ok}"))
+            }
+            _ => unreachable!("guarded atomic bool method"),
+        }
+    }
+
     fn emit_assign_ptr(
         &mut self,
         target: &Expr,
@@ -10109,6 +10240,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::F32, Ty::F32)
         | (Ty::F64, Ty::F64)
         | (Ty::Bool, Ty::Bool)
+        | (Ty::AtomicBool, Ty::AtomicBool)
         | (Ty::String, Ty::String)
         | (Ty::Qubit, Ty::Qubit)
         | (Ty::Result, Ty::Result)

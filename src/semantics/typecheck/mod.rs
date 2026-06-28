@@ -5,22 +5,30 @@ use crate::ast::{
     VectorDef, method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE,
-    COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT,
-    GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG,
-    GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG,
-    GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN,
-    LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET,
-    MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH,
-    MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, ORDERING_TYPE, OUTER, PI,
-    PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC,
-    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    ALLOC, ATOMIC_BOOL, ATOMIC_BOOL_TYPE, ATOMIC_FENCE, AtomicOrdering, CIS, COMPLEX_ADD,
+    COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC,
+    DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ,
+    GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1,
+    GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y,
+    GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
+    MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS,
+    MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT,
+    MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
+    RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
+    VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
 const CLONE_METHOD: &str = "clone";
 const DROP_METHOD: &str = "drop";
 const DEREF_METHOD: &str = "deref";
+const ATOMIC_LOAD_METHOD: &str = "load";
+const ATOMIC_STORE_METHOD: &str = "store";
+const ATOMIC_SWAP_METHOD: &str = "swap";
+const ATOMIC_COMPARE_EXCHANGE_METHOD: &str = "compare_exchange";
+const ATOMIC_FETCH_AND_METHOD: &str = "fetch_and";
+const ATOMIC_FETCH_OR_METHOD: &str = "fetch_or";
+const ATOMIC_FETCH_XOR_METHOD: &str = "fetch_xor";
 
 /// Canonical function signature table entry used across semantic passes.
 ///
@@ -52,6 +60,8 @@ fn normalize_ty(
                 Ok(Ty::Qubit)
             } else if name == RESULT {
                 Ok(Ty::Result)
+            } else if name == ATOMIC_BOOL_TYPE {
+                Ok(Ty::AtomicBool)
             } else if name == MATRIX_TYPE {
                 Err(format!(
                     "type `Matrix` is no longer a valid annotation; use `T[]` (e.g. `i32[]`)"
@@ -218,6 +228,158 @@ pub fn check_atomic_lvalue_receiver(receiver: &Expr) -> Result<(), String> {
     }
 }
 
+fn is_atomic_ty(t: &Ty) -> bool {
+    matches!(t, Ty::AtomicBool)
+}
+
+fn is_atomic_bool_method(name: &str) -> bool {
+    matches!(
+        name,
+        ATOMIC_LOAD_METHOD
+            | ATOMIC_STORE_METHOD
+            | ATOMIC_SWAP_METHOD
+            | ATOMIC_COMPARE_EXCHANGE_METHOD
+            | ATOMIC_FETCH_AND_METHOD
+            | ATOMIC_FETCH_OR_METHOD
+            | ATOMIC_FETCH_XOR_METHOD
+    )
+}
+
+fn infer_atomic_lvalue_receiver_ty(
+    receiver: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    check_atomic_lvalue_receiver(receiver)?;
+    match receiver {
+        Expr::Ident(name) => env
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("unknown variable `{name}`")),
+        Expr::Deref(inner) => {
+            let ptr_ty = infer_expr(inner, env, structs, enums, vectors, fns, None)?;
+            match ptr_ty {
+                Ty::Ptr(pointee) => Ok((*pointee).clone()),
+                other => custom_deref_target_ty(&other, structs, fns).ok_or_else(|| {
+                    format!("atomic method receiver dereference requires a pointer, got {other:?}")
+                }),
+            }
+        }
+        _ => unreachable!("checked atomic receiver shape"),
+    }
+}
+
+fn atomic_assignment_target_ty(
+    target: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Option<Ty>, String> {
+    match target {
+        Expr::Ident(name) => Ok(env.get(name).filter(|ty| is_atomic_ty(ty)).cloned()),
+        Expr::Deref(inner) => {
+            let ptr_ty = infer_expr(inner, env, structs, enums, vectors, fns, None)?;
+            match ptr_ty {
+                Ty::Ptr(pointee) if is_atomic_ty(&pointee) => Ok(Some((*pointee).clone())),
+                _ => Ok(None),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn expect_atomic_bool_receiver(
+    receiver: &Expr,
+    method: &str,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<(), String> {
+    let recv_ty = infer_atomic_lvalue_receiver_ty(receiver, env, structs, enums, vectors, fns)?;
+    if matches!(recv_ty, Ty::AtomicBool) {
+        Ok(())
+    } else {
+        Err(format!(
+            "method `{method}` requires `AtomicBool` receiver, got {recv_ty:?}"
+        ))
+    }
+}
+
+fn infer_atomic_bool_method(
+    receiver: &Expr,
+    name: &str,
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    expect_atomic_bool_receiver(receiver, name, env, structs, enums, vectors, fns)?;
+    match name {
+        ATOMIC_LOAD_METHOD => {
+            if args.len() != 1 {
+                return Err(format!(
+                    "method `{name}`: expected 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            let ordering = parse_ordering_literal(&args[0])?;
+            check_atomic_ordering_for_op(AtomicOrderingUse::Load, ordering)?;
+            Ok(Ty::Bool)
+        }
+        ATOMIC_STORE_METHOD => {
+            if args.len() != 2 {
+                return Err(format!(
+                    "method `{name}`: expected 2 args, got {}",
+                    args.len()
+                ));
+            }
+            expect_arg_ty(name, args, 0, &Ty::Bool, env, structs, enums, vectors, fns)?;
+            let ordering = parse_ordering_literal(&args[1])?;
+            check_atomic_ordering_for_op(AtomicOrderingUse::Store, ordering)?;
+            Ok(Ty::Unit)
+        }
+        ATOMIC_SWAP_METHOD
+        | ATOMIC_FETCH_AND_METHOD
+        | ATOMIC_FETCH_OR_METHOD
+        | ATOMIC_FETCH_XOR_METHOD => {
+            if args.len() != 2 {
+                return Err(format!(
+                    "method `{name}`: expected 2 args, got {}",
+                    args.len()
+                ));
+            }
+            expect_arg_ty(name, args, 0, &Ty::Bool, env, structs, enums, vectors, fns)?;
+            let ordering = parse_ordering_literal(&args[1])?;
+            check_atomic_ordering_for_op(AtomicOrderingUse::ReadModifyWrite, ordering)?;
+            Ok(Ty::Bool)
+        }
+        ATOMIC_COMPARE_EXCHANGE_METHOD => {
+            if args.len() != 4 {
+                return Err(format!(
+                    "method `{name}`: expected 4 args, got {}",
+                    args.len()
+                ));
+            }
+            expect_arg_ty(name, args, 0, &Ty::Bool, env, structs, enums, vectors, fns)?;
+            expect_arg_ty(name, args, 1, &Ty::Bool, env, structs, enums, vectors, fns)?;
+            let success = parse_ordering_literal(&args[2])?;
+            let failure = parse_ordering_literal(&args[3])?;
+            check_compare_exchange_orderings(success, failure)?;
+            Ok(Ty::Bool)
+        }
+        _ => unreachable!("guarded atomic bool method"),
+    }
+}
+
 fn path_leaf(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path)
 }
@@ -376,6 +538,7 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::F32 => "f32".into(),
         Ty::F64 => "f64".into(),
         Ty::String => "String".into(),
+        Ty::AtomicBool => "AtomicBool".into(),
         Ty::Qubit => "Qubit".into(),
         Ty::Result => "Result".into(),
         Ty::Struct(name) => format!("struct `{name}`"),
@@ -1001,6 +1164,15 @@ fn reject_quantum_ty(t: &Ty, context: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn reject_direct_atomic_ty(t: &Ty, context: &str) -> Result<(), String> {
+    if is_atomic_ty(t) {
+        return Err(format!(
+            "{context} cannot use atomic storage by value; use an atomic local or pointer"
+        ));
+    }
+    Ok(())
+}
+
 /// Builds global symbol tables used by later typechecking passes.
 ///
 /// ## Outputs
@@ -1073,6 +1245,7 @@ pub fn collect_sigs(
     for v in normalized_vectors.values_mut() {
         v.ty = normalize_ty(&v.ty, &struct_map, &enum_map, &vector_map)?;
         reject_quantum_ty(&v.ty, &format!("vector `{}` element type", v.name))?;
+        reject_direct_atomic_ty(&v.ty, &format!("vector `{}` element type", v.name))?;
     }
 
     for e in normalized_enums.values_mut() {
@@ -1086,12 +1259,20 @@ pub fn collect_sigs(
                             t,
                             &format!("enum `{}` variant `{}` field", e.name, v.name),
                         )?;
+                        reject_direct_atomic_ty(
+                            t,
+                            &format!("enum `{}` variant `{}` field", e.name, v.name),
+                        )?;
                     }
                 }
                 EnumVariantFields::Struct(fs) => {
                     for (_, t) in fs {
                         *t = normalize_ty(t, &struct_map, &enum_map, &vector_map)?;
                         reject_quantum_ty(
+                            t,
+                            &format!("enum `{}` variant `{}` field", e.name, v.name),
+                        )?;
+                        reject_direct_atomic_ty(
                             t,
                             &format!("enum `{}` variant `{}` field", e.name, v.name),
                         )?;
@@ -1105,6 +1286,7 @@ pub fn collect_sigs(
         for (_, t) in &mut s.fields {
             *t = normalize_ty(t, &struct_map, &enum_map, &vector_map)?;
             reject_quantum_ty(t, &format!("struct `{}` field", s.name))?;
+            reject_direct_atomic_ty(t, &format!("struct `{}` field", s.name))?;
         }
     }
 
@@ -1130,6 +1312,10 @@ pub fn collect_sigs(
         if !f.is_quantum {
             for ((pname, _), pty) in f.params.iter().zip(&params) {
                 reject_quantum_ty(pty, &format!("function `{}` parameter `{pname}`", f.name))?;
+                reject_direct_atomic_ty(
+                    pty,
+                    &format!("function `{}` parameter `{pname}`", f.name),
+                )?;
             }
         }
         let ret = match &f.ret {
@@ -1137,6 +1323,10 @@ pub fn collect_sigs(
                 let ret_ty = normalize_ty(t, &struct_map, &enum_map, &vector_map)?;
                 if !f.is_quantum {
                     reject_quantum_ty(&ret_ty, &format!("function `{}` return type", f.name))?;
+                    reject_direct_atomic_ty(
+                        &ret_ty,
+                        &format!("function `{}` return type", f.name),
+                    )?;
                 }
                 Some(ret_ty)
             }
@@ -1708,7 +1898,7 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::Qubit
         | Ty::Result
         | Ty::Ptr(_) => true,
-        Ty::Fn(_, _) => false,
+        Ty::AtomicBool | Ty::Fn(_, _) => false,
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
         Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
         Ty::Struct(name) if name == COMPLEX_TYPE => true,
@@ -2044,6 +2234,23 @@ fn check_moves_call(
         return check_moves_language_drop_arg(&args[0], env, states, fn_values, ctx);
     }
 
+    if name == ATOMIC_BOOL && args.len() == 1 {
+        return check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            Some(&Ty::Bool),
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )
+        .map(|_| ());
+    }
+
+    if name == ATOMIC_FENCE && args.len() == 1 {
+        return Ok(());
+    }
+
     if name == MATRIX_DROP || name == VECTOR_DROP {
         if args.len() == 1 {
             return check_moves_language_drop_arg(&args[0], env, states, fn_values, ctx);
@@ -2275,6 +2482,77 @@ fn check_moves_method_call(
     fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
+    if is_atomic_bool_method(name) {
+        infer_atomic_bool_method(
+            receiver,
+            name,
+            args,
+            env,
+            ctx.structs,
+            ctx.enums,
+            ctx.vectors,
+            ctx.fns,
+        )?;
+        match receiver {
+            Expr::Ident(name) => {
+                ensure_local_available(name, env.get(name), states, fn_values, ctx)?
+            }
+            Expr::Deref(inner) => {
+                check_moves_expr(
+                    inner,
+                    env,
+                    states,
+                    fn_values,
+                    ctx,
+                    None,
+                    ExprMoveMode::ReadOnly,
+                )?;
+            }
+            _ => unreachable!("typechecked atomic receiver shape"),
+        }
+        match name {
+            ATOMIC_LOAD_METHOD => return Ok(()),
+            ATOMIC_STORE_METHOD
+            | ATOMIC_SWAP_METHOD
+            | ATOMIC_FETCH_AND_METHOD
+            | ATOMIC_FETCH_OR_METHOD
+            | ATOMIC_FETCH_XOR_METHOD => {
+                check_moves_expr(
+                    &args[0],
+                    env,
+                    states,
+                    fn_values,
+                    ctx,
+                    Some(&Ty::Bool),
+                    ExprMoveMode::Consume(MoveReason::PassedByValue),
+                )?;
+                return Ok(());
+            }
+            ATOMIC_COMPARE_EXCHANGE_METHOD => {
+                check_moves_expr(
+                    &args[0],
+                    env,
+                    states,
+                    fn_values,
+                    ctx,
+                    Some(&Ty::Bool),
+                    ExprMoveMode::Consume(MoveReason::PassedByValue),
+                )?;
+                check_moves_expr(
+                    &args[1],
+                    env,
+                    states,
+                    fn_values,
+                    ctx,
+                    Some(&Ty::Bool),
+                    ExprMoveMode::Consume(MoveReason::PassedByValue),
+                )?;
+                return Ok(());
+            }
+            _ => unreachable!("guarded atomic method"),
+        }
+    }
+
     let recv_ty = infer_expr(
         receiver,
         env,
@@ -2927,6 +3205,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::F32, Ty::F32)
         | (Ty::F64, Ty::F64)
         | (Ty::String, Ty::String)
+        | (Ty::AtomicBool, Ty::AtomicBool)
         | (Ty::Qubit, Ty::Qubit)
         | (Ty::Result, Ty::Result)
         | (Ty::Unit, Ty::Unit) => true,
@@ -4371,6 +4650,11 @@ fn infer_expr(
         },
         Expr::Ident(name) => {
             if let Some(t) = env.get(name) {
+                if is_atomic_ty(t) {
+                    return Err(format!(
+                        "atomic value `{name}` cannot be read directly; use an atomic method"
+                    ));
+                }
                 return Ok(t.clone());
             }
             if name == PI {
@@ -4501,6 +4785,27 @@ fn infer_expr(
                         "`drop(x)` requires value type {value_ty:?} to support `drop`"
                     ));
                 }
+                return Ok(Ty::Unit);
+            }
+            if name == ATOMIC_BOOL {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{ATOMIC_BOOL}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                expect_arg_ty(name, args, 0, &Ty::Bool, env, structs, enums, vectors, fns)?;
+                return Ok(Ty::AtomicBool);
+            }
+            if name == ATOMIC_FENCE {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{ATOMIC_FENCE}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let ordering = parse_ordering_literal(&args[0])?;
+                check_atomic_ordering_for_op(AtomicOrderingUse::Fence, ordering)?;
                 return Ok(Ty::Unit);
             }
             if name == QUBIT {
@@ -5311,6 +5616,11 @@ fn infer_expr(
             name,
             args,
         } => {
+            if is_atomic_bool_method(name) {
+                return infer_atomic_bool_method(
+                    receiver, name, args, env, structs, enums, vectors, fns,
+                );
+            }
             if name == DROP_METHOD {
                 return Err("direct `.drop()` calls are not supported yet; use `drop(x)`".into());
             }
@@ -6032,7 +6342,13 @@ fn infer_expr(
         Expr::Deref(inner) => {
             let ti = infer_expr(inner, env, structs, enums, vectors, fns, None)?;
             match ti {
-                Ty::Ptr(p) => Ok((*p).clone()),
+                Ty::Ptr(p) => {
+                    if is_atomic_ty(&p) {
+                        Err("atomic pointer dereference cannot be read directly; use an atomic method".into())
+                    } else {
+                        Ok((*p).clone())
+                    }
+                }
                 _ => custom_deref_target_ty(&ti, structs, fns).ok_or_else(|| {
                     format!("dereference requires a pointer or `deref` ability, got {ti:?}")
                 }),
@@ -6158,6 +6474,13 @@ fn check_stmt(
             infer_expr(e, env, struct_fields, enums, vectors, fn_sigs, None)?;
         }
         Stmt::Assign { target, value } => {
+            if let Some(tt) =
+                atomic_assignment_target_ty(target, env, struct_fields, enums, vectors, fn_sigs)?
+            {
+                return Err(format!(
+                    "cannot assign to atomic value of type {tt:?}; use atomic methods"
+                ));
+            }
             let tt = infer_expr(target, env, struct_fields, enums, vectors, fn_sigs, None)?;
             match target {
                 Expr::Ident(_) | Expr::Deref(_) => {}

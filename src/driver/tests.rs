@@ -50,6 +50,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_loop.nia",
         "examples/tests/ok_compound_assign.nia",
         "examples/tests/ok_bitwise.nia",
+        "examples/tests/ok_atomic_bool.nia",
         "examples/tests/ok_string.nia",
         "examples/sample_all.nia",
         "examples/sample_struct_methods_big.nia",

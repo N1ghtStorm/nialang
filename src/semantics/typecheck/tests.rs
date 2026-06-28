@@ -58,6 +58,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_loop.nia"),
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_bitwise.nia"),
+        include_str!("../../../examples/tests/ok_atomic_bool.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_struct_methods_big.nia"),
@@ -177,6 +178,127 @@ fn atomic_lvalue_receiver_helper_accepts_initial_receiver_set() {
         ))
         .is_err()
     );
+}
+
+#[test]
+fn typecheck_atomic_bool_methods() {
+    let src = include_str!("../../../examples/tests/ok_atomic_bool.nia");
+    check_all(src).expect("AtomicBool methods should typecheck");
+}
+
+#[test]
+fn typecheck_atomic_bool_rejects_plain_reads_and_assignment() {
+    let plain_read = r#"
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    let snapshot = ready;
+    0
+}
+"#;
+    let err = check_all(plain_read).expect_err("atomic plain read should fail");
+    assert!(err.contains("cannot be read directly"), "{err}");
+
+    let assignment = r#"
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    ready = atomic_bool(true);
+    0
+}
+"#;
+    let err = check_all(assignment).expect_err("atomic assignment should fail");
+    assert!(err.contains("cannot assign to atomic value"), "{err}");
+
+    let direct_deref = r#"
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    let p = &ready;
+    let snapshot = *p;
+    0
+}
+"#;
+    let err = check_all(direct_deref).expect_err("atomic pointer deref read should fail");
+    assert!(err.contains("cannot be read directly"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_bool_rejects_invalid_orderings() {
+    let bad_load = r#"
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    let value = ready.load(Ordering::Release);
+    0
+}
+"#;
+    let err = check_all(bad_load).expect_err("load release should fail");
+    assert!(err.contains("not a valid ordering"), "{err}");
+
+    let bad_store = r#"
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    ready.store(true, Ordering::Acquire);
+    0
+}
+"#;
+    let err = check_all(bad_store).expect_err("store acquire should fail");
+    assert!(err.contains("not a valid ordering"), "{err}");
+
+    let bad_cmpxchg = r#"
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    let ok = ready.compare_exchange(false, true, Ordering::Release, Ordering::Acquire);
+    0
+}
+"#;
+    let err = check_all(bad_cmpxchg).expect_err("bad cmpxchg failure ordering should fail");
+    assert!(err.contains("stronger than success"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_bool_allows_pointer_receiver() {
+    let src = r#"
+fn observe(p: &AtomicBool) bool {
+    (*p).load(Ordering::Acquire)
+}
+
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    let value = observe(&ready);
+    println(value);
+    0
+}
+"#;
+    check_all(src).expect("AtomicBool pointer receiver should typecheck");
+}
+
+#[test]
+fn typecheck_atomic_bool_rejects_by_value_signatures_and_fields() {
+    let param = r#"
+fn bad(cell: AtomicBool) bool {
+    cell.load(Ordering::Acquire)
+}
+"#;
+    let err = check_all(param).expect_err("AtomicBool parameter should fail");
+    assert!(err.contains("atomic storage by value"), "{err}");
+
+    let ret = r#"
+fn bad() AtomicBool {
+    atomic_bool(false)
+}
+"#;
+    let err = check_all(ret).expect_err("AtomicBool return should fail");
+    assert!(err.contains("atomic storage by value"), "{err}");
+
+    let field = r#"
+struct Holder {
+    ready: AtomicBool,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(field).expect_err("AtomicBool field should fail for Phase 1");
+    assert!(err.contains("atomic storage by value"), "{err}");
 }
 
 #[test]

@@ -63,6 +63,8 @@ pub enum Ty {
     HeapVector(Box<Ty>),
     /// Heap-backed growable list, written as `List[T]`.
     List(Box<Ty>),
+    /// Built-in atomic boolean storage cell, written as `AtomicBool`.
+    AtomicBool,
     /// Built-in unique heap-owned matrix with one numeric cell type.
     ///
     /// The optional `(rows, cols)` shape is known for matrix literals and derived
@@ -141,6 +143,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::AnonVector(elem, n) => format!("anonvec_{}_{}", ty_symbol_fragment(elem), n),
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
+        Ty::AtomicBool => "atomic_bool".into(),
         Ty::Matrix(_, _) => "Matrix".into(),
         Ty::Fn(params, ret) => {
             let params = params

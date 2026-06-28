@@ -89,6 +89,85 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_atomic_bool_operations() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    ready.store(true, Ordering::Release);
+    let loaded = ready.load(Ordering::Acquire);
+    let swapped = ready.swap(false, Ordering::AcqRel);
+    let old_and = ready.fetch_and(true, Ordering::AcqRel);
+    let old_or = ready.fetch_or(false, Ordering::AcqRel);
+    let old_xor = ready.fetch_xor(true, Ordering::AcqRel);
+    let changed = ready.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire);
+    atomic_fence(Ordering::SeqCst);
+    println(loaded);
+    println(swapped);
+    println(old_and);
+    println(old_or);
+    println(old_xor);
+    println(changed);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("store atomic i1 1, ptr %ready.addr release, align 1"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("load atomic i1, ptr %ready.addr acquire, align 1"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw xchg ptr %ready.addr, i1 0 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw and ptr %ready.addr, i1 1 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw or ptr %ready.addr, i1 0 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw xor ptr %ready.addr, i1 1 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("cmpxchg ptr %ready.addr, i1 0, i1 1 acq_rel acquire"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("extractvalue { i1, i1 } %"), "IR:\n{ll}");
+    assert!(ll.contains("fence seq_cst"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_atomic_bool_pointer_receiver() {
+    let ll = emit(
+        r#"
+fn observe(p: &AtomicBool) bool {
+    (*p).load(Ordering::Acquire)
+}
+
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    let value = observe(&ready);
+    println(value);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal i1 @observe(ptr %p)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("load atomic i1, ptr %"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_non_capturing_closure_function_value() {
     let ll = emit(
         r#"

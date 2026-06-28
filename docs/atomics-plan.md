@@ -1,6 +1,6 @@
 # Atomics Plan
 
-Status: design plan. This is not an implementation note yet.
+Status: Phase 0 and Phase 1 are implemented. Phase 2 is next.
 
 ## Goal
 
@@ -337,6 +337,8 @@ Phase 0 is only shared groundwork. The first user-visible atomic type is
 
 ### Phase 0: Shared Groundwork
 
+Status: implemented.
+
 Scope:
 
 - reserve atomic type/function names
@@ -350,6 +352,8 @@ Scope:
 No public atomic type needs to work at the end of this phase.
 
 ### Phase 1: `AtomicBool`
+
+Status: implemented.
 
 Goal: make the smallest useful atomic cell work end to end.
 
@@ -392,6 +396,8 @@ Tests:
   and `fence`
 
 ### Phase 2: `AtomicPtr[T]`
+
+Status: planned next.
 
 Goal: add atomic storage for raw Nia pointers without introducing general
 generics.

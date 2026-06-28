@@ -1,0 +1,18 @@
+fn main() i32 {
+    let ready: AtomicBool = atomic_bool(false);
+    ready.store(true, Ordering::Release);
+    let loaded: bool = ready.load(Ordering::Acquire);
+    let old_swap: bool = ready.swap(false, Ordering::AcqRel);
+    let old_and: bool = ready.fetch_and(true, Ordering::AcqRel);
+    let old_or: bool = ready.fetch_or(false, Ordering::AcqRel);
+    let old_xor: bool = ready.fetch_xor(true, Ordering::AcqRel);
+    let changed: bool = ready.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire);
+    atomic_fence(Ordering::SeqCst);
+    println(loaded);
+    println(old_swap);
+    println(old_and);
+    println(old_or);
+    println(old_xor);
+    println(changed);
+    0
+}
