@@ -82,6 +82,10 @@ pub enum Ty {
     AtomicI64,
     /// Built-in atomic 64-bit unsigned integer storage cell, written as `AtomicU64`.
     AtomicU64,
+    /// Built-in atomic 128-bit signed integer storage cell, written as `AtomicI128`.
+    AtomicI128,
+    /// Built-in atomic 128-bit unsigned integer storage cell, written as `AtomicU128`.
+    AtomicU128,
     /// Built-in atomic pointer-width signed integer storage cell, written as `AtomicIsize`.
     AtomicIsize,
     /// Built-in atomic pointer-width unsigned integer storage cell, written as `AtomicUsize`.
@@ -178,6 +182,8 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::AtomicU32 => "atomic_u32".into(),
         Ty::AtomicI64 => "atomic_i64".into(),
         Ty::AtomicU64 => "atomic_u64".into(),
+        Ty::AtomicI128 => "atomic_i128".into(),
+        Ty::AtomicU128 => "atomic_u128".into(),
         Ty::AtomicIsize => "atomic_isize".into(),
         Ty::AtomicUsize => "atomic_usize".into(),
         Ty::AtomicPtr(elem) => format!("atomic_ptr_{}", ty_symbol_fragment(elem)),

@@ -1,6 +1,6 @@
 # Atomics Plan
 
-Status: Phase 0, Phase 1, and Phase 2 are implemented. Phase 3 is next.
+Status: Phase 0 through Phase 5 are implemented. Phase 6 is next.
 
 ## Goal
 
@@ -483,6 +483,8 @@ Sample: `examples/sample_atomic_narrow_int.nia`.
 
 ### Phase 5: 128-Bit Integer Atomics
 
+Status: implemented.
+
 Add:
 
 - `AtomicI128`
@@ -490,6 +492,8 @@ Add:
 
 Only ship these if LLVM and the target toolchain preserve real atomic behavior.
 Otherwise keep the types reserved and emit a clear diagnostic when used.
+
+Sample: `examples/sample_atomic_i128.nia`.
 
 ### Phase 6: Ergonomics And Documentation
 
@@ -516,6 +520,7 @@ Typecheck ok fixtures:
 - `ok_atomic_fence.nia`
 - `ok_atomic_int.nia`
 - `ok_atomic_narrow_int.nia`
+- `ok_atomic_i128.nia`
 
 Typecheck error fixtures:
 

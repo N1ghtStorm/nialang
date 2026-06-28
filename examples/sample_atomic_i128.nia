@@ -1,0 +1,11 @@
+fn main() i32 {
+    let counter: AtomicI128 = atomic_i128(100);
+    let previous: i128 = counter.fetch_add(25, Ordering::AcqRel);
+    println(previous);
+
+    let flags: AtomicU128 = atomic_u128(1);
+    let old_flags: u128 = flags.fetch_or(2, Ordering::AcqRel);
+    println(old_flags);
+
+    0
+}

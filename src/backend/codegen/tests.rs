@@ -366,6 +366,52 @@ fn codegen_atomic_narrow_int_operations() {
 }
 
 #[test]
+fn codegen_atomic_i128_operations() {
+    let ll = emit(include_str!("../../../examples/tests/ok_atomic_i128.nia"));
+    assert!(
+        ll.contains("store atomic i128 2, ptr %wide.addr release, align 16"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("load atomic i128, ptr %wide.addr acquire, align 16"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw xchg ptr %wide.addr, i128 3 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw add ptr %wide.addr, i128 4 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw sub ptr %wide.addr, i128 1 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw and ptr %wide.addr, i128 7 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw or ptr %wide.addr, i128 8 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("atomicrmw xor ptr %wide.addr, i128 1 acq_rel"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("cmpxchg ptr %wide.addr, i128 14, i128 1 acq_rel acquire"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("extractvalue { i128, i1 } %"), "IR:\n{ll}");
+    assert!(
+        ll.contains("atomicrmw add ptr %unsigned.addr, i128 5 acq_rel"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_non_capturing_closure_function_value() {
     let ll = emit(
         r#"

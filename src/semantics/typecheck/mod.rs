@@ -6,20 +6,21 @@ use crate::ast::{
 };
 use crate::nia_std::{
     ALLOC, ATOMIC_BOOL, ATOMIC_BOOL_TYPE, ATOMIC_FENCE, ATOMIC_I8, ATOMIC_I8_TYPE, ATOMIC_I16,
-    ATOMIC_I16_TYPE, ATOMIC_I32, ATOMIC_I32_TYPE, ATOMIC_I64, ATOMIC_I64_TYPE, ATOMIC_ISIZE,
-    ATOMIC_ISIZE_TYPE, ATOMIC_PTR, ATOMIC_PTR_TYPE, ATOMIC_U8, ATOMIC_U8_TYPE, ATOMIC_U16,
-    ATOMIC_U16_TYPE, ATOMIC_U32, ATOMIC_U32_TYPE, ATOMIC_U64, ATOMIC_U64_TYPE, ATOMIC_USIZE,
-    ATOMIC_USIZE_TYPE, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW,
-    COMPLEX_SCALE, COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ,
-    GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP,
-    GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ,
-    GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN,
-    LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
-    MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET,
-    MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA,
-    MERKLE_VERIFY, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT, SHA256,
-    SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET,
-    VECTOR_LEN, VECTOR_SET,
+    ATOMIC_I16_TYPE, ATOMIC_I32, ATOMIC_I32_TYPE, ATOMIC_I64, ATOMIC_I64_TYPE, ATOMIC_I128,
+    ATOMIC_I128_TYPE, ATOMIC_ISIZE, ATOMIC_ISIZE_TYPE, ATOMIC_PTR, ATOMIC_PTR_TYPE, ATOMIC_U8,
+    ATOMIC_U8_TYPE, ATOMIC_U16, ATOMIC_U16_TYPE, ATOMIC_U32, ATOMIC_U32_TYPE, ATOMIC_U64,
+    ATOMIC_U64_TYPE, ATOMIC_U128, ATOMIC_U128_TYPE, ATOMIC_USIZE, ATOMIC_USIZE_TYPE,
+    AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE,
+    COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT,
+    GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG,
+    GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG,
+    GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET,
+    LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP,
+    MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE,
+    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
+    ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT, SHA256, SIN, SPAWN,
+    THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
+    VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -256,6 +257,8 @@ fn atomic_int_type_name_ty(name: &str) -> Option<Ty> {
         ATOMIC_U32_TYPE => Some(Ty::AtomicU32),
         ATOMIC_I64_TYPE => Some(Ty::AtomicI64),
         ATOMIC_U64_TYPE => Some(Ty::AtomicU64),
+        ATOMIC_I128_TYPE => Some(Ty::AtomicI128),
+        ATOMIC_U128_TYPE => Some(Ty::AtomicU128),
         ATOMIC_ISIZE_TYPE => Some(Ty::AtomicIsize),
         ATOMIC_USIZE_TYPE => Some(Ty::AtomicUsize),
         _ => None,
@@ -272,6 +275,8 @@ fn atomic_int_constructor_tys(name: &str) -> Option<(Ty, Ty)> {
         ATOMIC_U32 => Some((Ty::AtomicU32, Ty::U32)),
         ATOMIC_I64 => Some((Ty::AtomicI64, Ty::I64)),
         ATOMIC_U64 => Some((Ty::AtomicU64, Ty::U64)),
+        ATOMIC_I128 => Some((Ty::AtomicI128, Ty::I128)),
+        ATOMIC_U128 => Some((Ty::AtomicU128, Ty::U128)),
         ATOMIC_ISIZE => Some((Ty::AtomicIsize, Ty::Isize)),
         ATOMIC_USIZE => Some((Ty::AtomicUsize, Ty::Usize)),
         _ => None,
@@ -288,6 +293,8 @@ fn atomic_int_value_ty(t: &Ty) -> Option<Ty> {
         Ty::AtomicU32 => Some(Ty::U32),
         Ty::AtomicI64 => Some(Ty::I64),
         Ty::AtomicU64 => Some(Ty::U64),
+        Ty::AtomicI128 => Some(Ty::I128),
+        Ty::AtomicU128 => Some(Ty::U128),
         Ty::AtomicIsize => Some(Ty::Isize),
         Ty::AtomicUsize => Some(Ty::Usize),
         _ => None,
@@ -914,6 +921,8 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::AtomicU32 => "AtomicU32".into(),
         Ty::AtomicI64 => "AtomicI64".into(),
         Ty::AtomicU64 => "AtomicU64".into(),
+        Ty::AtomicI128 => "AtomicI128".into(),
+        Ty::AtomicU128 => "AtomicU128".into(),
         Ty::AtomicIsize => "AtomicIsize".into(),
         Ty::AtomicUsize => "AtomicUsize".into(),
         Ty::AtomicPtr(elem) => format!("AtomicPtr[{}]", ty_diag_label(elem)),
@@ -1024,6 +1033,8 @@ fn ability_failure_reason(
         | Ty::AtomicU32
         | Ty::AtomicI64
         | Ty::AtomicU64
+        | Ty::AtomicI128
+        | Ty::AtomicU128
         | Ty::AtomicIsize
         | Ty::AtomicUsize
         | Ty::AtomicPtr(_)
@@ -2307,6 +2318,8 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::AtomicU32
         | Ty::AtomicI64
         | Ty::AtomicU64
+        | Ty::AtomicI128
+        | Ty::AtomicU128
         | Ty::AtomicIsize
         | Ty::AtomicUsize
         | Ty::AtomicPtr(_)
@@ -3780,6 +3793,8 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::AtomicU32, Ty::AtomicU32)
         | (Ty::AtomicI64, Ty::AtomicI64)
         | (Ty::AtomicU64, Ty::AtomicU64)
+        | (Ty::AtomicI128, Ty::AtomicI128)
+        | (Ty::AtomicU128, Ty::AtomicU128)
         | (Ty::AtomicIsize, Ty::AtomicIsize)
         | (Ty::AtomicUsize, Ty::AtomicUsize)
         | (Ty::Thread, Ty::Thread)

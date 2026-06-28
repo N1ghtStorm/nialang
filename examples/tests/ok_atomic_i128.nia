@@ -1,0 +1,32 @@
+fn read_i128(cell: &AtomicI128) i128 {
+    (*cell).load(Ordering::Acquire)
+}
+
+fn main() i32 {
+    let wide: AtomicI128 = atomic_i128(1);
+    wide.store(2, Ordering::Release);
+    let loaded: i128 = wide.load(Ordering::Acquire);
+    let swapped: i128 = wide.swap(3, Ordering::AcqRel);
+    let old_add: i128 = wide.fetch_add(4, Ordering::AcqRel);
+    let old_sub: i128 = wide.fetch_sub(1, Ordering::AcqRel);
+    let old_and: i128 = wide.fetch_and(7, Ordering::AcqRel);
+    let old_or: i128 = wide.fetch_or(8, Ordering::AcqRel);
+    let old_xor: i128 = wide.fetch_xor(1, Ordering::AcqRel);
+    let changed: bool = wide.compare_exchange(14, 1, Ordering::AcqRel, Ordering::Acquire);
+    let via_ptr: i128 = read_i128(&wide);
+
+    let unsigned: AtomicU128 = atomic_u128(10);
+    let old_u128: u128 = unsigned.fetch_add(5, Ordering::AcqRel);
+
+    println(loaded);
+    println(swapped);
+    println(old_add);
+    println(old_sub);
+    println(old_and);
+    println(old_or);
+    println(old_xor);
+    println(changed);
+    println(via_ptr);
+    println(old_u128);
+    0
+}
