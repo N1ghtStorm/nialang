@@ -69,6 +69,26 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_builtin_ordering_enum_value() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let order: Ordering = Ordering::Acquire;
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("%enum.Ordering = type { i32, i8, i8, i8, i8, i8 }"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("insertvalue %enum.Ordering poison, i32 1, 0"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_non_capturing_closure_function_value() {
     let ll = emit(
         r#"

@@ -496,6 +496,31 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_builtin_ordering_path_is_not_module_qualified() {
+    let src = r#"
+mod atomics {
+    fn main() i32 {
+        let order: Ordering = Ordering::Acquire;
+        0
+    }
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    match &fns[0].body.stmts[0] {
+        Stmt::Let {
+            ty: Some(ty),
+            init: Some(init),
+            ..
+        } => {
+            assert_eq!(ty, &Ty::Struct("Ordering".into()));
+            assert!(matches!(init, Expr::Ident(name) if name == "Ordering::Acquire"));
+        }
+        other => panic!("expected ordering let, got {other:?}"),
+    }
+}
+
+#[test]
 fn parse_rejects_zero_anon_vector_type_length() {
     let src = r#"
 fn main(v: i32<0>) i32 {

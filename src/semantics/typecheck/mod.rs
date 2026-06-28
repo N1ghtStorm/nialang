@@ -5,16 +5,16 @@ use crate::ast::{
     VectorDef, method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB,
-    COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1,
-    GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY,
-    GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP,
-    GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW,
-    LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN,
-    MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH,
-    MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
-    VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    ALLOC, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE,
+    COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT,
+    GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG,
+    GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG,
+    GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN,
+    LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET,
+    MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH,
+    MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, ORDERING_TYPE, OUTER, PI,
+    PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT, SHA256, SIN, TO_ARRAY, TO_MATRIX, TO_VEC,
+    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -128,6 +128,94 @@ fn enum_variant<'a>(edef: &'a EnumDef, variant: &str) -> Option<&'a EnumVariantF
 fn split_variant_path(path: &str) -> Option<(&str, &str)> {
     path.rsplit_once("::")
         .filter(|(enum_name, variant)| !enum_name.is_empty() && !variant.is_empty())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AtomicOrderingUse {
+    Load,
+    Store,
+    ReadModifyWrite,
+    CompareExchangeSuccess,
+    CompareExchangeFailure,
+    Fence,
+}
+
+pub fn parse_ordering_literal(e: &Expr) -> Result<AtomicOrdering, String> {
+    let Expr::Ident(path) = e else {
+        return Err("atomic ordering must be a literal `Ordering::...` variant".into());
+    };
+    crate::nia_std::atomic_ordering_from_path(path).ok_or_else(|| {
+        format!("atomic ordering must be a literal `{ORDERING_TYPE}::...` variant, got `{path}`")
+    })
+}
+
+pub fn check_atomic_ordering_for_op(
+    op: AtomicOrderingUse,
+    ordering: AtomicOrdering,
+) -> Result<(), String> {
+    let valid = match op {
+        AtomicOrderingUse::Load => matches!(
+            ordering,
+            AtomicOrdering::Relaxed | AtomicOrdering::Acquire | AtomicOrdering::SeqCst
+        ),
+        AtomicOrderingUse::Store => matches!(
+            ordering,
+            AtomicOrdering::Relaxed | AtomicOrdering::Release | AtomicOrdering::SeqCst
+        ),
+        AtomicOrderingUse::ReadModifyWrite | AtomicOrderingUse::CompareExchangeSuccess => true,
+        AtomicOrderingUse::CompareExchangeFailure => matches!(
+            ordering,
+            AtomicOrdering::Relaxed | AtomicOrdering::Acquire | AtomicOrdering::SeqCst
+        ),
+        AtomicOrderingUse::Fence => !matches!(ordering, AtomicOrdering::Relaxed),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{}` is not a valid ordering for {:?}",
+            ordering.variant_name(),
+            op
+        ))
+    }
+}
+
+pub fn check_compare_exchange_orderings(
+    success: AtomicOrdering,
+    failure: AtomicOrdering,
+) -> Result<(), String> {
+    check_atomic_ordering_for_op(AtomicOrderingUse::CompareExchangeSuccess, success)?;
+    check_atomic_ordering_for_op(AtomicOrderingUse::CompareExchangeFailure, failure)?;
+    let allowed = match success {
+        AtomicOrdering::Relaxed => matches!(failure, AtomicOrdering::Relaxed),
+        AtomicOrdering::Acquire => {
+            matches!(failure, AtomicOrdering::Relaxed | AtomicOrdering::Acquire)
+        }
+        AtomicOrdering::Release => matches!(failure, AtomicOrdering::Relaxed),
+        AtomicOrdering::AcqRel => {
+            matches!(failure, AtomicOrdering::Relaxed | AtomicOrdering::Acquire)
+        }
+        AtomicOrdering::SeqCst => matches!(
+            failure,
+            AtomicOrdering::Relaxed | AtomicOrdering::Acquire | AtomicOrdering::SeqCst
+        ),
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!(
+            "compare_exchange failure ordering `{}` is stronger than success ordering `{}`",
+            failure.variant_name(),
+            success.variant_name()
+        ))
+    }
+}
+
+pub fn check_atomic_lvalue_receiver(receiver: &Expr) -> Result<(), String> {
+    match receiver {
+        Expr::Ident(_) | Expr::Deref(_) => Ok(()),
+        _ => Err("atomic method receiver must be an atomic local or dereference".into()),
+    }
 }
 
 fn path_leaf(path: &str) -> &str {
@@ -964,6 +1052,9 @@ pub fn collect_sigs(
         }
     }
     let mut enum_map: HashMap<String, EnumDef> = HashMap::new();
+    for e in crate::nia_std::builtin_enums() {
+        enum_map.insert(e.name.clone(), e);
+    }
     for e in enums {
         if crate::nia_std::is_reserved_type_name(path_leaf(&e.name)) {
             return Err(format!("type name `{}` is reserved", e.name));

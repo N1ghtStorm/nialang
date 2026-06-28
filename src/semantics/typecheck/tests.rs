@@ -91,6 +91,95 @@ fn main() i32 {{
 }
 
 #[test]
+fn typecheck_builtin_ordering_enum() {
+    let src = r#"
+fn main() i32 {
+    let load_order: Ordering = Ordering::Acquire;
+    let store_order: Ordering = Ordering::Release;
+    0
+}
+"#;
+    check_all(src).expect("builtin Ordering should typecheck");
+}
+
+#[test]
+fn typecheck_rejects_user_defined_ordering_type() {
+    let src = r#"
+enum Ordering {
+    Acquire,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Ordering is reserved");
+    assert!(err.contains("reserved"), "{err}");
+}
+
+#[test]
+fn typecheck_rejects_reserved_atomic_names() {
+    let type_src = r#"
+struct AtomicBool {
+    value: bool,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(type_src).expect_err("AtomicBool is reserved");
+    assert!(err.contains("reserved"), "{err}");
+
+    let fn_src = r#"
+fn atomic_bool(value: bool) bool {
+    value
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(fn_src).expect_err("atomic_bool is reserved");
+    assert!(err.contains("reserved"), "{err}");
+}
+
+#[test]
+fn atomic_ordering_literal_helpers_validate_rules() {
+    let parsed =
+        parse_ordering_literal(&Expr::Ident("Ordering::SeqCst".into())).expect("literal ordering");
+    assert_eq!(parsed, crate::nia_std::AtomicOrdering::SeqCst);
+    assert!(parse_ordering_literal(&Expr::Ident("other::SeqCst".into())).is_err());
+    assert!(parse_ordering_literal(&Expr::Ident("SeqCst".into())).is_err());
+
+    use crate::nia_std::AtomicOrdering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
+    assert!(check_atomic_ordering_for_op(AtomicOrderingUse::Load, Acquire).is_ok());
+    assert!(check_atomic_ordering_for_op(AtomicOrderingUse::Load, Release).is_err());
+    assert!(check_atomic_ordering_for_op(AtomicOrderingUse::Store, Release).is_ok());
+    assert!(check_atomic_ordering_for_op(AtomicOrderingUse::Store, Acquire).is_err());
+    assert!(check_atomic_ordering_for_op(AtomicOrderingUse::ReadModifyWrite, AcqRel).is_ok());
+    assert!(check_atomic_ordering_for_op(AtomicOrderingUse::Fence, SeqCst).is_ok());
+    assert!(check_atomic_ordering_for_op(AtomicOrderingUse::Fence, Relaxed).is_err());
+
+    assert!(check_compare_exchange_orderings(AcqRel, Acquire).is_ok());
+    assert!(check_compare_exchange_orderings(Release, Acquire).is_err());
+    assert!(check_compare_exchange_orderings(SeqCst, SeqCst).is_ok());
+}
+
+#[test]
+fn atomic_lvalue_receiver_helper_accepts_initial_receiver_set() {
+    assert!(check_atomic_lvalue_receiver(&Expr::Ident("cell".into())).is_ok());
+    assert!(check_atomic_lvalue_receiver(&Expr::Deref(Box::new(Expr::Ident("p".into())))).is_ok());
+    assert!(
+        check_atomic_lvalue_receiver(&Expr::Field(
+            Box::new(Expr::Ident("owner".into())),
+            "cell".into()
+        ))
+        .is_err()
+    );
+}
+
+#[test]
 fn typecheck_allows_non_capturing_closure_values() {
     let src = r#"
 fn apply(x: i32, f: fn(i32) -> i32) i32 {

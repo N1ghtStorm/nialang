@@ -2,7 +2,7 @@
 
 mod crypto_llvm;
 
-use crate::ast::{Ability, StructDef, Ty};
+use crate::ast::{Ability, EnumDef, EnumVariantDef, EnumVariantFields, StructDef, Ty};
 
 pub const PRINTLN: &str = "println";
 /// Array length: `len(arr)` → `i32` (compile-time size of `[T; N]`).
@@ -48,6 +48,39 @@ pub const PI: &str = "PI";
 pub const CIS: &str = "cis";
 pub const QUBIT: &str = "qubit";
 pub const RESULT: &str = "result";
+pub const ORDERING_TYPE: &str = "Ordering";
+pub const ORDERING_RELAXED: &str = "Relaxed";
+pub const ORDERING_ACQUIRE: &str = "Acquire";
+pub const ORDERING_RELEASE: &str = "Release";
+pub const ORDERING_ACQ_REL: &str = "AcqRel";
+pub const ORDERING_SEQ_CST: &str = "SeqCst";
+pub const ATOMIC_BOOL_TYPE: &str = "AtomicBool";
+pub const ATOMIC_I8_TYPE: &str = "AtomicI8";
+pub const ATOMIC_U8_TYPE: &str = "AtomicU8";
+pub const ATOMIC_I16_TYPE: &str = "AtomicI16";
+pub const ATOMIC_U16_TYPE: &str = "AtomicU16";
+pub const ATOMIC_I32_TYPE: &str = "AtomicI32";
+pub const ATOMIC_I64_TYPE: &str = "AtomicI64";
+pub const ATOMIC_U64_TYPE: &str = "AtomicU64";
+pub const ATOMIC_I128_TYPE: &str = "AtomicI128";
+pub const ATOMIC_U128_TYPE: &str = "AtomicU128";
+pub const ATOMIC_ISIZE_TYPE: &str = "AtomicIsize";
+pub const ATOMIC_USIZE_TYPE: &str = "AtomicUsize";
+pub const ATOMIC_PTR_TYPE: &str = "AtomicPtr";
+pub const ATOMIC_BOOL: &str = "atomic_bool";
+pub const ATOMIC_I8: &str = "atomic_i8";
+pub const ATOMIC_U8: &str = "atomic_u8";
+pub const ATOMIC_I16: &str = "atomic_i16";
+pub const ATOMIC_U16: &str = "atomic_u16";
+pub const ATOMIC_I32: &str = "atomic_i32";
+pub const ATOMIC_I64: &str = "atomic_i64";
+pub const ATOMIC_U64: &str = "atomic_u64";
+pub const ATOMIC_I128: &str = "atomic_i128";
+pub const ATOMIC_U128: &str = "atomic_u128";
+pub const ATOMIC_ISIZE: &str = "atomic_isize";
+pub const ATOMIC_USIZE: &str = "atomic_usize";
+pub const ATOMIC_PTR: &str = "atomic_ptr";
+pub const ATOMIC_FENCE: &str = "atomic_fence";
 pub const GATE_I: &str = "I";
 pub const GATE_H: &str = "H";
 pub const GATE_X: &str = "X";
@@ -88,6 +121,47 @@ pub const MERKLE_ROOT: &str = "merkle_root";
 pub const MERKLE_ROOT_FROM_DATA: &str = "merkle_root_from_data";
 pub const MERKLE_VERIFY: &str = "merkle_verify";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicOrdering {
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
+
+impl AtomicOrdering {
+    pub fn from_variant_name(name: &str) -> Option<Self> {
+        match name {
+            ORDERING_RELAXED => Some(Self::Relaxed),
+            ORDERING_ACQUIRE => Some(Self::Acquire),
+            ORDERING_RELEASE => Some(Self::Release),
+            ORDERING_ACQ_REL => Some(Self::AcqRel),
+            ORDERING_SEQ_CST => Some(Self::SeqCst),
+            _ => None,
+        }
+    }
+
+    pub fn variant_name(self) -> &'static str {
+        match self {
+            Self::Relaxed => ORDERING_RELAXED,
+            Self::Acquire => ORDERING_ACQUIRE,
+            Self::Release => ORDERING_RELEASE,
+            Self::AcqRel => ORDERING_ACQ_REL,
+            Self::SeqCst => ORDERING_SEQ_CST,
+        }
+    }
+}
+
+pub fn atomic_ordering_from_path(path: &str) -> Option<AtomicOrdering> {
+    let (enum_name, variant) = path.rsplit_once("::")?;
+    if enum_name == ORDERING_TYPE {
+        AtomicOrdering::from_variant_name(variant)
+    } else {
+        None
+    }
+}
+
 pub fn complex_ty() -> Ty {
     Ty::Struct(COMPLEX_TYPE.into())
 }
@@ -101,10 +175,61 @@ pub fn builtin_structs() -> Vec<StructDef> {
     }]
 }
 
+pub fn builtin_enums() -> Vec<EnumDef> {
+    vec![EnumDef {
+        name: ORDERING_TYPE.into(),
+        abilities: vec![Ability::Copy, Ability::Clone, Ability::Drop],
+        variants: vec![
+            EnumVariantDef {
+                name: ORDERING_RELAXED.into(),
+                fields: EnumVariantFields::Unit,
+            },
+            EnumVariantDef {
+                name: ORDERING_ACQUIRE.into(),
+                fields: EnumVariantFields::Unit,
+            },
+            EnumVariantDef {
+                name: ORDERING_RELEASE.into(),
+                fields: EnumVariantFields::Unit,
+            },
+            EnumVariantDef {
+                name: ORDERING_ACQ_REL.into(),
+                fields: EnumVariantFields::Unit,
+            },
+            EnumVariantDef {
+                name: ORDERING_SEQ_CST.into(),
+                fields: EnumVariantFields::Unit,
+            },
+        ],
+    }]
+}
+
+pub fn is_builtin_enum_type_name(name: &str) -> bool {
+    matches!(name, ORDERING_TYPE)
+}
+
 pub fn is_reserved_type_name(name: &str) -> bool {
     matches!(
         name,
-        MATRIX_TYPE | COMPLEX_TYPE | LIST_TYPE | QUBIT | RESULT
+        MATRIX_TYPE
+            | COMPLEX_TYPE
+            | LIST_TYPE
+            | QUBIT
+            | RESULT
+            | ORDERING_TYPE
+            | ATOMIC_BOOL_TYPE
+            | ATOMIC_I8_TYPE
+            | ATOMIC_U8_TYPE
+            | ATOMIC_I16_TYPE
+            | ATOMIC_U16_TYPE
+            | ATOMIC_I32_TYPE
+            | ATOMIC_I64_TYPE
+            | ATOMIC_U64_TYPE
+            | ATOMIC_I128_TYPE
+            | ATOMIC_U128_TYPE
+            | ATOMIC_ISIZE_TYPE
+            | ATOMIC_USIZE_TYPE
+            | ATOMIC_PTR_TYPE
     )
 }
 
@@ -142,6 +267,20 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | COS
             | PI
             | CIS
+            | ATOMIC_BOOL
+            | ATOMIC_I8
+            | ATOMIC_U8
+            | ATOMIC_I16
+            | ATOMIC_U16
+            | ATOMIC_I32
+            | ATOMIC_I64
+            | ATOMIC_U64
+            | ATOMIC_I128
+            | ATOMIC_U128
+            | ATOMIC_ISIZE
+            | ATOMIC_USIZE
+            | ATOMIC_PTR
+            | ATOMIC_FENCE
             | QUBIT
             | RESULT
             | GATE_I

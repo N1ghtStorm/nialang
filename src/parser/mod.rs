@@ -121,6 +121,14 @@ impl Parser {
         }
     }
 
+    fn resolve_expr_path(&self, segments: &[String]) -> Result<String, String> {
+        if segments.len() > 1 && crate::nia_std::is_builtin_enum_type_name(&segments[0]) {
+            Ok(segments.join("::"))
+        } else {
+            self.resolve_item_path(segments)
+        }
+    }
+
     fn split_variant_path(path: String) -> Result<(String, String), String> {
         let Some((enum_name, variant)) = path.rsplit_once("::") else {
             return Err("match pattern must use `Enum::Variant` path syntax".into());
@@ -1434,7 +1442,7 @@ impl Parser {
                     if segments.len() == 1 {
                         Ok(Expr::Ident(segments.remove(0)))
                     } else {
-                        Ok(Expr::Ident(self.resolve_item_path(&segments)?))
+                        Ok(Expr::Ident(self.resolve_expr_path(&segments)?))
                     }
                 }
                 Token::LParen => {
