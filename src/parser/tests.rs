@@ -384,6 +384,13 @@ fn parse_fixture_atomic_int() {
 }
 
 #[test]
+fn parse_fixture_atomic_narrow_int() {
+    parse_ok(include_str!(
+        "../../examples/tests/ok_atomic_narrow_int.nia"
+    ));
+}
+
+#[test]
 fn parse_rejects_generic_atomic_spelling() {
     let src = r#"
 fn main() i32 {

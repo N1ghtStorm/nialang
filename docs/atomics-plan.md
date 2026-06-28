@@ -468,6 +468,8 @@ Compiler work:
 
 ### Phase 4: Narrow Integer Atomics
 
+Status: implemented.
+
 Add:
 
 - `AtomicI8`, `AtomicU8`
@@ -476,6 +478,8 @@ Add:
 
 This phase should mostly reuse Phase 3 machinery, but needs explicit alignment
 and signed/unsigned test coverage.
+
+Sample: `examples/sample_atomic_narrow_int.nia`.
 
 ### Phase 5: 128-Bit Integer Atomics
 
@@ -511,6 +515,7 @@ Typecheck ok fixtures:
 - `ok_atomic_compare_exchange.nia`
 - `ok_atomic_fence.nia`
 - `ok_atomic_int.nia`
+- `ok_atomic_narrow_int.nia`
 
 Typecheck error fixtures:
 

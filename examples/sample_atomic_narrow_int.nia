@@ -1,0 +1,15 @@
+fn main() i32 {
+    let byte_flags: AtomicU8 = atomic_u8(1);
+    let old_byte_flags: u8 = byte_flags.fetch_or(2, Ordering::AcqRel);
+    println(old_byte_flags);
+
+    let short_counter: AtomicI16 = atomic_i16(10);
+    let previous_short: i16 = short_counter.fetch_add(5, Ordering::AcqRel);
+    println(previous_short);
+
+    let big_counter: AtomicU64 = atomic_u64(100);
+    let previous_big: u64 = big_counter.swap(200, Ordering::AcqRel);
+    println(previous_big);
+
+    0
+}

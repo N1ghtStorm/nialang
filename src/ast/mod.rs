@@ -66,12 +66,22 @@ pub enum Ty {
     List(Box<Ty>),
     /// Built-in atomic boolean storage cell, written as `AtomicBool`.
     AtomicBool,
+    /// Built-in atomic 8-bit signed integer storage cell, written as `AtomicI8`.
+    AtomicI8,
+    /// Built-in atomic 8-bit unsigned integer storage cell, written as `AtomicU8`.
+    AtomicU8,
+    /// Built-in atomic 16-bit signed integer storage cell, written as `AtomicI16`.
+    AtomicI16,
+    /// Built-in atomic 16-bit unsigned integer storage cell, written as `AtomicU16`.
+    AtomicU16,
     /// Built-in atomic 32-bit signed integer storage cell, written as `AtomicI32`.
     AtomicI32,
     /// Built-in atomic 32-bit unsigned integer storage cell, written as `AtomicU32`.
     AtomicU32,
     /// Built-in atomic 64-bit signed integer storage cell, written as `AtomicI64`.
     AtomicI64,
+    /// Built-in atomic 64-bit unsigned integer storage cell, written as `AtomicU64`.
+    AtomicU64,
     /// Built-in atomic pointer-width signed integer storage cell, written as `AtomicIsize`.
     AtomicIsize,
     /// Built-in atomic pointer-width unsigned integer storage cell, written as `AtomicUsize`.
@@ -160,9 +170,14 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
         Ty::AtomicBool => "atomic_bool".into(),
+        Ty::AtomicI8 => "atomic_i8".into(),
+        Ty::AtomicU8 => "atomic_u8".into(),
+        Ty::AtomicI16 => "atomic_i16".into(),
+        Ty::AtomicU16 => "atomic_u16".into(),
         Ty::AtomicI32 => "atomic_i32".into(),
         Ty::AtomicU32 => "atomic_u32".into(),
         Ty::AtomicI64 => "atomic_i64".into(),
+        Ty::AtomicU64 => "atomic_u64".into(),
         Ty::AtomicIsize => "atomic_isize".into(),
         Ty::AtomicUsize => "atomic_usize".into(),
         Ty::AtomicPtr(elem) => format!("atomic_ptr_{}", ty_symbol_fragment(elem)),

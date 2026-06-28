@@ -61,12 +61,14 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_atomic_bool.nia"),
         include_str!("../../../examples/tests/ok_atomic_ptr.nia"),
         include_str!("../../../examples/tests/ok_atomic_int.nia"),
+        include_str!("../../../examples/tests/ok_atomic_narrow_int.nia"),
         include_str!("../../../examples/tests/ok_threads_minimal.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_struct_methods_big.nia"),
         include_str!("../../../examples/sample_atomic_ptr.nia"),
         include_str!("../../../examples/sample_atomic_int.nia"),
+        include_str!("../../../examples/sample_atomic_narrow_int.nia"),
         include_str!("../../../examples/sample_matrix_rc.nia"),
         include_str!("../../../examples/sample_matrix_arith.nia"),
         include_str!("../../../examples/sample_matrix_det.nia"),
@@ -614,6 +616,32 @@ fn main() i32 {
 "#;
     let err = check_all(bool_add).expect_err("AtomicBool fetch_add should fail");
     assert!(err.contains("not supported for `AtomicBool`"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_narrow_int_methods() {
+    let src = include_str!("../../../examples/tests/ok_atomic_narrow_int.nia");
+    check_all(src).expect("narrow integer atomic methods should typecheck");
+}
+
+#[test]
+fn typecheck_atomic_narrow_int_rejects_bad_constructor_and_by_value() {
+    let bad_ctor = r#"
+fn main() i32 {
+    let cell = atomic_u8(true);
+    0
+}
+"#;
+    let err = check_all(bad_ctor).expect_err("atomic_u8 bool argument should fail");
+    assert!(err.contains("cannot satisfy U8"), "{err}");
+
+    let param = r#"
+fn bad(cell: AtomicU64) u64 {
+    cell.load(Ordering::Acquire)
+}
+"#;
+    let err = check_all(param).expect_err("AtomicU64 parameter should fail");
+    assert!(err.contains("atomic storage by value"), "{err}");
 }
 
 #[test]

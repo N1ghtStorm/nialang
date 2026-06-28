@@ -1,0 +1,44 @@
+fn read_u8(cell: &AtomicU8) u8 {
+    (*cell).load(Ordering::Acquire)
+}
+
+fn main() i32 {
+    let tiny: AtomicI8 = atomic_i8(1);
+    tiny.store(2, Ordering::Release);
+    let tiny_loaded: i8 = tiny.load(Ordering::Acquire);
+    let tiny_swap: i8 = tiny.swap(3, Ordering::AcqRel);
+    let tiny_add: i8 = tiny.fetch_add(4, Ordering::AcqRel);
+    let tiny_sub: i8 = tiny.fetch_sub(1, Ordering::AcqRel);
+    let tiny_and: i8 = tiny.fetch_and(7, Ordering::AcqRel);
+    let tiny_or: i8 = tiny.fetch_or(8, Ordering::AcqRel);
+    let tiny_xor: i8 = tiny.fetch_xor(1, Ordering::AcqRel);
+    let tiny_changed: bool = tiny.compare_exchange(14, 1, Ordering::AcqRel, Ordering::Acquire);
+
+    let byte: AtomicU8 = atomic_u8(10);
+    let old_u8: u8 = byte.fetch_add(5, Ordering::AcqRel);
+    let via_ptr: u8 = read_u8(&byte);
+
+    let short: AtomicI16 = atomic_i16(100);
+    let old_i16: i16 = short.fetch_sub(25, Ordering::AcqRel);
+
+    let ushort: AtomicU16 = atomic_u16(4);
+    let old_u16: u16 = ushort.fetch_or(1, Ordering::AcqRel);
+
+    let wideu: AtomicU64 = atomic_u64(8);
+    let old_u64: u64 = wideu.fetch_xor(3, Ordering::AcqRel);
+
+    println(tiny_loaded);
+    println(tiny_swap);
+    println(tiny_add);
+    println(tiny_sub);
+    println(tiny_and);
+    println(tiny_or);
+    println(tiny_xor);
+    println(tiny_changed);
+    println(old_u8);
+    println(via_ptr);
+    println(old_i16);
+    println(old_u16);
+    println(old_u64);
+    0
+}
