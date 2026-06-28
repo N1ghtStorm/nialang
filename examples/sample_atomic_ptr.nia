@@ -1,0 +1,25 @@
+// AtomicPtr[T] is a compiler-known atomic pointer storage cell.
+// It stores and exchanges values of type &T; it is not a generic Atomic[T].
+
+fn main() i32 {
+    let first: i32 = 10;
+    let second: i32 = 20;
+
+    let slot: AtomicPtr[i32] = atomic_ptr(&first);
+    let seen: &i32 = slot.load(Ordering::Acquire);
+    println(*seen);
+
+    slot.store(&second, Ordering::Release);
+    let previous: &i32 = slot.swap(&first, Ordering::AcqRel);
+    println(*previous);
+
+    let changed: bool = slot.compare_exchange(
+        &first,
+        &second,
+        Ordering::AcqRel,
+        Ordering::Acquire
+    );
+    println(changed);
+
+    0
+}

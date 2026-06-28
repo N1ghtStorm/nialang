@@ -65,6 +65,8 @@ pub enum Ty {
     List(Box<Ty>),
     /// Built-in atomic boolean storage cell, written as `AtomicBool`.
     AtomicBool,
+    /// Built-in atomic pointer storage cell, written as `AtomicPtr[T]`.
+    AtomicPtr(Box<Ty>),
     /// Built-in native thread handle, written as `Thread`.
     Thread,
     /// Built-in unique heap-owned matrix with one numeric cell type.
@@ -146,6 +148,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
         Ty::AtomicBool => "atomic_bool".into(),
+        Ty::AtomicPtr(elem) => format!("atomic_ptr_{}", ty_symbol_fragment(elem)),
         Ty::Thread => "thread".into(),
         Ty::Matrix(_, _) => "Matrix".into(),
         Ty::Fn(params, ret) => {

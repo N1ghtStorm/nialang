@@ -1,0 +1,19 @@
+fn main() i32 {
+    let a: i32 = 1;
+    let b: i32 = 2;
+    let slot: AtomicPtr[i32] = atomic_ptr(&a);
+
+    let current: &i32 = slot.load(Ordering::Acquire);
+    slot.store(&b, Ordering::Release);
+    let old: &i32 = slot.swap(&a, Ordering::AcqRel);
+    let changed: bool = slot.compare_exchange(&a, &b, Ordering::AcqRel, Ordering::Acquire);
+
+    let p: &AtomicPtr[i32] = &slot;
+    let current2: &i32 = (*p).load(Ordering::Acquire);
+
+    println(*current);
+    println(*old);
+    println(changed);
+    println(*current2);
+    0
+}

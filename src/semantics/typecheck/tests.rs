@@ -59,10 +59,12 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_bitwise.nia"),
         include_str!("../../../examples/tests/ok_atomic_bool.nia"),
+        include_str!("../../../examples/tests/ok_atomic_ptr.nia"),
         include_str!("../../../examples/tests/ok_threads_minimal.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_struct_methods_big.nia"),
+        include_str!("../../../examples/sample_atomic_ptr.nia"),
         include_str!("../../../examples/sample_matrix_rc.nia"),
         include_str!("../../../examples/sample_matrix_arith.nia"),
         include_str!("../../../examples/sample_matrix_det.nia"),
@@ -143,6 +145,30 @@ fn main() i32 {
 }
 "#;
     let err = check_all(fn_src).expect_err("atomic_bool is reserved");
+    assert!(err.contains("reserved"), "{err}");
+
+    let atomic_ptr_type_src = r#"
+struct AtomicPtr {
+    value: i32,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(atomic_ptr_type_src).expect_err("AtomicPtr is reserved");
+    assert!(err.contains("reserved"), "{err}");
+
+    let atomic_ptr_fn_src = r#"
+fn atomic_ptr(value: &i32) i32 {
+    *value
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(atomic_ptr_fn_src).expect_err("atomic_ptr is reserved");
     assert!(err.contains("reserved"), "{err}");
 }
 
@@ -300,6 +326,174 @@ fn main() i32 {
 "#;
     let err = check_all(field).expect_err("AtomicBool field should fail for Phase 1");
     assert!(err.contains("atomic storage by value"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_ptr_methods() {
+    let src = include_str!("../../../examples/tests/ok_atomic_ptr.nia");
+    check_all(src).expect("AtomicPtr methods should typecheck");
+}
+
+#[test]
+fn typecheck_atomic_ptr_rejects_plain_reads_and_assignment() {
+    let plain_read = r#"
+fn main() i32 {
+    let value: i32 = 1;
+    let slot: AtomicPtr[i32] = atomic_ptr(&value);
+    let snapshot = slot;
+    0
+}
+"#;
+    let err = check_all(plain_read).expect_err("atomic pointer plain read should fail");
+    assert!(err.contains("cannot be read directly"), "{err}");
+
+    let assignment = r#"
+fn main() i32 {
+    let a: i32 = 1;
+    let b: i32 = 2;
+    let slot: AtomicPtr[i32] = atomic_ptr(&a);
+    slot = atomic_ptr(&b);
+    0
+}
+"#;
+    let err = check_all(assignment).expect_err("atomic pointer assignment should fail");
+    assert!(err.contains("cannot assign to atomic value"), "{err}");
+
+    let direct_deref = r#"
+fn main() i32 {
+    let value: i32 = 1;
+    let slot: AtomicPtr[i32] = atomic_ptr(&value);
+    let p = &slot;
+    let snapshot = *p;
+    0
+}
+"#;
+    let err = check_all(direct_deref).expect_err("atomic pointer deref read should fail");
+    assert!(err.contains("cannot be read directly"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_ptr_rejects_invalid_orderings() {
+    let bad_load = r#"
+fn main() i32 {
+    let value: i32 = 1;
+    let slot: AtomicPtr[i32] = atomic_ptr(&value);
+    let current = slot.load(Ordering::Release);
+    0
+}
+"#;
+    let err = check_all(bad_load).expect_err("AtomicPtr load release should fail");
+    assert!(err.contains("not a valid ordering"), "{err}");
+
+    let bad_store = r#"
+fn main() i32 {
+    let a: i32 = 1;
+    let b: i32 = 2;
+    let slot: AtomicPtr[i32] = atomic_ptr(&a);
+    slot.store(&b, Ordering::Acquire);
+    0
+}
+"#;
+    let err = check_all(bad_store).expect_err("AtomicPtr store acquire should fail");
+    assert!(err.contains("not a valid ordering"), "{err}");
+
+    let bad_cmpxchg = r#"
+fn main() i32 {
+    let a: i32 = 1;
+    let b: i32 = 2;
+    let slot: AtomicPtr[i32] = atomic_ptr(&a);
+    let ok = slot.compare_exchange(&a, &b, Ordering::Release, Ordering::Acquire);
+    0
+}
+"#;
+    let err = check_all(bad_cmpxchg).expect_err("AtomicPtr bad cmpxchg should fail");
+    assert!(err.contains("stronger than success"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_ptr_allows_pointer_receiver() {
+    let src = r#"
+fn observe(p: &AtomicPtr[i32]) &i32 {
+    (*p).load(Ordering::Acquire)
+}
+
+fn main() i32 {
+    let value: i32 = 1;
+    let slot: AtomicPtr[i32] = atomic_ptr(&value);
+    let current = observe(&slot);
+    println(*current);
+    0
+}
+"#;
+    check_all(src).expect("AtomicPtr pointer receiver should typecheck");
+}
+
+#[test]
+fn typecheck_atomic_ptr_rejects_by_value_signatures_fields_and_bad_pointees() {
+    let param = r#"
+fn bad(cell: AtomicPtr[i32]) &i32 {
+    cell.load(Ordering::Acquire)
+}
+"#;
+    let err = check_all(param).expect_err("AtomicPtr parameter should fail");
+    assert!(err.contains("atomic storage by value"), "{err}");
+
+    let ret = r#"
+fn bad(value: &i32) AtomicPtr[i32] {
+    atomic_ptr(value)
+}
+"#;
+    let err = check_all(ret).expect_err("AtomicPtr return should fail");
+    assert!(err.contains("atomic storage by value"), "{err}");
+
+    let field = r#"
+struct Holder {
+    slot: AtomicPtr[i32],
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(field).expect_err("AtomicPtr field should fail");
+    assert!(err.contains("atomic storage by value"), "{err}");
+
+    let unit = r#"
+fn bad(cell: &AtomicPtr[()]) {
+}
+"#;
+    let err = check_all(unit).expect_err("AtomicPtr unit pointee should fail");
+    assert!(err.contains("AtomicPtr[()]"), "{err}");
+
+    let quantum = r#"
+fn bad(cell: &AtomicPtr[qubit]) {
+}
+"#;
+    let err = check_all(quantum).expect_err("AtomicPtr quantum pointee should fail");
+    assert!(err.contains("cannot point to quantum types"), "{err}");
+}
+
+#[test]
+fn typecheck_atomic_ptr_rejects_non_pointer_constructor_and_bool_fetch_ops() {
+    let non_ptr = r#"
+fn main() i32 {
+    let slot = atomic_ptr(1);
+    0
+}
+"#;
+    let err = check_all(non_ptr).expect_err("atomic_ptr requires pointer argument");
+    assert!(err.contains("expects `&T`"), "{err}");
+
+    let fetch = r#"
+fn main() i32 {
+    let value: i32 = 1;
+    let slot: AtomicPtr[i32] = atomic_ptr(&value);
+    let old = slot.fetch_xor(&value, Ordering::AcqRel);
+    0
+}
+"#;
+    let err = check_all(fetch).expect_err("AtomicPtr does not support bool fetch ops");
+    assert!(err.contains("not supported for `AtomicPtr[T]`"), "{err}");
 }
 
 #[test]

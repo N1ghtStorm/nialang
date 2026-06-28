@@ -5,17 +5,18 @@ use crate::ast::{
     VectorDef, method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, ATOMIC_BOOL, ATOMIC_BOOL_TYPE, ATOMIC_FENCE, AtomicOrdering, CIS, COMPLEX_ADD,
-    COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC,
-    DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ,
-    GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1,
-    GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y,
-    GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
-    MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS,
-    MATRIX_SET, MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT,
-    MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, RESULT, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE,
-    VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    ALLOC, ATOMIC_BOOL, ATOMIC_BOOL_TYPE, ATOMIC_FENCE, ATOMIC_PTR, ATOMIC_PTR_TYPE,
+    AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE,
+    COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT,
+    GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG,
+    GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG,
+    GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET,
+    LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP,
+    MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE,
+    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
+    ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT, SHA256, SIN, SPAWN,
+    THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
+    VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -62,6 +63,8 @@ fn normalize_ty(
                 Ok(Ty::Result)
             } else if name == ATOMIC_BOOL_TYPE {
                 Ok(Ty::AtomicBool)
+            } else if name == ATOMIC_PTR_TYPE {
+                Err("type `AtomicPtr` requires a type argument `AtomicPtr[T]`".into())
             } else if name == THREAD_TYPE {
                 Ok(Ty::Thread)
             } else if name == MATRIX_TYPE {
@@ -108,6 +111,11 @@ fn normalize_ty(
         Ty::List(elem) => Ok(Ty::List(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
+        Ty::AtomicPtr(elem) => {
+            let norm = normalize_ty(elem, structs, enums, vectors)?;
+            validate_atomic_ptr_pointee(&norm)?;
+            Ok(Ty::AtomicPtr(Box::new(norm)))
+        }
         Ty::Matrix(elem, shape) => {
             let norm = normalize_ty(elem, structs, enums, vectors)?;
             if matches!(norm, Ty::Matrix(_, _)) {
@@ -232,7 +240,7 @@ pub fn check_atomic_lvalue_receiver(receiver: &Expr) -> Result<(), String> {
 }
 
 fn is_atomic_ty(t: &Ty) -> bool {
-    matches!(t, Ty::AtomicBool)
+    matches!(t, Ty::AtomicBool | Ty::AtomicPtr(_))
 }
 
 fn is_atomic_bool_method(name: &str) -> bool {
@@ -246,6 +254,20 @@ fn is_atomic_bool_method(name: &str) -> bool {
             | ATOMIC_FETCH_OR_METHOD
             | ATOMIC_FETCH_XOR_METHOD
     )
+}
+
+fn is_atomic_ptr_method(name: &str) -> bool {
+    matches!(
+        name,
+        ATOMIC_LOAD_METHOD
+            | ATOMIC_STORE_METHOD
+            | ATOMIC_SWAP_METHOD
+            | ATOMIC_COMPARE_EXCHANGE_METHOD
+    )
+}
+
+fn is_atomic_method(name: &str) -> bool {
+    is_atomic_bool_method(name) || is_atomic_ptr_method(name)
 }
 
 fn infer_atomic_lvalue_receiver_ty(
@@ -296,6 +318,19 @@ fn atomic_assignment_target_ty(
     }
 }
 
+fn validate_atomic_ptr_pointee(pointee: &Ty) -> Result<(), String> {
+    if matches!(pointee, Ty::Unit) {
+        return Err("`AtomicPtr[()]` is not supported".into());
+    }
+    if contains_quantum_ty(pointee) {
+        return Err(format!(
+            "`AtomicPtr[{}]` cannot point to quantum types",
+            ty_diag_label(pointee)
+        ));
+    }
+    Ok(())
+}
+
 fn expect_atomic_bool_receiver(
     receiver: &Expr,
     method: &str,
@@ -311,6 +346,25 @@ fn expect_atomic_bool_receiver(
     } else {
         Err(format!(
             "method `{method}` requires `AtomicBool` receiver, got {recv_ty:?}"
+        ))
+    }
+}
+
+fn expect_atomic_ptr_receiver(
+    receiver: &Expr,
+    method: &str,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    let recv_ty = infer_atomic_lvalue_receiver_ty(receiver, env, structs, enums, vectors, fns)?;
+    if let Ty::AtomicPtr(pointee) = recv_ty {
+        Ok((*pointee).clone())
+    } else {
+        Err(format!(
+            "method `{method}` requires `AtomicPtr[T]` receiver, got {recv_ty:?}"
         ))
     }
 }
@@ -380,6 +434,99 @@ fn infer_atomic_bool_method(
             Ok(Ty::Bool)
         }
         _ => unreachable!("guarded atomic bool method"),
+    }
+}
+
+fn infer_atomic_ptr_method(
+    receiver: &Expr,
+    name: &str,
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    let pointee = expect_atomic_ptr_receiver(receiver, name, env, structs, enums, vectors, fns)?;
+    let ptr_ty = Ty::Ptr(Box::new(pointee.clone()));
+    match name {
+        ATOMIC_LOAD_METHOD => {
+            if args.len() != 1 {
+                return Err(format!(
+                    "method `{name}`: expected 1 arg, got {}",
+                    args.len()
+                ));
+            }
+            let ordering = parse_ordering_literal(&args[0])?;
+            check_atomic_ordering_for_op(AtomicOrderingUse::Load, ordering)?;
+            Ok(ptr_ty)
+        }
+        ATOMIC_STORE_METHOD => {
+            if args.len() != 2 {
+                return Err(format!(
+                    "method `{name}`: expected 2 args, got {}",
+                    args.len()
+                ));
+            }
+            expect_arg_ty(name, args, 0, &ptr_ty, env, structs, enums, vectors, fns)?;
+            let ordering = parse_ordering_literal(&args[1])?;
+            check_atomic_ordering_for_op(AtomicOrderingUse::Store, ordering)?;
+            Ok(Ty::Unit)
+        }
+        ATOMIC_SWAP_METHOD => {
+            if args.len() != 2 {
+                return Err(format!(
+                    "method `{name}`: expected 2 args, got {}",
+                    args.len()
+                ));
+            }
+            expect_arg_ty(name, args, 0, &ptr_ty, env, structs, enums, vectors, fns)?;
+            let ordering = parse_ordering_literal(&args[1])?;
+            check_atomic_ordering_for_op(AtomicOrderingUse::ReadModifyWrite, ordering)?;
+            Ok(ptr_ty)
+        }
+        ATOMIC_COMPARE_EXCHANGE_METHOD => {
+            if args.len() != 4 {
+                return Err(format!(
+                    "method `{name}`: expected 4 args, got {}",
+                    args.len()
+                ));
+            }
+            expect_arg_ty(name, args, 0, &ptr_ty, env, structs, enums, vectors, fns)?;
+            expect_arg_ty(name, args, 1, &ptr_ty, env, structs, enums, vectors, fns)?;
+            let success = parse_ordering_literal(&args[2])?;
+            let failure = parse_ordering_literal(&args[3])?;
+            check_compare_exchange_orderings(success, failure)?;
+            Ok(Ty::Bool)
+        }
+        _ => Err(format!(
+            "method `{name}` is not supported for `AtomicPtr[T]`"
+        )),
+    }
+}
+
+fn infer_atomic_method(
+    receiver: &Expr,
+    name: &str,
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<Ty, String> {
+    let recv_ty = infer_atomic_lvalue_receiver_ty(receiver, env, structs, enums, vectors, fns)?;
+    match recv_ty {
+        Ty::AtomicBool => {
+            infer_atomic_bool_method(receiver, name, args, env, structs, enums, vectors, fns)
+        }
+        Ty::AtomicPtr(_) => {
+            infer_atomic_ptr_method(receiver, name, args, env, structs, enums, vectors, fns)
+        }
+        other => Err(format!(
+            "method `{name}` requires atomic receiver, got {}",
+            ty_diag_label(&other)
+        )),
     }
 }
 
@@ -595,6 +742,7 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::F64 => "f64".into(),
         Ty::String => "String".into(),
         Ty::AtomicBool => "AtomicBool".into(),
+        Ty::AtomicPtr(elem) => format!("AtomicPtr[{}]", ty_diag_label(elem)),
         Ty::Thread => "Thread".into(),
         Ty::Qubit => "Qubit".into(),
         Ty::Result => "Result".into(),
@@ -692,6 +840,9 @@ fn ability_failure_reason(
         }
         Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
             "Matrix is a runtime owner and is not `copy`; use `.clone()` to duplicate it".into()
+        }
+        Ty::AtomicBool | Ty::AtomicPtr(_) if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "atomic storage values are not copyable or cloneable; use atomic methods".into()
         }
         Ty::Thread if matches!(ability, Ability::Copy | Ability::Clone) => {
             "Thread handles are move-only; use `join(t)` or `drop(t)` to consume them".into()
@@ -1205,6 +1356,7 @@ fn contains_quantum_ty(t: &Ty) -> bool {
     match t {
         Ty::Qubit | Ty::Result => true,
         Ty::Ptr(inner)
+        | Ty::AtomicPtr(inner)
         | Ty::Array(inner, _)
         | Ty::AnonVector(inner, _)
         | Ty::HeapVector(inner)
@@ -1958,7 +2110,7 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::Qubit
         | Ty::Result
         | Ty::Ptr(_) => true,
-        Ty::AtomicBool | Ty::Thread | Ty::Fn(_, _) => false,
+        Ty::AtomicBool | Ty::AtomicPtr(_) | Ty::Thread | Ty::Fn(_, _) => false,
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
         Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
         Ty::Struct(name) if name == COMPLEX_TYPE => true,
@@ -2307,6 +2459,19 @@ fn check_moves_call(
         .map(|_| ());
     }
 
+    if name == ATOMIC_PTR && args.len() == 1 {
+        return check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )
+        .map(|_| ());
+    }
+
     if name == ATOMIC_FENCE && args.len() == 1 {
         return Ok(());
     }
@@ -2568,8 +2733,8 @@ fn check_moves_method_call(
     fn_values: &mut FnValueStates,
     ctx: &MoveCtx<'_>,
 ) -> Result<(), String> {
-    if is_atomic_bool_method(name) {
-        infer_atomic_bool_method(
+    if is_atomic_method(name) {
+        infer_atomic_method(
             receiver,
             name,
             args,
@@ -2596,46 +2761,97 @@ fn check_moves_method_call(
             }
             _ => unreachable!("typechecked atomic receiver shape"),
         }
-        match name {
-            ATOMIC_LOAD_METHOD => return Ok(()),
-            ATOMIC_STORE_METHOD
-            | ATOMIC_SWAP_METHOD
-            | ATOMIC_FETCH_AND_METHOD
-            | ATOMIC_FETCH_OR_METHOD
-            | ATOMIC_FETCH_XOR_METHOD => {
-                check_moves_expr(
-                    &args[0],
-                    env,
-                    states,
-                    fn_values,
-                    ctx,
-                    Some(&Ty::Bool),
-                    ExprMoveMode::Consume(MoveReason::PassedByValue),
-                )?;
-                return Ok(());
+        let recv_ty = infer_atomic_lvalue_receiver_ty(
+            receiver,
+            env,
+            ctx.structs,
+            ctx.enums,
+            ctx.vectors,
+            ctx.fns,
+        )?;
+        match recv_ty {
+            Ty::AtomicBool => match name {
+                ATOMIC_LOAD_METHOD => return Ok(()),
+                ATOMIC_STORE_METHOD
+                | ATOMIC_SWAP_METHOD
+                | ATOMIC_FETCH_AND_METHOD
+                | ATOMIC_FETCH_OR_METHOD
+                | ATOMIC_FETCH_XOR_METHOD => {
+                    check_moves_expr(
+                        &args[0],
+                        env,
+                        states,
+                        fn_values,
+                        ctx,
+                        Some(&Ty::Bool),
+                        ExprMoveMode::Consume(MoveReason::PassedByValue),
+                    )?;
+                    return Ok(());
+                }
+                ATOMIC_COMPARE_EXCHANGE_METHOD => {
+                    check_moves_expr(
+                        &args[0],
+                        env,
+                        states,
+                        fn_values,
+                        ctx,
+                        Some(&Ty::Bool),
+                        ExprMoveMode::Consume(MoveReason::PassedByValue),
+                    )?;
+                    check_moves_expr(
+                        &args[1],
+                        env,
+                        states,
+                        fn_values,
+                        ctx,
+                        Some(&Ty::Bool),
+                        ExprMoveMode::Consume(MoveReason::PassedByValue),
+                    )?;
+                    return Ok(());
+                }
+                _ => unreachable!("guarded atomic bool method"),
+            },
+            Ty::AtomicPtr(pointee) => {
+                let ptr_ty = Ty::Ptr(pointee);
+                match name {
+                    ATOMIC_LOAD_METHOD => return Ok(()),
+                    ATOMIC_STORE_METHOD | ATOMIC_SWAP_METHOD => {
+                        check_moves_expr(
+                            &args[0],
+                            env,
+                            states,
+                            fn_values,
+                            ctx,
+                            Some(&ptr_ty),
+                            ExprMoveMode::Consume(MoveReason::PassedByValue),
+                        )?;
+                        return Ok(());
+                    }
+                    ATOMIC_COMPARE_EXCHANGE_METHOD => {
+                        check_moves_expr(
+                            &args[0],
+                            env,
+                            states,
+                            fn_values,
+                            ctx,
+                            Some(&ptr_ty),
+                            ExprMoveMode::Consume(MoveReason::PassedByValue),
+                        )?;
+                        check_moves_expr(
+                            &args[1],
+                            env,
+                            states,
+                            fn_values,
+                            ctx,
+                            Some(&ptr_ty),
+                            ExprMoveMode::Consume(MoveReason::PassedByValue),
+                        )?;
+                        return Ok(());
+                    }
+                    _ => unreachable!("guarded atomic pointer method"),
+                }
             }
-            ATOMIC_COMPARE_EXCHANGE_METHOD => {
-                check_moves_expr(
-                    &args[0],
-                    env,
-                    states,
-                    fn_values,
-                    ctx,
-                    Some(&Ty::Bool),
-                    ExprMoveMode::Consume(MoveReason::PassedByValue),
-                )?;
-                check_moves_expr(
-                    &args[1],
-                    env,
-                    states,
-                    fn_values,
-                    ctx,
-                    Some(&Ty::Bool),
-                    ExprMoveMode::Consume(MoveReason::PassedByValue),
-                )?;
-                return Ok(());
-            }
-            _ => unreachable!("guarded atomic method"),
+            _ => unreachable!("typechecked atomic receiver"),
         }
     }
 
@@ -3302,6 +3518,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_equal(xt, yt),
         (Ty::HeapVector(x), Ty::HeapVector(y)) => types_equal(x, y),
         (Ty::List(x), Ty::List(y)) => types_equal(x, y),
+        (Ty::AtomicPtr(x), Ty::AtomicPtr(y)) => types_equal(x, y),
         // Vector values are currently represented as struct-shaped aggregates in AST/codegen.
         // Accept name-equivalence across these forms at semantic boundaries.
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
@@ -4884,6 +5101,41 @@ fn infer_expr(
                 expect_arg_ty(name, args, 0, &Ty::Bool, env, structs, enums, vectors, fns)?;
                 return Ok(Ty::AtomicBool);
             }
+            if name == ATOMIC_PTR {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{ATOMIC_PTR}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let expected_pointee = match hint {
+                    Some(Ty::AtomicPtr(pointee)) => Some(pointee.as_ref().clone()),
+                    _ => None,
+                };
+                let arg_hint = expected_pointee
+                    .as_ref()
+                    .map(|pointee| Ty::Ptr(Box::new(pointee.clone())));
+                let arg_ty = infer_expr(
+                    &args[0],
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    arg_hint.as_ref(),
+                )?;
+                let pointee = match arg_ty {
+                    Ty::Ptr(pointee) => pointee,
+                    other => {
+                        return Err(format!(
+                            "`{ATOMIC_PTR}` expects `&T`, got {}",
+                            ty_diag_label(&other)
+                        ));
+                    }
+                };
+                validate_atomic_ptr_pointee(&pointee)?;
+                return Ok(Ty::AtomicPtr(pointee));
+            }
             if name == ATOMIC_FENCE {
                 if args.len() != 1 {
                     return Err(format!(
@@ -5742,8 +5994,8 @@ fn infer_expr(
             name,
             args,
         } => {
-            if is_atomic_bool_method(name) {
-                return infer_atomic_bool_method(
+            if is_atomic_method(name) {
+                return infer_atomic_method(
                     receiver, name, args, env, structs, enums, vectors, fns,
                 );
             }

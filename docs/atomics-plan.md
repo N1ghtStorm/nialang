@@ -1,6 +1,6 @@
 # Atomics Plan
 
-Status: Phase 0 and Phase 1 are implemented. Phase 2 is next.
+Status: Phase 0, Phase 1, and Phase 2 are implemented. Phase 3 is next.
 
 ## Goal
 
@@ -313,6 +313,9 @@ store atomic i32 %v, ptr %cell release, align 4
 fence seq_cst
 ```
 
+Pointer `swap` uses a `cmpxchg` retry loop instead of `atomicrmw xchg`,
+because LLVM does not accept `atomicrmw xchg` over opaque pointer values.
+
 Implementation helpers:
 
 - compute atomic storage type
@@ -397,7 +400,7 @@ Tests:
 
 ### Phase 2: `AtomicPtr[T]`
 
-Status: planned next.
+Status: implemented.
 
 Goal: add atomic storage for raw Nia pointers without introducing general
 generics.
@@ -431,7 +434,8 @@ Compiler work:
 - support methods `load`, `store`, `swap`, and `compare_exchange`
 - reject `AtomicPtr[()]`, `AtomicPtr[qubit]`, and `AtomicPtr[result]`
 - lower storage as `ptr`
-- emit `load atomic ptr`, `store atomic ptr`, `atomicrmw xchg`, and `cmpxchg`
+- emit `load atomic ptr`, `store atomic ptr`, a `cmpxchg` loop for `swap`,
+  and `cmpxchg`
 
 Tests:
 

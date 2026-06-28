@@ -374,6 +374,24 @@ fn parse_fixture_atomic_bool() {
 }
 
 #[test]
+fn parse_fixture_atomic_ptr() {
+    parse_ok(include_str!("../../examples/tests/ok_atomic_ptr.nia"));
+}
+
+#[test]
+fn parse_rejects_generic_atomic_spelling() {
+    let src = r#"
+fn main() i32 {
+    let value: Atomic[i32] = 1;
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let r = Parser::new(toks).parse_file();
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn parse_fixture_threads_minimal() {
     parse_ok(include_str!("../../examples/tests/ok_threads_minimal.nia"));
 }

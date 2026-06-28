@@ -5,7 +5,7 @@ use crate::ast::{
     StructDef, Ty, VectorDef, method_symbol,
 };
 use crate::lexer::Token;
-use crate::nia_std::{LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY};
+use crate::nia_std::{ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -918,6 +918,11 @@ impl Parser {
                         let elem = self.parse_ty()?;
                         self.expect(&Token::RBracket)?;
                         Ok(Ty::List(Box::new(elem)))
+                    } else if n == ATOMIC_PTR_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let elem = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::AtomicPtr(Box::new(elem)))
                     } else {
                         Ok(Ty::Struct(n))
                     }

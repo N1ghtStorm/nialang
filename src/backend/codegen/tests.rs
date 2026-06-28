@@ -168,6 +168,66 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_atomic_ptr_operations() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let a: i32 = 1;
+    let b: i32 = 2;
+    let slot: AtomicPtr[i32] = atomic_ptr(&a);
+    let loaded = slot.load(Ordering::Acquire);
+    slot.store(&b, Ordering::Release);
+    let swapped = slot.swap(&a, Ordering::AcqRel);
+    let changed = slot.compare_exchange(&a, &b, Ordering::AcqRel, Ordering::Acquire);
+    println(*loaded);
+    println(*swapped);
+    println(changed);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("load atomic ptr, ptr %slot.addr acquire, align 8"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("store atomic ptr %b.addr, ptr %slot.addr release, align 8"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("atomic.ptr.swap.loop"), "IR:\n{ll}");
+    assert!(ll.contains("cmpxchg ptr %slot.addr, ptr %"), "IR:\n{ll}");
+    assert!(
+        ll.contains("cmpxchg ptr %slot.addr, ptr %a.addr, ptr %b.addr acq_rel acquire"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("extractvalue { ptr, i1 } %"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_atomic_ptr_pointer_receiver() {
+    let ll = emit(
+        r#"
+fn observe(p: &AtomicPtr[i32]) &i32 {
+    (*p).load(Ordering::Acquire)
+}
+
+fn main() i32 {
+    let value: i32 = 1;
+    let slot: AtomicPtr[i32] = atomic_ptr(&value);
+    let current = observe(&slot);
+    println(*current);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal ptr @observe(ptr %p)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("load atomic ptr, ptr %"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_non_capturing_closure_function_value() {
     let ll = emit(
         r#"
