@@ -653,36 +653,16 @@ fn typecheck_threads_minimal_surface() {
 }
 
 #[test]
-fn typecheck_threads_reject_capturing_spawn_closure() {
+fn typecheck_threads_reject_unknown_spawn_target() {
     let src = r#"
 fn main() i32 {
-    let x = 1;
-    let t = spawn(|| {
-        println(x);
-    });
+    let t = spawn missing_worker;
     join(t);
     0
 }
 "#;
-    let err = check_all(src).expect_err("capturing spawn closure should fail in MVP");
-    assert!(err.contains("cannot capture"), "{err}");
-}
-
-#[test]
-fn typecheck_threads_reject_local_function_value_spawn() {
-    let src = r#"
-fn worker() {
-}
-
-fn main() i32 {
-    let f: fn() -> () = worker;
-    let t = spawn(f);
-    join(t);
-    0
-}
-"#;
-    let err = check_all(src).expect_err("local function value spawn should fail in MVP");
-    assert!(err.contains("local function value"), "{err}");
+    let err = check_all(src).expect_err("unknown spawn target should fail");
+    assert!(err.contains("top-level function"), "{err}");
 }
 
 #[test]
@@ -692,7 +672,7 @@ fn worker() {
 }
 
 fn main() i32 {
-    let t = spawn(worker);
+    let t = spawn worker;
     join(t);
     join(t);
     0
@@ -710,7 +690,7 @@ fn worker(x: i32) {
 }
 
 fn main() i32 {
-    let t = spawn(worker);
+    let t = spawn worker;
     join(t);
     0
 }

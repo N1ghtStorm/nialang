@@ -20,8 +20,8 @@ use crate::nia_std::{
     LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
     MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
     MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER,
-    PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY,
-    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256, SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX,
+    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -49,6 +49,7 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::Ident(_)
+        | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => {}
         Expr::Neg(inner)
         | Expr::Not(inner)
@@ -2542,6 +2543,7 @@ impl<'a> Gen<'a> {
             | Expr::Float(_)
             | Expr::Bool(_)
             | Expr::String(_)
+            | Expr::Spawn { .. }
             | Expr::EnumVariant { .. } => {}
             Expr::Neg(inner) | Expr::Not(inner) | Expr::BitNot(inner) => {
                 self.clear_consumed_custom_drop_locals_expr(inner, locals, drop_flags, true);
@@ -2577,12 +2579,6 @@ impl<'a> Gen<'a> {
                         self.clear_drop_flag_for_local(arg_name, locals, drop_flags, true);
                     } else if let Some(arg) = args.first() {
                         self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, true);
-                    }
-                    return;
-                }
-                if name == SPAWN {
-                    for arg in args {
-                        self.clear_consumed_custom_drop_locals_expr(arg, locals, drop_flags, false);
                     }
                     return;
                 }
@@ -2886,12 +2882,11 @@ impl<'a> Gen<'a> {
 
     fn emit_thread_spawn(
         &mut self,
-        args: &[Expr],
+        target: &Expr,
         locals: &HashMap<String, (Ty, String)>,
     ) -> (Ty, String) {
-        debug_assert_eq!(args.len(), 1);
         let entry_ty = Ty::Fn(Vec::new(), Box::new(Ty::Unit));
-        let (fn_ty, fn_value) = self.emit_expr(&args[0], locals, Some(&entry_ty));
+        let (fn_ty, fn_value) = self.emit_expr(target, locals, Some(&entry_ty));
         debug_assert!(types_match(&fn_ty, &entry_ty));
 
         let payload = self.fresh();
@@ -9355,6 +9350,10 @@ impl<'a> Gen<'a> {
                 ret,
                 body,
             } => self.emit_closure_literal(*is_move, params, ret.as_ref(), body, locals, hint),
+            Expr::Spawn { target } => {
+                let target_expr = Expr::Ident(target.clone());
+                self.emit_thread_spawn(&target_expr, locals)
+            }
             Expr::CallExpr { callee, args } => {
                 let (callee_ty, callee_val) = self.emit_expr(callee, locals, None);
                 let Ty::Fn(params, ret) = callee_ty else {
@@ -9410,9 +9409,6 @@ impl<'a> Gen<'a> {
                     let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[0]));
                     writeln!(self.out, "  fence {}", ordering).unwrap();
                     return (Ty::Unit, String::new());
-                }
-                if name == SPAWN {
-                    return self.emit_thread_spawn(args, locals);
                 }
                 if name == JOIN {
                     return self.emit_thread_join(args, locals);

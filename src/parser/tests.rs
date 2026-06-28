@@ -414,6 +414,40 @@ fn parse_fixture_threads_minimal() {
 }
 
 #[test]
+fn parse_rejects_old_spawn_call_syntax() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let t: Thread = spawn(worker);
+    join(t);
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let r = Parser::new(toks).parse_file();
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn parse_rejects_spawn_brace_syntax() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let t: Thread = spawn { worker };
+    join(t);
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let r = Parser::new(toks).parse_file();
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn parse_fixture_ptr_write() {
     parse_ok(include_str!("../../examples/tests/ok_ptr_write.nia"));
 }

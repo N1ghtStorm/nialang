@@ -2,13 +2,15 @@ fn worker() {
     println(1);
 }
 
+fn second_worker() {
+    println(2);
+}
+
 fn main() i32 {
-    let first: Thread = spawn(worker);
+    let first: Thread = spawn worker;
     join(first);
 
-    let second: Thread = spawn(|| {
-        println(2);
-    });
+    let second: Thread = spawn second_worker;
     join(second);
 
     0

@@ -1,8 +1,7 @@
 // Threads in NiaLang: OS threads via pthread.
 //
-// spawn(target) starts a thread. The target must have type fn() -> ():
-//   - a top-level function name, or
-//   - a closure that does not capture any locals.
+// spawn target starts a thread. The target must be a top-level function
+// with type fn() -> ().
 //
 // join(t) waits for the thread and frees the handle.
 // If a Thread is dropped without join(), the runtime calls pthread_detach.
@@ -15,27 +14,31 @@ fn pong() {
     println(2);
 }
 
+fn print_ten() {
+    println(10);
+}
+
+fn background_worker() {
+    println(99);
+}
+
 fn main() i32 {
     // Spawn a top-level worker and wait for it.
-    let first: Thread = spawn(ping);
+    let first: Thread = spawn ping;
     join(first);
 
-    // Non-capturing closures work too.
-    let second: Thread = spawn(|| {
-        println(10);
-    });
+    // Spawn another top-level worker.
+    let second: Thread = spawn print_ten;
     join(second);
 
     // Start two workers in parallel, then join them in any order.
-    let left: Thread = spawn(ping);
-    let right: Thread = spawn(pong);
+    let left: Thread = spawn ping;
+    let right: Thread = spawn pong;
     join(left);
     join(right);
 
     // Detach: dropping the handle without join() lets the thread keep running.
-    let background: Thread = spawn(|| {
-        println(99);
-    });
+    let background: Thread = spawn background_worker;
     drop(background);
 
     0

@@ -348,6 +348,10 @@ pub enum Expr {
         ret: Option<Ty>,
         body: Box<Block>,
     },
+    /// Built-in thread spawn expression, written as `spawn function_name`.
+    Spawn {
+        target: String,
+    },
     StructLit {
         name: String,
         fields: Vec<(String, Expr)>,

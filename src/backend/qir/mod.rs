@@ -407,6 +407,7 @@ fn collect_expr(
         | Expr::Bool(_)
         | Expr::String(_)
         | Expr::Ident(_)
+        | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => Ok(()),
     }
 }

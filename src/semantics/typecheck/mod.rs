@@ -698,56 +698,28 @@ fn infer_atomic_method(
     }
 }
 
-fn thread_entry_ty() -> Ty {
-    Ty::Fn(Vec::new(), Box::new(Ty::Unit))
-}
-
 fn is_unit_sig_ret(ret: &Option<Ty>) -> bool {
     matches!(ret, None | Some(Ty::Unit))
 }
 
-fn check_plain_thread_spawn_target(
-    target: &Expr,
-    env: &HashMap<String, Ty>,
+fn check_thread_spawn_target_name(
+    target: &str,
     fns: &HashMap<String, FnSig>,
 ) -> Result<(), String> {
-    match target {
-        Expr::Ident(name) => {
-            if env.contains_key(name) {
-                return Err(format!(
-                    "`{SPAWN}` target must be a top-level function or non-capturing closure; local function value `{name}` is not supported yet"
-                ));
-            }
-            let Some(sig) = fns.get(name) else {
-                return Err(format!(
-                    "`{SPAWN}` target must be a top-level function or non-capturing closure"
-                ));
-            };
-            if sig.is_quantum {
-                return Err(format!("`{SPAWN}` target `{name}` cannot be quantum"));
-            }
-            if sig.params.is_empty() && is_unit_sig_ret(&sig.ret) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{SPAWN}` target `{name}` must have type `fn() -> ()`"
-                ))
-            }
-        }
-        Expr::Closure { params, body, .. } => {
-            let (captures, _) = closure_capture_names(params, body, env);
-            if captures.is_empty() {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{SPAWN}` closure target cannot capture `{}` yet",
-                    captures[0]
-                ))
-            }
-        }
-        _ => Err(format!(
-            "`{SPAWN}` target must be a top-level function or non-capturing closure"
-        )),
+    let Some(sig) = fns.get(target) else {
+        return Err(format!(
+            "`{SPAWN}` target `{target}` must be a top-level function"
+        ));
+    };
+    if sig.is_quantum {
+        return Err(format!("`{SPAWN}` target `{target}` cannot be quantum"));
+    }
+    if sig.params.is_empty() && is_unit_sig_ret(&sig.ret) {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{SPAWN}` target `{target}` must have type `fn() -> ()`"
+        ))
     }
 }
 
@@ -1142,6 +1114,7 @@ fn expr_contains_direct_self_clone(e: &Expr) -> bool {
         | Expr::Bool(_)
         | Expr::String(_)
         | Expr::Ident(_)
+        | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => false,
         Expr::Neg(inner)
         | Expr::Not(inner)
@@ -2705,19 +2678,6 @@ fn check_moves_call(
         return Ok(());
     }
 
-    if name == SPAWN && args.len() == 1 {
-        return check_moves_expr(
-            &args[0],
-            env,
-            states,
-            fn_values,
-            ctx,
-            Some(&thread_entry_ty()),
-            ExprMoveMode::ReadOnly,
-        )
-        .map(|_| ());
-    }
-
     if name == JOIN && args.len() == 1 {
         return check_moves_expr(
             &args[0],
@@ -3420,7 +3380,7 @@ fn check_moves_expr(
 ) -> Result<Ty, String> {
     let inferred = infer_expr(e, env, ctx.structs, ctx.enums, ctx.vectors, ctx.fns, hint)?;
     match e {
-        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) => {}
+        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) | Expr::Spawn { .. } => {}
         Expr::Ident(name) => {
             consume_ident_if_needed(name, &inferred, states, fn_values, ctx, mode)?
         }
@@ -4941,6 +4901,7 @@ fn collect_expr_captures(
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::String(_)
+        | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => {}
         Expr::Neg(inner)
         | Expr::Not(inner)
@@ -5357,6 +5318,10 @@ fn infer_expr(
             fns,
             hint,
         ),
+        Expr::Spawn { target } => {
+            check_thread_spawn_target_name(target, fns)?;
+            Ok(Ty::Thread)
+        }
         Expr::CallExpr { callee, args } => {
             let callee_ty = infer_expr(callee, env, structs, enums, vectors, fns, None)?;
             infer_fn_value_call(&callee_ty, args, env, structs, enums, vectors, fns)
@@ -5447,25 +5412,6 @@ fn infer_expr(
                 let ordering = parse_ordering_literal(&args[0])?;
                 check_atomic_ordering_for_op(AtomicOrderingUse::Fence, ordering)?;
                 return Ok(Ty::Unit);
-            }
-            if name == SPAWN {
-                if args.len() != 1 {
-                    return Err(format!(
-                        "`{SPAWN}` expects exactly 1 argument, got {}",
-                        args.len()
-                    ));
-                }
-                let entry_ty = thread_entry_ty();
-                let target_ty =
-                    infer_expr(&args[0], env, structs, enums, vectors, fns, Some(&entry_ty))?;
-                if !types_equal(&target_ty, &entry_ty) {
-                    return Err(format!(
-                        "`{SPAWN}` expects `fn() -> ()`, got {}",
-                        ty_diag_label(&target_ty)
-                    ));
-                }
-                check_plain_thread_spawn_target(&args[0], env, fns)?;
-                return Ok(Ty::Thread);
             }
             if name == JOIN {
                 if args.len() != 1 {

@@ -405,6 +405,7 @@ fn expr_contains_quantum(e: &Expr) -> bool {
         | Expr::Bool(_)
         | Expr::String(_)
         | Expr::Ident(_)
+        | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => false,
     }
 }

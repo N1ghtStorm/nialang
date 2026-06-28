@@ -440,13 +440,15 @@ fn worker() {
     println(1);
 }
 
+fn detached_worker() {
+    println(2);
+}
+
 fn main() i32 {
-    let joined: Thread = spawn(worker);
+    let joined: Thread = spawn worker;
     join(joined);
 
-    let detached: Thread = spawn(|| {
-        println(2);
-    });
+    let detached: Thread = spawn detached_worker;
     0
 }
 "#,

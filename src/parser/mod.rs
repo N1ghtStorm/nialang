@@ -1376,6 +1376,7 @@ impl Parser {
                     body: Box::new(body),
                 })
             }
+            Token::Spawn => self.parse_spawn_expr(),
             Token::Match => self.parse_match_expr(),
             Token::Drop => {
                 self.bump();
@@ -1459,6 +1460,13 @@ impl Parser {
                 other => Err(format!("unexpected token in expression: {other:?}")),
             },
         }
+    }
+
+    fn parse_spawn_expr(&mut self) -> Result<Expr, String> {
+        self.expect(&Token::Spawn)?;
+        let segments = self.parse_path_segments()?;
+        let target = self.resolve_item_path(&segments)?;
+        Ok(Expr::Spawn { target })
     }
 
     /// Parses named struct literal body after consuming struct identifier.
