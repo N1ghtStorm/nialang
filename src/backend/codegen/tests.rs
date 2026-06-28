@@ -89,6 +89,26 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_u32_primitive_ops() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let a: u32 = 10;
+    let b: u32 = 3;
+    let div: u32 = a / b;
+    let rem: u32 = a % b;
+    println(div);
+    println(rem);
+    0
+}
+"#,
+    );
+    assert!(ll.contains("udiv i32"), "IR:\n{ll}");
+    assert!(ll.contains("urem i32"), "IR:\n{ll}");
+    assert!(ll.contains("@nialang.std.fmt.u32"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_atomic_bool_operations() {
     let ll = emit(
         r#"

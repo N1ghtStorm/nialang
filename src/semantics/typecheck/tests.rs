@@ -95,6 +95,23 @@ fn main() i32 {{
 }
 
 #[test]
+fn typecheck_u32_primitive_ops() {
+    let src = r#"
+fn main() i32 {
+    let a: u32 = 10;
+    let b: u32 = 3;
+    let c: u32 = ((a + b) - 1) * 2;
+    let d: u32 = c / b;
+    let e: u32 = d % b;
+    let f: u32 = (e << 1) >> 1;
+    println(f);
+    0
+}
+"#;
+    check_all(src).expect("u32 primitive operations should typecheck");
+}
+
+#[test]
 fn typecheck_builtin_ordering_enum() {
     let src = r#"
 fn main() i32 {

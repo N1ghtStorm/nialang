@@ -420,6 +420,7 @@ entry:
 @nialang.std.txt.anonvec.open.i16 = private unnamed_addr constant [6 x i8] c"(i16{\00", align 1
 @nialang.std.txt.anonvec.open.u16 = private unnamed_addr constant [6 x i8] c"(u16{\00", align 1
 @nialang.std.txt.anonvec.open.i32 = private unnamed_addr constant [6 x i8] c"(i32{\00", align 1
+@nialang.std.txt.anonvec.open.u32 = private unnamed_addr constant [6 x i8] c"(u32{\00", align 1
 @nialang.std.txt.anonvec.open.i64 = private unnamed_addr constant [6 x i8] c"(i64{\00", align 1
 @nialang.std.txt.anonvec.open.u64 = private unnamed_addr constant [6 x i8] c"(u64{\00", align 1
 @nialang.std.txt.anonvec.open.i128 = private unnamed_addr constant [7 x i8] c"(i128{\00", align 1
@@ -501,6 +502,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::I16 => "i16".into(),
         Ty::U16 => "u16".into(),
         Ty::I32 => "i32".into(),
+        Ty::U32 => "u32".into(),
         Ty::I64 => "i64".into(),
         Ty::U64 => "u64".into(),
         Ty::I128 => "i128".into(),
@@ -551,6 +553,7 @@ fn anon_vector_print_open_symbol(elem_ty: &Ty) -> Option<(&'static str, u32)> {
         Ty::I16 => Some(("nialang.std.txt.anonvec.open.i16", 6)),
         Ty::U16 => Some(("nialang.std.txt.anonvec.open.u16", 6)),
         Ty::I32 => Some(("nialang.std.txt.anonvec.open.i32", 6)),
+        Ty::U32 => Some(("nialang.std.txt.anonvec.open.u32", 6)),
         Ty::I64 => Some(("nialang.std.txt.anonvec.open.i64", 6)),
         Ty::U64 => Some(("nialang.std.txt.anonvec.open.u64", 6)),
         Ty::I128 => Some(("nialang.std.txt.anonvec.open.i128", 7)),
@@ -702,6 +705,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::I16 => "i16".into(),
         Ty::U16 => "i16".into(),
         Ty::I32 => "i32".into(),
+        Ty::U32 => "i32".into(),
         Ty::I64 => "i64".into(),
         Ty::U64 => "i64".into(),
         Ty::I128 => "i128".into(),
@@ -784,7 +788,7 @@ fn atomic_storage_align_bytes(storage_ty: &Ty) -> usize {
     match storage_ty {
         Ty::Bool | Ty::AtomicBool | Ty::I8 | Ty::U8 => 1,
         Ty::I16 | Ty::U16 => 2,
-        Ty::I32 => 4,
+        Ty::I32 | Ty::U32 => 4,
         Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize | Ty::Ptr(_) | Ty::AtomicPtr(_) => 8,
         Ty::I128 | Ty::U128 => 16,
         other => unreachable!("unsupported atomic storage type: {other:?}"),
@@ -948,6 +952,7 @@ fn supports_clone_method_ty(
         | Ty::I16
         | Ty::U16
         | Ty::I32
+        | Ty::U32
         | Ty::I64
         | Ty::U64
         | Ty::I128
@@ -995,7 +1000,7 @@ fn matrix_elem_size(t: &Ty) -> usize {
     match t {
         Ty::I8 | Ty::U8 => 1,
         Ty::I16 | Ty::U16 | Ty::F16 => 2,
-        Ty::I32 | Ty::F32 => 4,
+        Ty::I32 | Ty::U32 | Ty::F32 => 4,
         Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize | Ty::F64 => 8,
         Ty::I128 | Ty::U128 => 16,
         _ => unreachable!("typechecked numeric matrix element"),
@@ -1023,7 +1028,7 @@ fn matrix_int_binop_instruction(op: &str) -> &'static str {
 fn matrix_int_div_instruction(elem_ty: &Ty) -> &'static str {
     match elem_ty {
         Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64 | Ty::I128 | Ty::Isize => "sdiv",
-        Ty::U8 | Ty::U16 | Ty::U64 | Ty::Usize | Ty::U128 => "udiv",
+        Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 | Ty::Usize | Ty::U128 => "udiv",
         _ => unreachable!("typechecked numeric matrix element"),
     }
 }
@@ -1045,6 +1050,7 @@ fn matrix_zero_value(t: &Ty) -> &'static str {
         | Ty::I16
         | Ty::U16
         | Ty::I32
+        | Ty::U32
         | Ty::I64
         | Ty::U64
         | Ty::Isize
@@ -1063,6 +1069,7 @@ fn matrix_one_value(t: &Ty) -> &'static str {
         | Ty::I16
         | Ty::U16
         | Ty::I32
+        | Ty::U32
         | Ty::I64
         | Ty::U64
         | Ty::Isize
@@ -1888,6 +1895,7 @@ impl<'a> Gen<'a> {
             | Ty::I16
             | Ty::U16
             | Ty::I32
+            | Ty::U32
             | Ty::I64
             | Ty::U64
             | Ty::I128
@@ -4069,6 +4077,20 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
             }
+            Ty::U32 => {
+                let (sym, sz) = if newline {
+                    ("nialang.std.fmt.u32", 4)
+                } else {
+                    ("nialang.std.fmt.u32.nn", 3)
+                };
+                let p = self.fmt_ptr(sym, sz);
+                writeln!(
+                    self.out,
+                    "  call i32 (ptr, ...) @printf(ptr {}, i32 {})",
+                    p, v
+                )
+                .unwrap();
+            }
             Ty::I64 | Ty::Isize => {
                 let (sym, sz) = if newline {
                     ("nialang.std.fmt.i64", 6)
@@ -4239,7 +4261,7 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
             }
-            Ty::U8 | Ty::U16 => {
+            Ty::U8 | Ty::U16 | Ty::U32 => {
                 let val = self.emit_int_to_i64(ty, v, false);
                 writeln!(
                     self.out,
@@ -5536,6 +5558,14 @@ impl<'a> Gen<'a> {
                     .unwrap();
                 }
             }
+            Ty::U32 => {
+                let llvm_op = if op == "/" {
+                    matrix_int_div_instruction(elem_ty)
+                } else {
+                    matrix_int_binop_instruction(op)
+                };
+                writeln!(self.out, "  %{} = {} i32 {}, {}", out, llvm_op, left, right).unwrap();
+            }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                 if op == "/" {
                     let llvm_op = matrix_int_div_instruction(elem_ty);
@@ -5584,6 +5614,9 @@ impl<'a> Gen<'a> {
             }
             Ty::I32 => {
                 writeln!(self.out, "  %{} = sub nsw i32 0, {}", out, value).unwrap();
+            }
+            Ty::U32 => {
+                writeln!(self.out, "  %{} = sub i32 0, {}", out, value).unwrap();
             }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                 writeln!(self.out, "  %{} = sub i64 0, {}", out, value).unwrap();
@@ -6682,6 +6715,10 @@ impl<'a> Gen<'a> {
                 let op = if is_add { "add nsw" } else { "sub nsw" };
                 writeln!(self.out, "  %{} = {} i32 %{}, %{}", out, op, a, b).unwrap();
             }
+            Ty::U32 => {
+                let op = if is_add { "add" } else { "sub" };
+                writeln!(self.out, "  %{} = {} i32 %{}, %{}", out, op, a, b).unwrap();
+            }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                 let op = if is_add { "add" } else { "sub" };
                 writeln!(self.out, "  %{} = {} i64 %{}, %{}", out, op, a, b).unwrap();
@@ -6712,6 +6749,9 @@ impl<'a> Gen<'a> {
             }
             Ty::I32 => {
                 writeln!(self.out, "  %{} = mul nsw i32 %{}, %{}", out, a, b).unwrap();
+            }
+            Ty::U32 => {
+                writeln!(self.out, "  %{} = mul i32 %{}, %{}", out, a, b).unwrap();
             }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                 writeln!(self.out, "  %{} = mul i64 %{}, %{}", out, a, b).unwrap();
@@ -6744,6 +6784,9 @@ impl<'a> Gen<'a> {
                     out, comp, scalar_ssa
                 )
                 .unwrap();
+            }
+            Ty::U32 => {
+                writeln!(self.out, "  %{} = mul i32 %{}, {}", out, comp, scalar_ssa).unwrap();
             }
             Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                 writeln!(self.out, "  %{} = mul i64 %{}, {}", out, comp, scalar_ssa).unwrap();
@@ -8190,6 +8233,9 @@ impl<'a> Gen<'a> {
                     Ty::I32 => {
                         writeln!(self.out, "  %{} = add nsw i32 %{}, 1", iv_next, iv).unwrap();
                     }
+                    Ty::U32 => {
+                        writeln!(self.out, "  %{} = add i32 %{}, 1", iv_next, iv).unwrap();
+                    }
                     Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                         writeln!(self.out, "  %{} = add i64 %{}, 1", iv_next, iv).unwrap();
                     }
@@ -8337,6 +8383,7 @@ impl<'a> Gen<'a> {
                 Some(Ty::I16) => (Ty::I16, format!("{n}")),
                 Some(Ty::U16) => (Ty::U16, format!("{n}")),
                 Some(Ty::I32) | None => (Ty::I32, format!("{n}")),
+                Some(Ty::U32) => (Ty::U32, format!("{n}")),
                 Some(Ty::I64) => (Ty::I64, format!("{n}")),
                 Some(Ty::U64) => (Ty::U64, format!("{n}")),
                 Some(Ty::I128) => (Ty::I128, format!("{n}")),
@@ -8447,6 +8494,9 @@ impl<'a> Gen<'a> {
                     Ty::I32 => {
                         writeln!(self.out, "  %{} = sub nsw i32 0, {}", tmp, v).unwrap();
                     }
+                    Ty::U32 => {
+                        writeln!(self.out, "  %{} = sub i32 0, {}", tmp, v).unwrap();
+                    }
                     Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                         writeln!(self.out, "  %{} = sub i64 0, {}", tmp, v).unwrap();
                     }
@@ -8522,6 +8572,9 @@ impl<'a> Gen<'a> {
                     Ty::I32 => {
                         writeln!(self.out, "  %{} = add nsw i32 {}, {}", tmp, vl, vr).unwrap();
                     }
+                    Ty::U32 => {
+                        writeln!(self.out, "  %{} = add i32 {}, {}", tmp, vl, vr).unwrap();
+                    }
                     Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                         writeln!(self.out, "  %{} = add i64 {}, {}", tmp, vl, vr).unwrap();
                     }
@@ -8583,6 +8636,9 @@ impl<'a> Gen<'a> {
                     }
                     Ty::I32 => {
                         writeln!(self.out, "  %{} = sub nsw i32 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::U32 => {
+                        writeln!(self.out, "  %{} = sub i32 {}, {}", tmp, vl, vr).unwrap();
                     }
                     Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                         writeln!(self.out, "  %{} = sub i64 {}, {}", tmp, vl, vr).unwrap();
@@ -8709,6 +8765,9 @@ impl<'a> Gen<'a> {
                     }
                     Ty::I32 => {
                         writeln!(self.out, "  %{} = mul nsw i32 {}, {}", tmp, vl, vr).unwrap();
+                    }
+                    Ty::U32 => {
+                        writeln!(self.out, "  %{} = mul i32 {}, {}", tmp, vl, vr).unwrap();
                     }
                     Ty::I64 | Ty::U64 | Ty::Isize | Ty::Usize => {
                         writeln!(self.out, "  %{} = mul i64 {}, {}", tmp, vl, vr).unwrap();
@@ -8843,7 +8902,7 @@ impl<'a> Gen<'a> {
                             writeln!(self.out, "  %{} = udiv i16 {}, {}", tmp, vl, vr).unwrap();
                         }
                     }
-                    Ty::I32 => {
+                    Ty::I32 | Ty::U32 => {
                         if signed {
                             writeln!(self.out, "  %{} = sdiv i32 {}, {}", tmp, vl, vr).unwrap();
                         } else {
@@ -10520,6 +10579,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::I16, Ty::I16)
         | (Ty::U16, Ty::U16)
         | (Ty::I32, Ty::I32)
+        | (Ty::U32, Ty::U32)
         | (Ty::I64, Ty::I64)
         | (Ty::U64, Ty::U64)
         | (Ty::I128, Ty::I128)

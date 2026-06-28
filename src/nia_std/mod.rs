@@ -60,6 +60,7 @@ pub const ATOMIC_U8_TYPE: &str = "AtomicU8";
 pub const ATOMIC_I16_TYPE: &str = "AtomicI16";
 pub const ATOMIC_U16_TYPE: &str = "AtomicU16";
 pub const ATOMIC_I32_TYPE: &str = "AtomicI32";
+pub const ATOMIC_U32_TYPE: &str = "AtomicU32";
 pub const ATOMIC_I64_TYPE: &str = "AtomicI64";
 pub const ATOMIC_U64_TYPE: &str = "AtomicU64";
 pub const ATOMIC_I128_TYPE: &str = "AtomicI128";
@@ -73,6 +74,7 @@ pub const ATOMIC_U8: &str = "atomic_u8";
 pub const ATOMIC_I16: &str = "atomic_i16";
 pub const ATOMIC_U16: &str = "atomic_u16";
 pub const ATOMIC_I32: &str = "atomic_i32";
+pub const ATOMIC_U32: &str = "atomic_u32";
 pub const ATOMIC_I64: &str = "atomic_i64";
 pub const ATOMIC_U64: &str = "atomic_u64";
 pub const ATOMIC_I128: &str = "atomic_i128";
@@ -226,6 +228,7 @@ pub fn is_reserved_type_name(name: &str) -> bool {
             | ATOMIC_I16_TYPE
             | ATOMIC_U16_TYPE
             | ATOMIC_I32_TYPE
+            | ATOMIC_U32_TYPE
             | ATOMIC_I64_TYPE
             | ATOMIC_U64_TYPE
             | ATOMIC_I128_TYPE
@@ -277,6 +280,7 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | ATOMIC_I16
             | ATOMIC_U16
             | ATOMIC_I32
+            | ATOMIC_U32
             | ATOMIC_I64
             | ATOMIC_U64
             | ATOMIC_I128
@@ -375,6 +379,7 @@ pub fn llvm_prelude() -> String {
 @nialang.std.txt.anonvec.open.i16 = private unnamed_addr constant [6 x i8] c"(i16{\00", align 1
 @nialang.std.txt.anonvec.open.u16 = private unnamed_addr constant [6 x i8] c"(u16{\00", align 1
 @nialang.std.txt.anonvec.open.i32 = private unnamed_addr constant [6 x i8] c"(i32{\00", align 1
+@nialang.std.txt.anonvec.open.u32 = private unnamed_addr constant [6 x i8] c"(u32{\00", align 1
 @nialang.std.txt.anonvec.open.i64 = private unnamed_addr constant [6 x i8] c"(i64{\00", align 1
 @nialang.std.txt.anonvec.open.u64 = private unnamed_addr constant [6 x i8] c"(u64{\00", align 1
 @nialang.std.txt.anonvec.open.i128 = private unnamed_addr constant [7 x i8] c"(i128{\00", align 1

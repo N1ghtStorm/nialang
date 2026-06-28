@@ -933,6 +933,7 @@ impl Parser {
                     Token::TyI16 => Ok(Ty::I16),
                     Token::TyU16 => Ok(Ty::U16),
                     Token::TyI32 => Ok(Ty::I32),
+                    Token::TyU32 => Ok(Ty::U32),
                     Token::TyI64 => Ok(Ty::I64),
                     Token::TyU64 => Ok(Ty::U64),
                     Token::TyI128 => Ok(Ty::I128),

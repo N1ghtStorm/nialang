@@ -615,6 +615,7 @@ fn is_legacy_scalar_ability_carveout(t: &Ty, ability: Ability) -> bool {
             | Ty::I16
             | Ty::U16
             | Ty::I32
+            | Ty::U32
             | Ty::I64
             | Ty::U64
             | Ty::I128
@@ -637,6 +638,7 @@ fn is_formal_scalar_ability_ty(t: &Ty) -> bool {
             | Ty::I16
             | Ty::U16
             | Ty::I32
+            | Ty::U32
             | Ty::I64
             | Ty::U64
             | Ty::I128
@@ -731,6 +733,7 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::I16 => "i16".into(),
         Ty::U16 => "u16".into(),
         Ty::I32 => "i32".into(),
+        Ty::U32 => "u32".into(),
         Ty::I64 => "i64".into(),
         Ty::U64 => "u64".into(),
         Ty::I128 => "i128".into(),
@@ -2097,6 +2100,7 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::I16
         | Ty::U16
         | Ty::I32
+        | Ty::U32
         | Ty::I64
         | Ty::U64
         | Ty::I128
@@ -3496,6 +3500,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::I16, Ty::I16)
         | (Ty::U16, Ty::U16)
         | (Ty::I32, Ty::I32)
+        | (Ty::U32, Ty::U32)
         | (Ty::I64, Ty::I64)
         | (Ty::U64, Ty::U64)
         | (Ty::I128, Ty::I128)
@@ -3547,6 +3552,7 @@ fn is_integer_ty(t: &Ty) -> bool {
             | Ty::I16
             | Ty::U16
             | Ty::I32
+            | Ty::U32
             | Ty::I64
             | Ty::U64
             | Ty::I128
@@ -3567,6 +3573,7 @@ fn is_c_abi_ty(t: &Ty) -> bool {
         | Ty::I16
         | Ty::U16
         | Ty::I32
+        | Ty::U32
         | Ty::I64
         | Ty::U64
         | Ty::I128

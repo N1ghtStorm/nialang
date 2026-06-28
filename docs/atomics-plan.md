@@ -22,6 +22,7 @@ AtomicU8
 AtomicI16
 AtomicU16
 AtomicI32
+AtomicU32
 AtomicI64
 AtomicU64
 AtomicI128
@@ -33,8 +34,6 @@ AtomicPtr[T]
 
 `AtomicPtr[T]` is not evidence of general generics. It is a compiler-known type
 constructor, like `List[T]`, but restricted to atomic storage of `&T` values.
-
-Nia currently has no `u32`, so there is no `AtomicU32` until `u32` exists.
 
 ## Design Principles
 
@@ -216,6 +215,7 @@ AtomicU8,
 AtomicI16,
 AtomicU16,
 AtomicI32,
+AtomicU32,
 AtomicI64,
 AtomicU64,
 AtomicI128,
@@ -250,13 +250,11 @@ Reserve:
 - `atomic_ptr`
 - `atomic_i8`, `atomic_u8`
 - `atomic_i16`, `atomic_u16`
-- `atomic_i32`
+- `atomic_i32`, `atomic_u32`
 - `atomic_i64`, `atomic_u64`
 - `atomic_i128`, `atomic_u128`
 - `atomic_isize`, `atomic_usize`
 - `atomic_fence`
-
-There is no `atomic_u32` until `u32` exists.
 
 ### Typechecker
 
@@ -296,7 +294,7 @@ Represent atomic storage with the underlying LLVM type:
 | `AtomicPtr[T]` | `ptr` |
 | `AtomicI8` / `AtomicU8` | `i8` |
 | `AtomicI16` / `AtomicU16` | `i16` |
-| `AtomicI32` | `i32` |
+| `AtomicI32` / `AtomicU32` | `i32` |
 | `AtomicI64` / `AtomicU64` / `AtomicIsize` / `AtomicUsize` | `i64` |
 | `AtomicI128` / `AtomicU128` | `i128` |
 
@@ -453,6 +451,7 @@ already stable.
 Initial integer set:
 
 - `AtomicI32`
+- `AtomicU32`
 - `AtomicI64`
 - `AtomicIsize`
 - `AtomicUsize`
@@ -500,7 +499,7 @@ Parser tests:
 - concrete atomic type names parse
 - `AtomicPtr[i32]` parses
 - `Atomic[i32]` fails
-- `AtomicU32` fails until `u32` exists
+- `AtomicU32` is reserved as a concrete atomic type name
 
 Typecheck ok fixtures:
 

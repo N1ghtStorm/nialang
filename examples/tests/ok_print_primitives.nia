@@ -1,13 +1,15 @@
 fn main() i32 {
     let a: i8 = 1;
     let b: u16 = 2;
-    let c: i64 = 3;
-    let d: u128 = 4;
-    let e: bool = false;
+    let c: u32 = 3;
+    let d: i64 = 4;
+    let e: u128 = 5;
+    let f: bool = false;
     println(a);
     println(b);
     println(c);
     println(d);
     println(e);
+    println(f);
     0
 }
