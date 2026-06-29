@@ -69,6 +69,33 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_option_and_result_types_lower_as_pointers() {
+    let ll = emit(
+        r#"
+fn pass_opt(x: Option[i32]) Option[i32] {
+    x
+}
+
+fn pass_result(x: Result[Option[i32], string]) Result[Option[i32], string] {
+    x
+}
+
+fn main() i32 {
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("define internal ptr @pass_opt(ptr %x)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("define internal ptr @pass_result(ptr %x)"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_builtin_ordering_enum_value() {
     let ll = emit(
         r#"

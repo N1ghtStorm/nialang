@@ -1127,6 +1127,25 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_option_and_result_types_in_signatures() {
+    let src = r#"
+fn pass_opt(x: Option[i32]) Option[i32] {
+    x
+}
+
+fn pass_result(x: Result[Option[i32], string]) Result[Option[i32], string] {
+    x
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
 fn typecheck_list_rejects_wrong_push_type() {
     let src = r#"
 fn main() i32 {

@@ -18,9 +18,9 @@ use crate::nia_std::{
     LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP,
     MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE,
     MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
-    ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT, SHA256, SIN, SPAWN,
-    THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
-    VECTOR_SET,
+    OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT,
+    RESULT_TYPE, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE,
+    VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -67,6 +67,10 @@ fn normalize_ty(
                 Ok(Ty::Qubit)
             } else if name == RESULT {
                 Ok(Ty::Result)
+            } else if name == OPTION_TYPE {
+                Err("type `Option` requires a type argument `Option[T]`".into())
+            } else if name == RESULT_TYPE {
+                Err("type `Result` requires type arguments `Result[T, E]`".into())
             } else if name == ATOMIC_BOOL_TYPE {
                 Ok(Ty::AtomicBool)
             } else if let Some(atomic_ty) = atomic_int_type_name_ty(name) {
@@ -119,6 +123,13 @@ fn normalize_ty(
         Ty::List(elem) => Ok(Ty::List(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
+        Ty::Option(elem) => Ok(Ty::Option(Box::new(normalize_ty(
+            elem, structs, enums, vectors,
+        )?))),
+        Ty::ResultType(ok, err) => Ok(Ty::ResultType(
+            Box::new(normalize_ty(ok, structs, enums, vectors)?),
+            Box::new(normalize_ty(err, structs, enums, vectors)?),
+        )),
         Ty::AtomicPtr(elem) => {
             let norm = normalize_ty(elem, structs, enums, vectors)?;
             validate_atomic_ptr_pointee(&norm)?;
@@ -819,10 +830,17 @@ fn has_formal_ability(
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) if !matches!(ability, Ability::Deref) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
-        Ty::HeapVector(elem) | Ty::List(elem)
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Option(elem)
             if matches!(ability, Ability::Clone | Ability::Drop) =>
         {
             has_formal_ability(elem, ability, structs, enums, vectors)
+        }
+        Ty::Option(elem) if matches!(ability, Ability::Copy | Ability::Send | Ability::Sync) => {
+            has_formal_ability(elem, ability, structs, enums, vectors)
+        }
+        Ty::ResultType(ok, err) if !matches!(ability, Ability::Deref) => {
+            has_formal_ability(ok, ability, structs, enums, vectors)
+                && has_formal_ability(err, ability, structs, enums, vectors)
         }
         Ty::Matrix(elem, _) if matches!(ability, Ability::Clone | Ability::Drop) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
@@ -909,6 +927,10 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::AnonVector(elem, n) => format!("{}<{n}>", ty_diag_label(elem)),
         Ty::HeapVector(elem) => format!("{}<>", ty_diag_label(elem)),
         Ty::List(elem) => format!("List[{}]", ty_diag_label(elem)),
+        Ty::Option(elem) => format!("Option[{}]", ty_diag_label(elem)),
+        Ty::ResultType(ok, err) => {
+            format!("Result[{}, {}]", ty_diag_label(ok), ty_diag_label(err))
+        }
         Ty::Matrix(elem, Some((rows, cols))) => {
             format!("Matrix[{}; {rows}x{cols}]", ty_diag_label(elem))
         }
@@ -1017,7 +1039,7 @@ fn ability_failure_reason(
         Ty::Thread if matches!(ability, Ability::Copy | Ability::Clone) => {
             "Thread handles are move-only; use `join(t)` or `drop(t)` to consume them".into()
         }
-        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _)
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Option(elem) | Ty::Matrix(elem, _)
             if matches!(ability, Ability::Clone | Ability::Drop) =>
         {
             format!(
@@ -1027,6 +1049,16 @@ fn ability_failure_reason(
                 ability_failure_reason(elem, ability, structs, enums, vectors)
             )
         }
+        Ty::Option(elem) => format!(
+            "Option payload type {} is missing `{ability_name}`: {}",
+            ty_diag_label(elem),
+            ability_failure_reason(elem, ability, structs, enums, vectors)
+        ),
+        Ty::ResultType(ok, err) => format!(
+            "Result payload types {}, {} must both support `{ability_name}`",
+            ty_diag_label(ok),
+            ty_diag_label(err)
+        ),
         Ty::Fn(_, _) if matches!(ability, Ability::Copy) => {
             "capturing function values are move-only; use `.clone()` when the closure environment supports it".into()
         }
@@ -1532,7 +1564,9 @@ fn contains_quantum_ty(t: &Ty) -> bool {
         | Ty::AnonVector(inner, _)
         | Ty::HeapVector(inner)
         | Ty::List(inner)
+        | Ty::Option(inner)
         | Ty::Matrix(inner, _) => contains_quantum_ty(inner),
+        Ty::ResultType(ok, err) => contains_quantum_ty(ok) || contains_quantum_ty(err),
         Ty::Fn(params, ret) => params.iter().any(contains_quantum_ty) || contains_quantum_ty(ret),
         _ => false,
     }
@@ -2298,7 +2332,10 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::AtomicPtr(_)
         | Ty::Thread
         | Ty::Fn(_, _) => false,
-        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) | Ty::Option(elem) => {
+            is_copy_for_moves(elem, ctx)
+        }
+        Ty::ResultType(ok, err) => is_copy_for_moves(ok, ctx) && is_copy_for_moves(err, ctx),
         Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
         Ty::Struct(name) if name == COMPLEX_TYPE => true,
         Ty::Struct(name) if ctx.vectors.contains_key(name) => {
@@ -3767,6 +3804,10 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_equal(xt, yt),
         (Ty::HeapVector(x), Ty::HeapVector(y)) => types_equal(x, y),
         (Ty::List(x), Ty::List(y)) => types_equal(x, y),
+        (Ty::Option(x), Ty::Option(y)) => types_equal(x, y),
+        (Ty::ResultType(xok, xerr), Ty::ResultType(yok, yerr)) => {
+            types_equal(xok, yok) && types_equal(xerr, yerr)
+        }
         (Ty::AtomicPtr(x), Ty::AtomicPtr(y)) => types_equal(x, y),
         // Vector values are currently represented as struct-shaped aggregates in AST/codegen.
         // Accept name-equivalence across these forms at semantic boundaries.
@@ -3890,6 +3931,11 @@ fn is_printable_ty_inner(
         Ty::Vector(_, elem) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
         Ty::AnonVector(elem, _) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
         Ty::HeapVector(elem) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
+        Ty::Option(elem) => is_printable_ty_inner(elem, structs, enums, vectors, seen),
+        Ty::ResultType(ok, err) => {
+            is_printable_ty_inner(ok, structs, enums, vectors, seen)
+                && is_printable_ty_inner(err, structs, enums, vectors, seen)
+        }
         Ty::Struct(name) => {
             if !seen.insert(name.clone()) {
                 return true;

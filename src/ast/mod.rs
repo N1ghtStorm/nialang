@@ -14,7 +14,7 @@
 /// Variant groups:
 /// - integer primitives (`I8`..`U128`) and `Bool`,
 /// - float primitives (`F16`, `F32`, `F64`, same names as Rust),
-/// - composites (`Array`, `Struct`, `Enum`),
+/// - composites (`Array`, `Struct`, `Enum`, `Option`, `ResultType`),
 /// - quantum resources (`Qubit`, `Result`),
 /// - indirection (`Ptr`),
 /// - effect/absence type (`Unit`).
@@ -64,6 +64,10 @@ pub enum Ty {
     HeapVector(Box<Ty>),
     /// Heap-backed growable list, written as `List[T]`.
     List(Box<Ty>),
+    /// Built-in optional value type, written as `Option[T]`.
+    Option(Box<Ty>),
+    /// Built-in fallible value type, written as `Result[T, E]`.
+    ResultType(Box<Ty>, Box<Ty>),
     /// Built-in atomic boolean storage cell, written as `AtomicBool`.
     AtomicBool,
     /// Built-in atomic 8-bit signed integer storage cell, written as `AtomicI8`.
@@ -173,6 +177,14 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::AnonVector(elem, n) => format!("anonvec_{}_{}", ty_symbol_fragment(elem), n),
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
+        Ty::Option(elem) => format!("option_{}", ty_symbol_fragment(elem)),
+        Ty::ResultType(ok, err) => {
+            format!(
+                "result_{}_{}",
+                ty_symbol_fragment(ok),
+                ty_symbol_fragment(err)
+            )
+        }
         Ty::AtomicBool => "atomic_bool".into(),
         Ty::AtomicI8 => "atomic_i8".into(),
         Ty::AtomicU8 => "atomic_u8".into(),

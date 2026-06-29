@@ -19,9 +19,10 @@ use crate::nia_std::{
     GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN,
     LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
     MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
-    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY, OUTER,
-    PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, SHA256, SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX,
-    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
+    OPTION_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT_TYPE, SHA256, SIN,
+    THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
+    VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -532,6 +533,10 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::AtomicUsize => "AtomicUsize".into(),
         Ty::AtomicPtr(elem) => format!("AtomicPtr[{}]", ty_print_label(elem)),
         Ty::Thread => "Thread".into(),
+        Ty::Option(elem) => format!("Option[{}]", ty_print_label(elem)),
+        Ty::ResultType(ok, err) => {
+            format!("Result[{}, {}]", ty_print_label(ok), ty_print_label(err))
+        }
         Ty::F16 => "f16".into(),
         Ty::F32 => "f32".into(),
         Ty::F64 => "f64".into(),
@@ -740,6 +745,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::AtomicI128 | Ty::AtomicU128 => "i128".into(),
         Ty::AtomicPtr(_) => "ptr".into(),
         Ty::Thread => "ptr".into(),
+        Ty::Option(_) | Ty::ResultType(_, _) => "ptr".into(),
         Ty::F16 => "half".into(),
         Ty::F32 => "float".into(),
         Ty::F64 => "double".into(),
@@ -764,6 +770,12 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
     match t {
         Ty::Struct(name) if name == QUBIT => Ty::Qubit,
         Ty::Struct(name) if name == "result" => Ty::Result,
+        Ty::Struct(name) if name == OPTION_TYPE => {
+            panic!("typechecked Option without type argument")
+        }
+        Ty::Struct(name) if name == RESULT_TYPE => {
+            panic!("typechecked Result without type arguments")
+        }
         Ty::Struct(name) if name == crate::nia_std::ATOMIC_BOOL_TYPE => Ty::AtomicBool,
         Ty::Struct(name) if name == ATOMIC_I8_TYPE => Ty::AtomicI8,
         Ty::Struct(name) if name == ATOMIC_U8_TYPE => Ty::AtomicU8,
@@ -785,6 +797,11 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         Ty::AnonVector(inner, n) => Ty::AnonVector(Box::new(normalize_codegen_ty(inner)), *n),
         Ty::HeapVector(inner) => Ty::HeapVector(Box::new(normalize_codegen_ty(inner))),
         Ty::List(inner) => Ty::List(Box::new(normalize_codegen_ty(inner))),
+        Ty::Option(inner) => Ty::Option(Box::new(normalize_codegen_ty(inner))),
+        Ty::ResultType(ok, err) => Ty::ResultType(
+            Box::new(normalize_codegen_ty(ok)),
+            Box::new(normalize_codegen_ty(err)),
+        ),
         Ty::Matrix(inner, shape) => Ty::Matrix(Box::new(normalize_codegen_ty(inner)), *shape),
         other => other.clone(),
     }
@@ -1082,8 +1099,12 @@ fn supports_clone_method_ty(
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
             supports_clone_method_ty(elem, structs, enums, vectors)
         }
-        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Option(elem) | Ty::Matrix(elem, _) => {
             supports_clone_method_ty(elem, structs, enums, vectors)
+        }
+        Ty::ResultType(ok, err) => {
+            supports_clone_method_ty(ok, structs, enums, vectors)
+                && supports_clone_method_ty(err, structs, enums, vectors)
         }
         Ty::Fn(_, _) => true,
         _ => false,
@@ -2023,7 +2044,10 @@ impl<'a> Gen<'a> {
             | Ty::AtomicPtr(_)
             | Ty::Thread
             | Ty::Fn(_, _) => false,
-            Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_copy_like_ty(elem),
+            Ty::Array(elem, _) | Ty::AnonVector(elem, _) | Ty::Option(elem) => {
+                self.is_copy_like_ty(elem)
+            }
+            Ty::ResultType(ok, err) => self.is_copy_like_ty(ok) && self.is_copy_like_ty(err),
             Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
             Ty::Struct(name) if name == crate::nia_std::COMPLEX_TYPE => true,
             Ty::Struct(name) => {
@@ -4356,6 +4380,8 @@ impl<'a> Gen<'a> {
             | Ty::AnonVector(_, _)
             | Ty::HeapVector(_)
             | Ty::List(_)
+            | Ty::Option(_)
+            | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
             | Ty::Fn(_, _) => unreachable!("typechecked"),
         }
@@ -4485,6 +4511,8 @@ impl<'a> Gen<'a> {
             | Ty::AnonVector(_, _)
             | Ty::HeapVector(_)
             | Ty::List(_)
+            | Ty::Option(_)
+            | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
             | Ty::Fn(_, _) => unreachable!("typechecked"),
         }
@@ -8407,6 +8435,8 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Option(_)
+                    | Ty::ResultType(_, _)
                     | Ty::Matrix(_, _)
                     | Ty::Fn(_, _) => unreachable!("typechecked for range"),
                 }
@@ -8538,6 +8568,8 @@ impl<'a> Gen<'a> {
                 | Some(Ty::AnonVector(_, _))
                 | Some(Ty::HeapVector(_))
                 | Some(Ty::List(_))
+                | Some(Ty::Option(_))
+                | Some(Ty::ResultType(_, _))
                 | Some(Ty::Enum(_))
                 | Some(Ty::Unit)
                 | Some(Ty::Ptr(_))
@@ -8683,6 +8715,8 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Option(_)
+                    | Ty::ResultType(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -8773,6 +8807,8 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Option(_)
+                    | Ty::ResultType(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -8850,6 +8886,8 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Option(_)
+                    | Ty::ResultType(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -8991,6 +9029,8 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Option(_)
+                    | Ty::ResultType(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -9151,6 +9191,8 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Option(_)
+                    | Ty::ResultType(_, _)
                     | Ty::Enum(_)
                     | Ty::Unit
                     | Ty::Ptr(_)
@@ -10921,6 +10963,10 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_match(xt, yt),
         (Ty::HeapVector(xt), Ty::HeapVector(yt)) => types_match(xt, yt),
         (Ty::List(xt), Ty::List(yt)) => types_match(xt, yt),
+        (Ty::Option(xt), Ty::Option(yt)) => types_match(xt, yt),
+        (Ty::ResultType(xok, xerr), Ty::ResultType(yok, yerr)) => {
+            types_match(xok, yok) && types_match(xerr, yerr)
+        }
         (Ty::AtomicPtr(xt), Ty::AtomicPtr(yt)) => types_match(xt, yt),
         (Ty::Struct(x), Ty::Vector(y, _)) | (Ty::Vector(y, _), Ty::Struct(x)) => x == y,
         (Ty::Enum(x), Ty::Enum(y)) => x == y,

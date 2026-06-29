@@ -5,7 +5,9 @@ use crate::ast::{
     StructDef, Ty, VectorDef, method_symbol,
 };
 use crate::lexer::Token;
-use crate::nia_std::{ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY};
+use crate::nia_std::{
+    ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY, OPTION_TYPE, RESULT_TYPE,
+};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -918,6 +920,18 @@ impl Parser {
                         let elem = self.parse_ty()?;
                         self.expect(&Token::RBracket)?;
                         Ok(Ty::List(Box::new(elem)))
+                    } else if n == OPTION_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let elem = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::Option(Box::new(elem)))
+                    } else if n == RESULT_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let ok = self.parse_ty()?;
+                        self.expect(&Token::Comma)?;
+                        let err = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::ResultType(Box::new(ok), Box::new(err)))
                     } else if n == ATOMIC_PTR_TYPE {
                         self.expect(&Token::LBracket)?;
                         let elem = self.parse_ty()?;

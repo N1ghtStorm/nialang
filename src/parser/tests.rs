@@ -575,6 +575,46 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_option_and_result_types() {
+    let src = r#"
+fn pass(x: Option[i32]) Result[Option[i32], string] {
+    x
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    assert_eq!(fns[0].params[0].1, Ty::Option(Box::new(Ty::I32)));
+    assert_eq!(
+        fns[0].ret,
+        Some(Ty::ResultType(
+            Box::new(Ty::Option(Box::new(Ty::I32))),
+            Box::new(Ty::String)
+        ))
+    );
+}
+
+#[test]
+fn parse_rejects_option_and_result_without_type_args() {
+    let bare_option = r#"
+fn main() i32 {
+    let x: Option;
+    0
+}
+"#;
+    let r = Parser::new(tokenize(bare_option)).parse_file();
+    assert!(r.is_err(), "{r:?}");
+
+    let bare_result = r#"
+fn main() i32 {
+    let x: Result;
+    0
+}
+"#;
+    let r = Parser::new(tokenize(bare_result)).parse_file();
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
 fn parse_builtin_ordering_path_is_not_module_qualified() {
     let src = r#"
 mod atomics {
