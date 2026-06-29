@@ -1508,6 +1508,16 @@ impl Parser {
 
     fn parse_spawn_expr(&mut self) -> Result<Expr, String> {
         self.expect(&Token::Spawn)?;
+        if matches!(self.peek(), Token::Pipe) {
+            return Err("`spawn` closure target must use `move`".into());
+        }
+        if matches!(self.peek(), Token::Move) {
+            self.bump();
+            let closure = self.parse_closure_expr(true)?;
+            return Ok(Expr::SpawnClosure {
+                closure: Box::new(closure),
+            });
+        }
         let segments = self.parse_path_segments()?;
         let target = self.resolve_item_path(&segments)?;
         Ok(Expr::Spawn { target })

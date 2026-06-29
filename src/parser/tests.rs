@@ -414,6 +414,13 @@ fn parse_fixture_threads_minimal() {
 }
 
 #[test]
+fn parse_fixture_spawn_move_closure() {
+    parse_ok(include_str!(
+        "../../examples/tests/ok_spawn_move_closure.nia"
+    ));
+}
+
+#[test]
 fn parse_fixture_option_result() {
     parse_ok(include_str!("../../examples/tests/ok_option_result.nia"));
 }
@@ -450,6 +457,57 @@ fn main() i32 {
     let toks = tokenize(src);
     let r = Parser::new(toks).parse_file();
     assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn parse_spawn_move_closure_expr() {
+    let src = r#"
+fn main() i32 {
+    let value: i32 = 1;
+    let t: Thread = spawn move || {
+        println(value);
+    };
+    join(t);
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    let main = fns.iter().find(|f| f.name == "main").expect("main");
+    let Stmt::Let {
+        init: Some(init), ..
+    } = &main.body.stmts[1]
+    else {
+        panic!("expected thread let");
+    };
+    let Expr::SpawnClosure { closure } = init else {
+        panic!("expected spawn closure, got {init:?}");
+    };
+    let Expr::Closure {
+        is_move, params, ..
+    } = closure.as_ref()
+    else {
+        panic!("expected closure target, got {closure:?}");
+    };
+    assert!(*is_move);
+    assert!(params.is_empty());
+}
+
+#[test]
+fn parse_rejects_spawn_non_move_closure() {
+    let src = r#"
+fn main() i32 {
+    let t: Thread = spawn || {
+        println(1);
+    };
+    join(t);
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let r = Parser::new(toks).parse_file();
+    let err = r.expect_err("spawn closure must use move");
+    assert!(err.contains("move"), "{err}");
 }
 
 #[test]

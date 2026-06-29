@@ -64,10 +64,12 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_atomic_narrow_int.nia"),
         include_str!("../../../examples/tests/ok_atomic_i128.nia"),
         include_str!("../../../examples/tests/ok_threads_minimal.nia"),
+        include_str!("../../../examples/tests/ok_spawn_move_closure.nia"),
         include_str!("../../../examples/tests/ok_send_sync_struct.nia"),
         include_str!("../../../examples/tests/ok_arc_basic.nia"),
         include_str!("../../../examples/sample_send_sync.nia"),
         include_str!("../../../examples/sample_arc.nia"),
+        include_str!("../../../examples/sample_threads_closure.nia"),
         include_str!("../../../examples/tests/ok_option_result.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
@@ -658,6 +660,12 @@ fn typecheck_threads_minimal_surface() {
 }
 
 #[test]
+fn typecheck_threads_spawn_move_closure_surface() {
+    let src = include_str!("../../../examples/tests/ok_spawn_move_closure.nia");
+    check_all(src).expect("spawn move closure should typecheck");
+}
+
+#[test]
 fn typecheck_threads_reject_unknown_spawn_target() {
     let src = r#"
 fn main() i32 {
@@ -702,6 +710,68 @@ fn main() i32 {
 "#;
     let err = check_all(src).expect_err("spawn target must be fn() -> ()");
     assert!(err.contains("fn() -> ()"), "{err}");
+}
+
+#[test]
+fn typecheck_threads_reject_non_send_spawn_capture() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let handle: Thread = spawn worker;
+    let t: Thread = spawn move || {
+        drop(handle);
+    };
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Thread capture is not send");
+    assert!(err.contains("capture `handle` requires `send`"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be transferred"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_threads_reject_spawn_closure_wrong_return() {
+    let src = r#"
+fn main() i32 {
+    let t: Thread = spawn move || 1;
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("spawn closure must return unit");
+    assert!(err.contains("cannot satisfy `()`"), "{err}");
+}
+
+#[test]
+fn typecheck_threads_reject_function_value_with_non_send_env() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let handle: Thread = spawn worker;
+    let f: fn() -> () = move || {
+        let handle_ref = &handle;
+    };
+    let t: Thread = spawn move || {
+        f();
+    };
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("function value env is not send");
+    assert!(err.contains("capture `f` requires `send`"), "{err}");
+    assert!(
+        err.contains("function value may own a non-`send` closure environment"),
+        "{err}"
+    );
 }
 
 #[test]

@@ -52,6 +52,7 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
         | Expr::Ident(_)
         | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => {}
+        Expr::SpawnClosure { closure } => collect_string_literals_expr(closure, out),
         Expr::Neg(inner)
         | Expr::Not(inner)
         | Expr::BitNot(inner)
@@ -2685,6 +2686,9 @@ impl<'a> Gen<'a> {
             | Expr::String(_)
             | Expr::Spawn { .. }
             | Expr::EnumVariant { .. } => {}
+            Expr::SpawnClosure { closure } => {
+                self.clear_consumed_custom_drop_locals_expr(closure, locals, drop_flags, true);
+            }
             Expr::Neg(inner) | Expr::Not(inner) | Expr::BitNot(inner) => {
                 self.clear_consumed_custom_drop_locals_expr(inner, locals, drop_flags, true);
             }
@@ -9832,6 +9836,7 @@ impl<'a> Gen<'a> {
                 let target_expr = Expr::Ident(target.clone());
                 self.emit_thread_spawn(&target_expr, locals)
             }
+            Expr::SpawnClosure { closure } => self.emit_thread_spawn(closure, locals),
             Expr::CallExpr { callee, args } => {
                 let (callee_ty, callee_val) = self.emit_expr(callee, locals, None);
                 let Ty::Fn(params, ret) = callee_ty else {

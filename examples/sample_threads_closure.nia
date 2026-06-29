@@ -1,0 +1,19 @@
+// Phase 2 concurrency sample: spawn a moved closure.
+//
+// `spawn move || { ... }` starts an OS thread with a closure payload. Every
+// captured value must be `send`; here the worker gets its own Arc owner.
+
+fn main() i32 {
+    let shared: Arc[i32] = arc_new(42);
+    let worker_shared = shared.clone();
+
+    let worker: Thread = spawn move || {
+        println(*worker_shared);
+    };
+
+    join(worker);
+
+    println(*shared);
+    drop(shared);
+    0
+}

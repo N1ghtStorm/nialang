@@ -367,6 +367,10 @@ pub enum Expr {
     Spawn {
         target: String,
     },
+    /// Built-in thread spawn expression, written as `spawn move || { ... }`.
+    SpawnClosure {
+        closure: Box<Expr>,
+    },
     StructLit {
         name: String,
         fields: Vec<(String, Expr)>,

@@ -368,7 +368,7 @@ fn collect_expr(
             }
             Ok(())
         }
-        Expr::CallExpr { .. } | Expr::Closure { .. } => {
+        Expr::CallExpr { .. } | Expr::Closure { .. } | Expr::SpawnClosure { .. } => {
             Err("QIR lowering does not support closures or indirect function calls yet".into())
         }
         Expr::MethodCall { receiver, args, .. } => {

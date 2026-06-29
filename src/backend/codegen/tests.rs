@@ -541,6 +541,35 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_threads_spawn_move_closure() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let shared: Arc[i32] = arc_new(5);
+    let worker_shared = shared.clone();
+    let t: Thread = spawn move || {
+        println(*worker_shared);
+    };
+    join(t);
+    drop(shared);
+    0
+}
+"#,
+    );
+    assert!(ll.contains("call i32 @pthread_create(ptr %"), "IR:\n{ll}");
+    assert!(
+        ll.contains("define internal void @__nia_closure_0(ptr %_nia_closure_env)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("define internal void @__nia_closure_0_drop(ptr %env)"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("ptr @nialang.thread.entry"), "IR:\n{ll}");
+    assert!(ll.contains("atomicrmw sub ptr"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_capturing_closure_function_value() {
     let ll = emit(
         r#"

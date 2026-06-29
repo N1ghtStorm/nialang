@@ -1,6 +1,6 @@
 # Concurrency Plan: Send, Sync, Arc, Mutex, RwLock, Condvar, and Threads
 
-Status: Phase 0 is implemented. Phase 1 is next.
+Status: Phases 0-2 are implemented. Phase 3 is next.
 
 Depends on:
 
@@ -534,12 +534,11 @@ Goal: shared ownership across threads.
 
 Goal: thread closures with moved `send` captures.
 
-- parser/typechecker: `spawn move || ...`;
-- reuse closure env drop on worker thread;
-- every capture must be `send`;
-- keep `spawn top_level_fn` working;
-- migrate [`examples/sample_threads.nia`](../examples/sample_threads.nia) and add
-  `examples/sample_threads_closure.nia`.
+- implemented: parser/typechecker support for `spawn move || ...`;
+- implemented: closure env drop is reused on the worker thread;
+- implemented: every capture must be `send`, including function values with closure envs;
+- kept `spawn top_level_fn` working;
+- added `examples/sample_threads_closure.nia` and `examples/tests/ok_spawn_move_closure.nia`.
 
 ### Phase 3: Mutex[T]
 

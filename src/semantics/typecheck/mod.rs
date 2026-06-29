@@ -1006,6 +1006,56 @@ fn check_thread_spawn_target_name(
     }
 }
 
+fn thread_entry_fn_ty() -> Ty {
+    Ty::Fn(Vec::new(), Box::new(Ty::Unit))
+}
+
+fn check_thread_spawn_closure_target(
+    closure: &Expr,
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+) -> Result<(), String> {
+    let Expr::Closure {
+        is_move,
+        params,
+        body,
+        ..
+    } = closure
+    else {
+        return Err(format!("`{SPAWN}` closure target must be a closure"));
+    };
+    if !*is_move {
+        return Err(format!("`{SPAWN}` closure target must use `move`"));
+    }
+
+    let entry_ty = thread_entry_fn_ty();
+    let closure_ty = infer_expr(closure, env, structs, enums, vectors, fns, Some(&entry_ty))?;
+    if !types_equal(&closure_ty, &entry_ty) {
+        return Err(format!(
+            "`{SPAWN} move ||` target must have type `fn() -> ()`"
+        ));
+    }
+
+    let (captures, _) = closure_capture_names(params, body, env);
+    for name in captures {
+        let Some(ty) = env.get(&name) else {
+            continue;
+        };
+        if !has_send(ty, structs, enums, vectors) {
+            return Err(format!(
+                "`{SPAWN} move` capture `{name}` requires `send`; type {} is not `send`: {}",
+                ty_diag_label(ty),
+                ability_failure_reason(ty, Ability::Send, structs, enums, vectors)
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn path_leaf(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path)
 }
@@ -1527,6 +1577,7 @@ fn expr_contains_direct_self_clone(e: &Expr) -> bool {
         | Expr::Ident(_)
         | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => false,
+        Expr::SpawnClosure { closure } => expr_contains_direct_self_clone(closure),
         Expr::Neg(inner)
         | Expr::Not(inner)
         | Expr::BitNot(inner)
@@ -2315,6 +2366,7 @@ enum ExprMoveMode {
 struct FnValueInfo {
     copyable: bool,
     cloneable: bool,
+    sendable: bool,
 }
 
 impl FnValueInfo {
@@ -2322,6 +2374,7 @@ impl FnValueInfo {
         Self {
             copyable: false,
             cloneable: false,
+            sendable: false,
         }
     }
 
@@ -2329,6 +2382,7 @@ impl FnValueInfo {
         Self {
             copyable: true,
             cloneable: true,
+            sendable: true,
         }
     }
 }
@@ -2814,6 +2868,21 @@ fn fn_capture_cloneable(
     supports_clone_method(ty, ctx.structs, ctx.enums, ctx.vectors)
 }
 
+fn fn_capture_sendable(
+    name: &str,
+    env: &HashMap<String, Ty>,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> bool {
+    let Some(ty) = env.get(name) else {
+        return ctx.fns.contains_key(name);
+    };
+    if matches!(ty, Ty::Fn(_, _)) {
+        return fn_values.get(name).is_some_and(|info| info.sendable);
+    }
+    has_send(ty, ctx.structs, ctx.enums, ctx.vectors)
+}
+
 fn fn_value_info_for_expr(
     expr: &Expr,
     env: &HashMap<String, Ty>,
@@ -2833,6 +2902,9 @@ fn fn_value_info_for_expr(
                     cloneable: captures
                         .iter()
                         .all(|name| fn_capture_cloneable(name, env, fn_values, ctx)),
+                    sendable: captures
+                        .iter()
+                        .all(|name| fn_capture_sendable(name, env, fn_values, ctx)),
                 }
             }
         }
@@ -3876,6 +3948,67 @@ fn check_moves_closure(
     Ok(())
 }
 
+fn spawn_capture_send_failure(
+    name: &str,
+    env: &HashMap<String, Ty>,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> Option<(String, String)> {
+    let ty = env.get(name)?;
+    if matches!(ty, Ty::Fn(_, _)) {
+        let info = fn_values
+            .get(name)
+            .copied()
+            .unwrap_or_else(FnValueInfo::owning_unknown);
+        if info.sendable {
+            return None;
+        }
+        return Some((
+            ty_diag_label(ty),
+            "function value may own a non-`send` closure environment".into(),
+        ));
+    }
+    if has_send(ty, ctx.structs, ctx.enums, ctx.vectors) {
+        None
+    } else {
+        Some((
+            ty_diag_label(ty),
+            ability_failure_reason(ty, Ability::Send, ctx.structs, ctx.enums, ctx.vectors),
+        ))
+    }
+}
+
+fn check_spawn_closure_captures_sendable_for_moves(
+    closure: &Expr,
+    env: &HashMap<String, Ty>,
+    fn_values: &FnValueStates,
+    ctx: &MoveCtx<'_>,
+) -> Result<(), String> {
+    let Expr::Closure {
+        is_move,
+        params,
+        body,
+        ..
+    } = closure
+    else {
+        return Err(format!("`{SPAWN}` closure target must be a closure"));
+    };
+    if !*is_move {
+        return Err(format!("`{SPAWN}` closure target must use `move`"));
+    }
+    let (captures, _) = closure_capture_names(params, body, env);
+    for name in captures {
+        let Some((ty_label, reason)) = spawn_capture_send_failure(&name, env, fn_values, ctx)
+        else {
+            continue;
+        };
+        return Err(format!(
+            "`{SPAWN} move` capture `{name}` requires `send`; type {ty_label} is not `send`: {reason}"
+        ));
+    }
+    Ok(())
+}
+
 fn check_moves_expr(
     e: &Expr,
     env: &mut HashMap<String, Ty>,
@@ -3888,6 +4021,19 @@ fn check_moves_expr(
     let inferred = infer_expr(e, env, ctx.structs, ctx.enums, ctx.vectors, ctx.fns, hint)?;
     match e {
         Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) | Expr::Spawn { .. } => {}
+        Expr::SpawnClosure { closure } => {
+            let entry_ty = thread_entry_fn_ty();
+            check_moves_expr(
+                closure,
+                env,
+                states,
+                fn_values,
+                ctx,
+                Some(&entry_ty),
+                ExprMoveMode::Consume(MoveReason::PassedByValue),
+            )?;
+            check_spawn_closure_captures_sendable_for_moves(closure, env, fn_values, ctx)?;
+        }
         Expr::Ident(name) => {
             consume_ident_if_needed(name, &inferred, states, fn_values, ctx, mode)?
         }
@@ -5442,6 +5588,9 @@ fn collect_expr_captures(
         | Expr::String(_)
         | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => {}
+        Expr::SpawnClosure { closure } => {
+            collect_expr_captures(closure, bound, outer_env, captures, writes);
+        }
         Expr::Neg(inner)
         | Expr::Not(inner)
         | Expr::BitNot(inner)
@@ -5903,6 +6052,10 @@ fn infer_expr(
         ),
         Expr::Spawn { target } => {
             check_thread_spawn_target_name(target, fns)?;
+            Ok(Ty::Thread)
+        }
+        Expr::SpawnClosure { closure } => {
+            check_thread_spawn_closure_target(closure, env, structs, enums, vectors, fns)?;
             Ok(Ty::Thread)
         }
         Expr::CallExpr { callee, args } => {
