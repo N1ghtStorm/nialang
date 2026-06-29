@@ -1,0 +1,9 @@
+// Thread handles are !Send and !Sync; declaring send/sync on a wrapper is rejected.
+
+struct Bundle has send, drop {
+    worker: Thread,
+}
+
+fn main() i32 {
+    0
+}

@@ -1,6 +1,6 @@
 # Concurrency Plan: Send, Sync, Arc, Mutex, RwLock, Condvar, and Threads
 
-Status: design plan.
+Status: Phase 0 is implemented. Phase 1 is next.
 
 Depends on:
 
@@ -505,6 +505,8 @@ Reject:
 
 ### Phase 0: Send / Sync Semantics
 
+Status: implemented.
+
 Goal: make auto-trait rules real before any runtime types ship.
 
 - implement `has_send` / `has_sync` queries;
@@ -512,6 +514,7 @@ Goal: make auto-trait rules real before any runtime types ship.
 - mark `Atomic*` as `send + sync`;
 - mark `Thread` as `!send` / `!sync`;
 - tests for struct/enum/vector send/sync derivation and opt-out via non-send fields.
+- sample: `examples/sample_send_sync.nia`
 
 No new runtime types yet.
 

@@ -1,0 +1,17 @@
+// Send/sync ability validation: atomic and scalar fields are valid.
+
+struct Counter has send, sync, drop {
+    hits: i32,
+    label: i32,
+}
+
+enum Job has send, sync, drop {
+    Run(i32),
+    Idle,
+}
+
+vector Point i32 [X, Y] has copy, clone, drop, send, sync
+
+fn main() i32 {
+    0
+}

@@ -64,6 +64,8 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_atomic_narrow_int.nia"),
         include_str!("../../../examples/tests/ok_atomic_i128.nia"),
         include_str!("../../../examples/tests/ok_threads_minimal.nia"),
+        include_str!("../../../examples/tests/ok_send_sync_struct.nia"),
+        include_str!("../../../examples/sample_send_sync.nia"),
         include_str!("../../../examples/tests/ok_option_result.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
@@ -2052,6 +2054,181 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_accepts_send_sync_declarations() {
+    let src = r#"
+struct Counter has send, sync, drop {
+    hits: i32,
+    label: i32,
+}
+
+enum Job has send, sync, drop {
+    Run(i32),
+    Idle,
+}
+
+vector Point i32 [X, Y] has copy, clone, drop, send, sync
+
+fn main() i32 {
+    0
+}
+"#;
+    check_all(src).expect("send/sync declarations with valid fields");
+}
+
+#[test]
+fn typecheck_rejects_struct_send_with_thread_field() {
+    let src = r#"
+struct Bundle has send, drop {
+    worker: Thread,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Thread field blocks send");
+    assert!(err.contains("field `worker` does not support it"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rejects_struct_sync_with_thread_field() {
+    let src = r#"
+struct Bundle has sync, drop {
+    worker: Thread,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Thread field blocks sync");
+    assert!(err.contains("field `worker` does not support it"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be shared across threads"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rejects_enum_send_with_thread_payload() {
+    let src = r#"
+enum WorkerState has send, drop {
+    Running(Thread),
+    Idle,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("enum variant Thread blocks send");
+    assert!(err.contains("variant `Running` field `0`"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rejects_vector_send_with_thread_element() {
+    let src = r#"
+vector Handle Thread [X, Y] has drop, send
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Thread axis blocks vector send");
+    assert!(err.contains("element type does not support it"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rejects_struct_send_when_nested_field_is_not_send() {
+    let src = r#"
+struct Inner has drop {
+    worker: Thread,
+}
+
+struct Outer has send, drop {
+    inner: Inner,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    let err = check_all(src).expect_err("nested Thread blocks outer send");
+    assert!(err.contains("field `inner` does not support it"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_copy_types_implicitly_satisfy_send_sync_declarations() {
+    let src = r#"
+struct Point has copy, clone, drop, send, sync {
+    x: i32,
+    y: i32,
+}
+
+fn main() i32 {
+    0
+}
+"#;
+    check_all(src).expect("copy struct with send/sync declaration");
+}
+
+#[test]
+fn typecheck_atomic_types_are_send_and_sync() {
+    let structs = HashMap::new();
+    let enums = HashMap::new();
+    let vectors = HashMap::new();
+    for ty in [
+        Ty::AtomicBool,
+        Ty::AtomicI32,
+        Ty::AtomicUsize,
+        Ty::AtomicPtr(Box::new(Ty::I32)),
+    ] {
+        assert!(
+            has_formal_ability(&ty, Ability::Send, &structs, &enums, &vectors),
+            "{ty:?} should be send"
+        );
+        assert!(
+            has_formal_ability(&ty, Ability::Sync, &structs, &enums, &vectors),
+            "{ty:?} should be sync"
+        );
+    }
+    assert!(
+        !has_formal_ability(
+            &Ty::Thread,
+            Ability::Send,
+            &structs,
+            &enums,
+            &vectors
+        )
+    );
+    assert!(
+        !has_formal_ability(
+            &Ty::Thread,
+            Ability::Sync,
+            &structs,
+            &enums,
+            &vectors
+        )
+    );
+}
+
+#[test]
 fn typecheck_rejects_copy_without_clone_ability() {
     let src = r#"
 struct Bad has copy {
@@ -3977,6 +4154,16 @@ fn typecheck_rejects_div_by_zero_literal_fixture() {
     let src = include_str!("../../../examples/tests/err_div_by_zero.nia");
     let r = check_all(src);
     assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_rejects_send_sync_thread_field_fixture() {
+    let src = include_str!("../../../examples/tests/err_send_sync_thread_field.nia");
+    let err = check_all(src).expect_err("Thread in send struct should fail");
+    assert!(
+        err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
 }
 
 #[test]

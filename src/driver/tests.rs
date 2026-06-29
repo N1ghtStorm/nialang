@@ -58,6 +58,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_threads_minimal.nia",
         "examples/tests/ok_option_result.nia",
         "examples/sample_threads.nia",
+        "examples/sample_send_sync.nia",
         "examples/tests/ok_string.nia",
         "examples/sample_all.nia",
         "examples/sample_struct_methods_big.nia",

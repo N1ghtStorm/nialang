@@ -1,0 +1,231 @@
+// Phase 0 concurrency sample: Send and Sync ability semantics.
+//
+// Phase 0 adds compile-time send and sync rules. It does not add Arc, Mutex,
+// RwLock, Condvar, or spawn move closures yet. This file shows what the
+// typechecker accepts today and documents the boundaries that are enforced.
+//
+// Summary of Phase 0 rules demonstrated here:
+//
+//   send  - a value may be moved to another thread (future spawn/Arc paths).
+//   sync  - a value may be shared across threads through references and similar
+//           shared handles.
+//
+// Auto-trait highlights:
+//   - scalars, strings, copy types, and Atomic* are send + sync;
+//   - Thread, qubit, and result are not send and not sync;
+//   - struct/enum/vector types inherit send/sync from their fields when declared;
+//   - nested structs do not need their own has send if every field is already send;
+//   - references and T are send/sync when T is sync;
+//   - List, Option, Result, arrays, and named vectors follow their payloads.
+//
+// The compiler rejects (documented at the bottom of this file):
+//   - struct with send/sync and a Thread field;
+//   - enum/vector send declarations with Thread payloads or elements;
+//   - atomic storage inside struct fields;
+//   - send/sync declarations when any nested field is not send/sync.
+
+// ---------------------------------------------------------------------------
+// 1. Copy types explicitly declare send + sync (copy always implies both).
+// ---------------------------------------------------------------------------
+
+struct Point has copy, clone, drop, send, sync {
+    x: f64,
+    y: f64,
+}
+
+vector Vec2 f64 [X, Y] has copy, clone, drop, send, sync
+
+// ---------------------------------------------------------------------------
+// 2. Structural send/sync: Inner omits send/sync, Outer still validates because
+//    every Inner field is send/sync on its own.
+// ---------------------------------------------------------------------------
+
+struct InnerCounter has drop {
+    value: i32,
+}
+
+struct OuterBundle has send, sync, drop {
+    counter: InnerCounter,
+    tag: i32,
+}
+
+// ---------------------------------------------------------------------------
+// 3. Struct with send/sync over composite runtime and container types.
+// ---------------------------------------------------------------------------
+
+struct WorkerConfig has send, sync, drop {
+    id: i32,
+    name_tag: i32,
+    points: [i32; 3],
+    offsets: i32<2>,
+    labels: List[i32],
+    maybe_limit: Option[i32],
+    parsed: Result[i32, i32],
+    origin: Point,
+    direction: Vec2,
+}
+
+// ---------------------------------------------------------------------------
+// 4. Enum send/sync: every variant payload must be send/sync.
+// ---------------------------------------------------------------------------
+
+enum TaskState has send, sync, drop {
+    Pending(i32),
+    Running {
+        step: i32,
+        budget: i32,
+    },
+    Done,
+}
+
+enum Message has copy, clone, drop, send, sync {
+    Ping(i32),
+    Pong,
+}
+
+// ---------------------------------------------------------------------------
+// 5. Atomics are send + sync (as locals). They cannot live in struct fields yet.
+// ---------------------------------------------------------------------------
+
+fn show_ref_send_sync(value: &i32) i32 {
+    *value
+}
+
+fn bump_shared_counter(counter: &AtomicI32) i32 {
+    (*counter).fetch_add(1, Ordering::AcqRel)
+}
+
+fn read_counter(counter: &AtomicI32) i32 {
+    (*counter).load(Ordering::Acquire)
+}
+
+fn swap_slot(slot: &AtomicPtr[i32], next: &i32) &i32 {
+    (*slot).swap(next, Ordering::AcqRel)
+}
+
+// ---------------------------------------------------------------------------
+// 6. Non-capturing function values are send + sync at the type level.
+// ---------------------------------------------------------------------------
+
+fn noop() {
+}
+
+// ---------------------------------------------------------------------------
+// 7. OS threads still work, but Thread itself is not send or sync.
+//    Handles are consumed by join or drop and must not appear in send/sync types.
+// ---------------------------------------------------------------------------
+
+fn background_tick() {
+    println(1000);
+}
+
+fn spawn_and_join_worker() {
+    let worker: Thread = spawn background_tick;
+    join(worker);
+}
+
+fn spawn_parallel_pair() {
+    let left: Thread = spawn background_tick;
+    let right: Thread = spawn background_tick;
+    join(left);
+    join(right);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Helpers used from main.
+// ---------------------------------------------------------------------------
+
+fn make_point() Point {
+    Point { x: 0.0, y: 0.0 }
+}
+
+fn make_direction() Vec2 {
+    Vec2 [X: 1.0, Y: 0.0]
+}
+
+fn make_config() WorkerConfig {
+    let labels: List[i32] = list_new[i32]();
+    labels.push(11);
+    labels.push(22);
+    let origin: Point = make_point();
+    let direction: Vec2 = make_direction();
+    WorkerConfig { id: 1, name_tag: 42, points: [10, 20, 30], offsets: <1, 2>, labels: labels, maybe_limit: Some(128), parsed: Ok(99), origin: origin, direction: direction }
+}
+
+fn describe_task(state: TaskState) i32 {
+    match state {
+        TaskState::Pending(n) => n,
+        TaskState::Running { step, budget } => step + budget,
+        TaskState::Done => 0,
+    }
+}
+
+fn sum_labels(cfg: WorkerConfig) i32 {
+    cfg.labels.get(0) + cfg.labels.get(1)
+}
+
+// ---------------------------------------------------------------------------
+// main - exercise declarations, atomics, containers, threads, and enums.
+// ---------------------------------------------------------------------------
+
+fn main() i32 {
+    // Copy + send/sync user types.
+    let p: Point = Point { x: 3.0, y: 4.0 };
+    let axis: Vec2 = Vec2 [X: 0.0, Y: 1.0];
+    println(p.x);
+    println(axis);
+
+    // Nested structural send/sync bundle.
+    let inner: InnerCounter = InnerCounter { value: 0 };
+    let bundle: OuterBundle = OuterBundle { counter: inner, tag: 1 };
+    println(bundle.counter.value);
+    println(bundle.tag);
+
+    // Composite send/sync struct with lists, option, result.
+    let cfg: WorkerConfig = make_config();
+    println(cfg.id);
+    println(cfg.points[1]);
+    println(cfg.offsets);
+    println(sum_labels(cfg));
+    println(describe_task(TaskState::Pending(5)));
+    println(describe_task(TaskState::Running { step: 2, budget: 10 }));
+    println(describe_task(TaskState::Done));
+    println(match Message::Ping(1) {
+        Message::Ping(n) => n,
+        Message::Pong => 0,
+    });
+
+    // References are send when T is sync.
+    let shared_base: i32 = 7;
+    println(show_ref_send_sync(&shared_base));
+
+    // Atomic* locals: always send + sync.
+    let hits: AtomicI32 = atomic_i32(0);
+    let ready: AtomicI32 = atomic_i32(0);
+    let cell: i32 = 9;
+    let slot: AtomicPtr[i32] = atomic_ptr(&cell);
+    ready.store(1, Ordering::Release);
+    println(bump_shared_counter(&hits));
+    println(read_counter(&ready));
+    println(swap_slot(&slot, &cell));
+
+    // Non-capturing fn values are send + sync.
+    let on_idle: fn() -> () = noop;
+    let on_tick: fn() -> () = background_tick;
+    on_idle();
+    on_tick();
+
+    // Thread handles stay outside send/sync data types.
+    spawn_and_join_worker();
+    spawn_parallel_pair();
+
+    0
+}
+
+// Rejected by Phase 0 (documentation only; do not uncomment):
+//
+// struct ThreadBundle has send, drop ( worker: Thread, )
+// struct NotSync has sync, drop ( worker: Thread, )
+// enum BadState has send, drop ( Running(Thread), )
+// vector BadHandle Thread [X, Y] has drop, send
+// struct AtomicField has send, drop ( counter: AtomicI32, )

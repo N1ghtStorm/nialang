@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    Ability, Block, EnumDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt, StructDef, Ty,
-    VectorDef, method_symbol,
+    Ability, Block, EnumDef, EnumVariantDef, EnumVariantFields, Expr, FnDef, MatchPattern, Stmt,
+    StructDef, Ty, VectorDef, method_symbol,
 };
 use crate::nia_std::{
     ALLOC, ATOMIC_BOOL, ATOMIC_BOOL_TYPE, ATOMIC_FENCE, ATOMIC_I8, ATOMIC_I8_TYPE, ATOMIC_I16,
@@ -314,6 +314,228 @@ fn atomic_int_value_ty(t: &Ty) -> Option<Ty> {
 
 fn is_atomic_ty(t: &Ty) -> bool {
     matches!(t, Ty::AtomicBool | Ty::AtomicPtr(_)) || atomic_int_value_ty(t).is_some()
+}
+
+fn type_has_copy_ability(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    if is_formal_scalar_ability_ty(t) {
+        return true;
+    }
+    match t {
+        Ty::Struct(name) if vectors.contains_key(name) => vectors
+            .get(name)
+            .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Copy)),
+        Ty::Struct(name) => structs
+            .get(name)
+            .is_some_and(|s| has_declared_ability(&s.abilities, Ability::Copy)),
+        Ty::Enum(name) => enums
+            .get(name)
+            .is_some_and(|e| has_declared_ability(&e.abilities, Ability::Copy)),
+        Ty::Vector(name, _) => vectors
+            .get(name)
+            .is_some_and(|v| has_declared_ability(&v.abilities, Ability::Copy)),
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
+            type_has_copy_ability(elem, structs, enums, vectors)
+        }
+        _ => false,
+    }
+}
+
+fn enum_fields_support(
+    variants: &[EnumVariantDef],
+    mut predicate: impl FnMut(&Ty) -> bool,
+) -> bool {
+    variants.iter().all(|variant| match &variant.fields {
+        EnumVariantFields::Unit => true,
+        EnumVariantFields::Tuple(fields) => fields.iter().all(&mut predicate),
+        EnumVariantFields::Struct(fields) => fields.iter().all(|(_, ty)| predicate(ty)),
+    })
+}
+
+fn first_enum_field_failing(
+    variants: &[EnumVariantDef],
+    mut predicate: impl FnMut(&Ty) -> bool,
+) -> Option<(String, usize, Ty)> {
+    for variant in variants {
+        match &variant.fields {
+            EnumVariantFields::Unit => {}
+            EnumVariantFields::Tuple(fields) => {
+                for (idx, ty) in fields.iter().enumerate() {
+                    if !predicate(ty) {
+                        return Some((variant.name.clone(), idx, ty.clone()));
+                    }
+                }
+            }
+            EnumVariantFields::Struct(fields) => {
+                for (field, ty) in fields {
+                    if !predicate(ty) {
+                        return Some((format!("{field}"), 0, ty.clone()));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn structural_send_sync_failure_for_struct(
+    s: &StructDef,
+    ability: Ability,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> Option<String> {
+    if !matches!(ability, Ability::Send | Ability::Sync) {
+        return None;
+    }
+    let ability_name = ability_label(ability);
+    let ok = match ability {
+        Ability::Send => has_send(&Ty::Struct(s.name.clone()), structs, enums, vectors),
+        Ability::Sync => has_sync(&Ty::Struct(s.name.clone()), structs, enums, vectors),
+        _ => return None,
+    };
+    if ok {
+        return None;
+    }
+    for (field, ty) in &s.fields {
+        let field_ok = match ability {
+            Ability::Send => has_send(ty, structs, enums, vectors),
+            Ability::Sync => has_sync(ty, structs, enums, vectors),
+            _ => false,
+        };
+        if !field_ok {
+            return Some(format!(
+                "struct `{}` field `{field}` is missing `{ability_name}`: {}",
+                s.name,
+                ability_failure_reason(ty, ability, structs, enums, vectors)
+            ));
+        }
+    }
+    Some(format!("struct `{}` is missing `{ability_name}`", s.name))
+}
+
+fn structural_send_sync_failure_for_enum(
+    e: &EnumDef,
+    ability: Ability,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> Option<String> {
+    if !matches!(ability, Ability::Send | Ability::Sync) {
+        return None;
+    }
+    let ability_name = ability_label(ability);
+    let ok = match ability {
+        Ability::Send => has_send(&Ty::Enum(e.name.clone()), structs, enums, vectors),
+        Ability::Sync => has_sync(&Ty::Enum(e.name.clone()), structs, enums, vectors),
+        _ => return None,
+    };
+    if ok {
+        return None;
+    }
+    let predicate = |ty: &Ty| match ability {
+        Ability::Send => has_send(ty, structs, enums, vectors),
+        Ability::Sync => has_sync(ty, structs, enums, vectors),
+        _ => false,
+    };
+    if let Some((variant, idx, ty)) = first_enum_field_failing(&e.variants, predicate) {
+        return Some(format!(
+            "enum `{}` variant `{variant}` field `{idx}` is missing `{ability_name}`: {}",
+            e.name,
+            ability_failure_reason(&ty, ability, structs, enums, vectors)
+        ));
+    }
+    Some(format!("enum `{}` is missing `{ability_name}`", e.name))
+}
+
+/// Whether `t` may be moved to another OS thread (auto-trait semantics).
+fn has_send(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    if is_formal_scalar_ability_ty(t) || is_atomic_ty(t) {
+        return true;
+    }
+    if type_has_copy_ability(t, structs, enums, vectors) {
+        return true;
+    }
+    match t {
+        Ty::Qubit | Ty::Result | Ty::Thread => false,
+        Ty::Ptr(inner) => has_sync(inner, structs, enums, vectors),
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
+            has_send(elem, structs, enums, vectors)
+        }
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
+            has_send(elem, structs, enums, vectors)
+        }
+        Ty::Option(elem) => has_send(elem, structs, enums, vectors),
+        Ty::ResultType(ok, err) => {
+            has_send(ok, structs, enums, vectors) && has_send(err, structs, enums, vectors)
+        }
+        Ty::Fn(_, _) => true,
+        Ty::Struct(name) if vectors.contains_key(name) => vectors
+            .get(name)
+            .is_some_and(|v| has_send(&v.ty, structs, enums, vectors)),
+        Ty::Struct(name) => structs.get(name).is_some_and(|s| {
+            s.fields
+                .iter()
+                .all(|(_, ty)| has_send(ty, structs, enums, vectors))
+        }),
+        Ty::Enum(name) => enums.get(name).is_some_and(|e| {
+            enum_fields_support(&e.variants, |ty| has_send(ty, structs, enums, vectors))
+        }),
+        Ty::Vector(_, elem) => has_send(elem, structs, enums, vectors),
+        _ => false,
+    }
+}
+
+/// Whether `t` may be shared across threads through `&T` and similar handles.
+fn has_sync(
+    t: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> bool {
+    if is_formal_scalar_ability_ty(t) || is_atomic_ty(t) {
+        return true;
+    }
+    if type_has_copy_ability(t, structs, enums, vectors) {
+        return true;
+    }
+    match t {
+        Ty::Qubit | Ty::Result | Ty::Thread => false,
+        Ty::Ptr(inner) => has_sync(inner, structs, enums, vectors),
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
+            has_sync(elem, structs, enums, vectors)
+        }
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
+            has_sync(elem, structs, enums, vectors)
+        }
+        Ty::Option(elem) => has_sync(elem, structs, enums, vectors),
+        Ty::ResultType(ok, err) => {
+            has_sync(ok, structs, enums, vectors) && has_sync(err, structs, enums, vectors)
+        }
+        Ty::Fn(_, _) => true,
+        Ty::Struct(name) if vectors.contains_key(name) => vectors
+            .get(name)
+            .is_some_and(|v| has_sync(&v.ty, structs, enums, vectors)),
+        Ty::Struct(name) => structs.get(name).is_some_and(|s| {
+            s.fields
+                .iter()
+                .all(|(_, ty)| has_sync(ty, structs, enums, vectors))
+        }),
+        Ty::Enum(name) => enums.get(name).is_some_and(|e| {
+            enum_fields_support(&e.variants, |ty| has_sync(ty, structs, enums, vectors))
+        }),
+        Ty::Vector(_, elem) => has_sync(elem, structs, enums, vectors),
+        _ => false,
+    }
 }
 
 fn is_atomic_bool_method(name: &str) -> bool {
@@ -813,6 +1035,12 @@ fn has_formal_ability(
     if is_formal_scalar_ability_ty(t) && !matches!(ability, Ability::Deref) {
         return true;
     }
+    if matches!(ability, Ability::Send) {
+        return has_send(t, structs, enums, vectors);
+    }
+    if matches!(ability, Ability::Sync) {
+        return has_sync(t, structs, enums, vectors);
+    }
     match t {
         Ty::Ptr(_) => matches!(ability, Ability::Deref),
         Ty::Struct(name) if vectors.contains_key(name) => vectors
@@ -835,12 +1063,10 @@ fn has_formal_ability(
         {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
-        Ty::Option(elem) if matches!(ability, Ability::Drop | Ability::Send | Ability::Sync) => {
+        Ty::Option(elem) if matches!(ability, Ability::Drop) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
-        Ty::ResultType(ok, err)
-            if matches!(ability, Ability::Drop | Ability::Send | Ability::Sync) =>
-        {
+        Ty::ResultType(ok, err) if matches!(ability, Ability::Drop) => {
             has_formal_ability(ok, ability, structs, enums, vectors)
                 && has_formal_ability(err, ability, structs, enums, vectors)
         }
@@ -974,6 +1200,19 @@ fn ability_failure_reason(
             )
         }
         Ty::Struct(name) => match structs.get(name) {
+            Some(s) if matches!(ability, Ability::Send | Ability::Sync) => {
+                if let Some(reason) = structural_send_sync_failure_for_struct(
+                    s, ability, structs, enums, vectors,
+                ) {
+                    return reason;
+                }
+                if !has_declared_ability(&s.abilities, ability) {
+                    return format!("struct `{name}` does not declare `{ability_name}`");
+                }
+                format!(
+                    "struct `{name}` declares `{ability_name}`, but one of its fields is not eligible"
+                )
+            }
             Some(s) if !has_declared_ability(&s.abilities, ability) => {
                 format!("struct `{name}` does not declare `{ability_name}`")
             }
@@ -983,6 +1222,19 @@ fn ability_failure_reason(
             None => format!("unknown struct `{name}`"),
         },
         Ty::Enum(name) => match enums.get(name) {
+            Some(e) if matches!(ability, Ability::Send | Ability::Sync) => {
+                if let Some(reason) =
+                    structural_send_sync_failure_for_enum(e, ability, structs, enums, vectors)
+                {
+                    return reason;
+                }
+                if !has_declared_ability(&e.abilities, ability) {
+                    return format!("enum `{name}` does not declare `{ability_name}`");
+                }
+                format!(
+                    "enum `{name}` declares `{ability_name}`, but one of its variants is not eligible"
+                )
+            }
             Some(e) if !has_declared_ability(&e.abilities, ability) => {
                 format!("enum `{name}` does not declare `{ability_name}`")
             }
@@ -1019,6 +1271,28 @@ fn ability_failure_reason(
         }
         Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
             "Matrix is a runtime owner and is not `copy`; use `.clone()` to duplicate it".into()
+        }
+        Ty::Thread if matches!(ability, Ability::Send) => {
+            "Thread handles cannot be transferred to another thread".into()
+        }
+        Ty::Thread if matches!(ability, Ability::Sync) => {
+            "Thread handles cannot be shared across threads".into()
+        }
+        Ty::Qubit if matches!(ability, Ability::Send | Ability::Sync) => {
+            "quantum `qubit` values cannot be used across OS threads".into()
+        }
+        Ty::Result if matches!(ability, Ability::Send | Ability::Sync) => {
+            "quantum `result` values cannot be used across OS threads".into()
+        }
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _)
+            if matches!(ability, Ability::Send | Ability::Sync) =>
+        {
+            format!(
+                "runtime owner {} requires element type {} to support `{ability_name}`: {}",
+                ty_diag_label(t),
+                ty_diag_label(elem),
+                ability_failure_reason(elem, ability, structs, enums, vectors)
+            )
         }
         Ty::AtomicBool
         | Ty::AtomicI8
@@ -1075,6 +1349,20 @@ fn ability_failure_reason(
         }
         Ty::Fn(_, _) if matches!(ability, Ability::Clone) => {
             "function value clone requires a cloneable closure environment".into()
+        }
+        Ty::Ptr(inner) if matches!(ability, Ability::Send) => {
+            format!(
+                "reference type {} is `send` only when the pointee is `sync`: {}",
+                ty_diag_label(t),
+                ability_failure_reason(inner, Ability::Sync, structs, enums, vectors)
+            )
+        }
+        Ty::Ptr(inner) if matches!(ability, Ability::Sync) => {
+            format!(
+                "reference type {} is `sync` only when the pointee is `sync`: {}",
+                ty_diag_label(t),
+                ability_failure_reason(inner, Ability::Sync, structs, enums, vectors)
+            )
         }
         Ty::Ptr(_) if matches!(ability, Ability::Deref) => {
             "references support `deref` directly".into()
@@ -1409,7 +1697,32 @@ fn validate_abilities(
                     }
                 }
                 Ability::Deref => validate_custom_deref_sig(s, fn_sigs)?,
-                Ability::Send | Ability::Sync => {}
+                Ability::Send => {
+                    for (field, ty) in &s.fields {
+                        if !supports_decl_ability(ty, ability, structs, enums, vectors) {
+                            let ability = ability_label(ability);
+                            let reason =
+                                ability_failure_reason(ty, Ability::Send, structs, enums, vectors);
+                            return Err(format!(
+                                "struct `{}` has `{ability}` but field `{field}` does not support it: {reason}",
+                                s.name
+                            ));
+                        }
+                    }
+                }
+                Ability::Sync => {
+                    for (field, ty) in &s.fields {
+                        if !supports_decl_ability(ty, ability, structs, enums, vectors) {
+                            let ability = ability_label(ability);
+                            let reason =
+                                ability_failure_reason(ty, Ability::Sync, structs, enums, vectors);
+                            return Err(format!(
+                                "struct `{}` has `{ability}` but field `{field}` does not support it: {reason}",
+                                s.name
+                            ));
+                        }
+                    }
+                }
             }
         }
     }
@@ -1441,7 +1754,7 @@ fn validate_abilities(
             ));
         }
         for ability in e.abilities.clone() {
-            if matches!(ability, Ability::Deref | Ability::Send | Ability::Sync) {
+            if matches!(ability, Ability::Deref) {
                 continue;
             }
             for variant in &e.variants {
@@ -1505,7 +1818,7 @@ fn validate_abilities(
             ));
         }
         for ability in v.abilities.clone() {
-            if matches!(ability, Ability::Deref | Ability::Send | Ability::Sync) {
+            if matches!(ability, Ability::Deref) {
                 continue;
             }
             if !supports_decl_ability(&v.ty, ability, structs, enums, vectors) {
