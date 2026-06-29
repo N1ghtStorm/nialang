@@ -46,6 +46,11 @@ pub const RWLOCK_READ: &str = "read";
 pub const RWLOCK_WRITE: &str = "write";
 pub const RWLOCK_TRY_READ: &str = "try_read";
 pub const RWLOCK_TRY_WRITE: &str = "try_write";
+pub const CONDVAR_TYPE: &str = "Condvar";
+pub const CONDVAR_NEW: &str = "condvar_new";
+pub const CONDVAR_WAIT: &str = "wait";
+pub const CONDVAR_NOTIFY_ONE: &str = "notify_one";
+pub const CONDVAR_NOTIFY_ALL: &str = "notify_all";
 pub const LIST_NEW: &str = "list_new";
 pub const LIST_WITH_CAPACITY: &str = "list_with_capacity";
 pub const LIST_LEN: &str = "len";
@@ -246,6 +251,7 @@ pub fn is_reserved_type_name(name: &str) -> bool {
             | RWLOCK_TYPE
             | RWLOCK_READ_GUARD_TYPE
             | RWLOCK_WRITE_GUARD_TYPE
+            | CONDVAR_TYPE
             | OPTION_TYPE
             | RESULT_TYPE
             | QUBIT
@@ -305,6 +311,10 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | RWLOCK_WRITE
             | RWLOCK_TRY_READ
             | RWLOCK_TRY_WRITE
+            | CONDVAR_NEW
+            | CONDVAR_WAIT
+            | CONDVAR_NOTIFY_ONE
+            | CONDVAR_NOTIFY_ALL
             | OUTER
             | COMPLEX_NEW
             | COMPLEX_ADD
@@ -458,6 +468,11 @@ declare i32 @pthread_rwlock_wrlock(ptr)
 declare i32 @pthread_rwlock_tryrdlock(ptr)
 declare i32 @pthread_rwlock_trywrlock(ptr)
 declare i32 @pthread_rwlock_unlock(ptr)
+declare i32 @pthread_cond_init(ptr, ptr)
+declare i32 @pthread_cond_destroy(ptr)
+declare i32 @pthread_cond_wait(ptr, ptr)
+declare i32 @pthread_cond_signal(ptr)
+declare i32 @pthread_cond_broadcast(ptr)
 
 define ptr @nialang.thread.entry(ptr %arg) {
 entry:

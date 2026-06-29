@@ -11,19 +11,20 @@ use crate::nia_std::{
     ATOMIC_PTR_TYPE, ATOMIC_U8, ATOMIC_U8_TYPE, ATOMIC_U16, ATOMIC_U16_TYPE, ATOMIC_U32,
     ATOMIC_U32_TYPE, ATOMIC_U64, ATOMIC_U64_TYPE, ATOMIC_U128, ATOMIC_U128_TYPE, ATOMIC_USIZE,
     ATOMIC_USIZE_TYPE, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW,
-    COMPLEX_SCALE, COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ,
-    GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP,
-    GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ,
-    GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN,
-    LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
-    MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET,
-    MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA,
-    MERKLE_VERIFY, MUTEX_GUARD_TYPE, MUTEX_LOCK, MUTEX_NEW, MUTEX_TRY_LOCK, MUTEX_TYPE,
-    OPTION_NONE, OPTION_SOME, OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, RESULT, RESULT_ERR, RESULT_OK, RESULT_TYPE, RWLOCK_NEW, RWLOCK_READ,
-    RWLOCK_READ_GUARD_TYPE, RWLOCK_TRY_READ, RWLOCK_TRY_WRITE, RWLOCK_TYPE, RWLOCK_WRITE,
-    RWLOCK_WRITE_GUARD_TYPE, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC,
-    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    COMPLEX_SCALE, COMPLEX_SUB, COMPLEX_TYPE, CONDVAR_NEW, CONDVAR_NOTIFY_ALL, CONDVAR_NOTIFY_ONE,
+    CONDVAR_TYPE, CONDVAR_WAIT, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT,
+    GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG,
+    GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG,
+    GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET,
+    LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP,
+    MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE,
+    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
+    MUTEX_GUARD_TYPE, MUTEX_LOCK, MUTEX_NEW, MUTEX_TRY_LOCK, MUTEX_TYPE, OPTION_NONE, OPTION_SOME,
+    OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT,
+    RESULT_ERR, RESULT_OK, RESULT_TYPE, RWLOCK_NEW, RWLOCK_READ, RWLOCK_READ_GUARD_TYPE,
+    RWLOCK_TRY_READ, RWLOCK_TRY_WRITE, RWLOCK_TYPE, RWLOCK_WRITE, RWLOCK_WRITE_GUARD_TYPE, SHA256,
+    SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET,
+    VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -86,6 +87,8 @@ fn normalize_ty(
                 Err("type `RwLockReadGuard` requires a type argument `RwLockReadGuard[T]`".into())
             } else if name == RWLOCK_WRITE_GUARD_TYPE {
                 Err("type `RwLockWriteGuard` requires a type argument `RwLockWriteGuard[T]`".into())
+            } else if name == CONDVAR_TYPE {
+                Ok(Ty::Condvar)
             } else if name == ATOMIC_BOOL_TYPE {
                 Ok(Ty::AtomicBool)
             } else if let Some(atomic_ty) = atomic_int_type_name_ty(name) {
@@ -162,6 +165,7 @@ fn normalize_ty(
         Ty::RwLockWriteGuard(elem) => Ok(Ty::RwLockWriteGuard(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
+        Ty::Condvar => Ok(Ty::Condvar),
         Ty::Option(elem) => Ok(Ty::Option(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
@@ -525,6 +529,7 @@ fn has_send(
         Ty::MutexGuard(_) => false,
         Ty::RwLock(elem) => has_send(elem, structs, enums, vectors),
         Ty::RwLockReadGuard(_) | Ty::RwLockWriteGuard(_) => false,
+        Ty::Condvar => true,
         Ty::Option(elem) => has_send(elem, structs, enums, vectors),
         Ty::ResultType(ok, err) => {
             has_send(ok, structs, enums, vectors) && has_send(err, structs, enums, vectors)
@@ -573,6 +578,7 @@ fn has_sync(
         Ty::MutexGuard(_) => false,
         Ty::RwLock(elem) => has_send(elem, structs, enums, vectors),
         Ty::RwLockReadGuard(_) | Ty::RwLockWriteGuard(_) => false,
+        Ty::Condvar => true,
         Ty::Option(elem) => has_sync(elem, structs, enums, vectors),
         Ty::ResultType(ok, err) => {
             has_sync(ok, structs, enums, vectors) && has_sync(err, structs, enums, vectors)
@@ -1259,6 +1265,7 @@ fn has_formal_ability(
         Ty::RwLockReadGuard(_) | Ty::RwLockWriteGuard(_) => {
             matches!(ability, Ability::Drop | Ability::Deref)
         }
+        Ty::Condvar => matches!(ability, Ability::Drop),
         Ty::Option(elem) if matches!(ability, Ability::Drop) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
@@ -1357,6 +1364,7 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::RwLock(elem) => format!("RwLock[{}]", ty_diag_label(elem)),
         Ty::RwLockReadGuard(elem) => format!("RwLockReadGuard[{}]", ty_diag_label(elem)),
         Ty::RwLockWriteGuard(elem) => format!("RwLockWriteGuard[{}]", ty_diag_label(elem)),
+        Ty::Condvar => "Condvar".into(),
         Ty::Option(elem) => format!("Option[{}]", ty_diag_label(elem)),
         Ty::ResultType(ok, err) => {
             format!("Result[{}, {}]", ty_diag_label(ok), ty_diag_label(err))
@@ -1489,6 +1497,9 @@ fn ability_failure_reason(
         Ty::RwLockWriteGuard(_) if matches!(ability, Ability::Copy | Ability::Clone) => {
             "RwLockWriteGuard values are move-only RAII tokens".into()
         }
+        Ty::Condvar if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "Condvar values are runtime owners and are not copyable or cloneable".into()
+        }
         Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
             "Matrix is a runtime owner and is not `copy`; use `.clone()` to duplicate it".into()
         }
@@ -1548,6 +1559,9 @@ fn ability_failure_reason(
             if matches!(ability, Ability::Send | Ability::Sync) =>
         {
             "RwLock guard values cannot be transferred or shared across threads".into()
+        }
+        Ty::Condvar if matches!(ability, Ability::Send | Ability::Sync) => {
+            "Condvar values are safe to transfer and share through synchronization handles".into()
         }
         Ty::AtomicBool
         | Ty::AtomicI8
@@ -1611,6 +1625,9 @@ fn ability_failure_reason(
             if matches!(ability, Ability::Deref) =>
         {
             "RwLock guard values support built-in dereference".into()
+        }
+        Ty::Condvar if matches!(ability, Ability::Drop) => {
+            "Condvar values support `drop` by destroying the pthread condition variable".into()
         }
         Ty::Option(elem) if matches!(ability, Ability::Copy | Ability::Clone) => {
             format!(
@@ -2966,6 +2983,7 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::RwLock(_)
         | Ty::RwLockReadGuard(_)
         | Ty::RwLockWriteGuard(_)
+        | Ty::Condvar
         | Ty::Thread
         | Ty::Fn(_, _) => false,
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
@@ -3410,6 +3428,10 @@ fn check_moves_call(
             ExprMoveMode::Consume(MoveReason::PassedByValue),
         )
         .map(|_| ());
+    }
+
+    if name == CONDVAR_NEW && args.is_empty() {
+        return Ok(());
     }
 
     if name == JOIN && args.len() == 1 {
@@ -3926,6 +3948,34 @@ fn check_moves_method_call(
             None,
             ExprMoveMode::ReadOnly,
         )?;
+        return check_moves_args_fallback(args, env, states, fn_values, ctx);
+    }
+
+    if matches!(recv_ty, Ty::Condvar) {
+        check_moves_expr(
+            receiver,
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
+        if name == CONDVAR_WAIT && args.len() == 1 {
+            check_moves_expr(
+                &args[0],
+                env,
+                states,
+                fn_values,
+                ctx,
+                None,
+                ExprMoveMode::Consume(MoveReason::PassedByValue),
+            )?;
+            return Ok(());
+        }
+        if (name == CONDVAR_NOTIFY_ONE || name == CONDVAR_NOTIFY_ALL) && args.is_empty() {
+            return Ok(());
+        }
         return check_moves_args_fallback(args, env, states, fn_values, ctx);
     }
 
@@ -4671,6 +4721,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         | (Ty::AtomicU128, Ty::AtomicU128)
         | (Ty::AtomicIsize, Ty::AtomicIsize)
         | (Ty::AtomicUsize, Ty::AtomicUsize)
+        | (Ty::Condvar, Ty::Condvar)
         | (Ty::Thread, Ty::Thread)
         | (Ty::Qubit, Ty::Qubit)
         | (Ty::Result, Ty::Result)
@@ -6406,6 +6457,15 @@ fn infer_expr(
             if name == RWLOCK_NEW {
                 return infer_rwlock_new_call(args, env, structs, enums, vectors, fns, hint);
             }
+            if name == CONDVAR_NEW {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "`{CONDVAR_NEW}` expects exactly 0 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                return Ok(Ty::Condvar);
+            }
             if let Some(local_ty) = env.get(name) {
                 if matches!(local_ty, Ty::Fn(_, _)) {
                     return infer_fn_value_call(local_ty, args, env, structs, enums, vectors, fns);
@@ -7583,6 +7643,33 @@ fn infer_expr(
                         ));
                     }
                     return Ok(Ty::Option(Box::new(Ty::RwLockWriteGuard(elem_ty.clone()))));
+                }
+            }
+            if matches!(recv_ty, Ty::Condvar) {
+                if name == CONDVAR_WAIT {
+                    if args.len() != 1 {
+                        return Err(format!(
+                            "method `{CONDVAR_WAIT}`: expected 1 arg, got {}",
+                            args.len()
+                        ));
+                    }
+                    let guard_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+                    let Ty::MutexGuard(elem_ty) = guard_ty else {
+                        return Err(format!(
+                            "method `{CONDVAR_WAIT}` expects a MutexGuard[T], got {}",
+                            ty_diag_label(&guard_ty)
+                        ));
+                    };
+                    return Ok(Ty::MutexGuard(elem_ty));
+                }
+                if name == CONDVAR_NOTIFY_ONE || name == CONDVAR_NOTIFY_ALL {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `{name}`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Ty::Unit);
                 }
             }
             if let Ty::List(elem_ty) = &recv_ty {

@@ -1067,6 +1067,69 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_condvar_wait_notify_and_drop_use_pthread() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let m: Mutex[i32] = mutex_new(0);
+    let cv: Condvar = condvar_new();
+
+    let guard: MutexGuard[i32] = m.lock();
+    let next: MutexGuard[i32] = cv.wait(guard);
+    drop(next);
+
+    cv.notify_one();
+    cv.notify_all();
+
+    drop(cv);
+    drop(m);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_cond_init(ptr, ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_cond_wait(ptr, ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_cond_signal(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_cond_broadcast(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_cond_destroy(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_cond_init(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_cond_wait(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_cond_signal(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_cond_broadcast(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_cond_destroy(ptr %"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_explicit_drop_calls_custom_struct_drop() {
     let ll = emit(
         r#"

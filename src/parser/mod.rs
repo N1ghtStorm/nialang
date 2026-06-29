@@ -6,9 +6,10 @@ use crate::ast::{
 };
 use crate::lexer::Token;
 use crate::nia_std::{
-    ARC_NEW, ARC_TYPE, ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY, MUTEX_GUARD_TYPE,
-    MUTEX_NEW, MUTEX_TYPE, OPTION_NONE, OPTION_SOME, OPTION_TYPE, RESULT_ERR, RESULT_OK,
-    RESULT_TYPE, RWLOCK_NEW, RWLOCK_READ_GUARD_TYPE, RWLOCK_TYPE, RWLOCK_WRITE_GUARD_TYPE,
+    ARC_NEW, ARC_TYPE, ATOMIC_PTR_TYPE, CONDVAR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY,
+    MUTEX_GUARD_TYPE, MUTEX_NEW, MUTEX_TYPE, OPTION_NONE, OPTION_SOME, OPTION_TYPE, RESULT_ERR,
+    RESULT_OK, RESULT_TYPE, RWLOCK_NEW, RWLOCK_READ_GUARD_TYPE, RWLOCK_TYPE,
+    RWLOCK_WRITE_GUARD_TYPE,
 };
 
 pub struct Parser {
@@ -974,6 +975,8 @@ impl Parser {
                         let elem = self.parse_ty()?;
                         self.expect(&Token::RBracket)?;
                         Ok(Ty::RwLockWriteGuard(Box::new(elem)))
+                    } else if n == CONDVAR_TYPE {
+                        Ok(Ty::Condvar)
                     } else if n == OPTION_TYPE {
                         self.expect(&Token::LBracket)?;
                         let elem = self.parse_ty()?;

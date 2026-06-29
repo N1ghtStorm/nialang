@@ -69,11 +69,13 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_arc_basic.nia"),
         include_str!("../../../examples/tests/ok_mutex_basic.nia"),
         include_str!("../../../examples/tests/ok_rwlock_read_write.nia"),
+        include_str!("../../../examples/tests/ok_condvar_wait_notify.nia"),
         include_str!("../../../examples/sample_send_sync.nia"),
         include_str!("../../../examples/sample_arc.nia"),
         include_str!("../../../examples/sample_threads_closure.nia"),
         include_str!("../../../examples/sample_mutex.nia"),
         include_str!("../../../examples/sample_rwlock.nia"),
+        include_str!("../../../examples/sample_condvar.nia"),
         include_str!("../../../examples/tests/ok_option_result.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
@@ -2317,6 +2319,44 @@ fn main() i32 {
         err.contains("cannot assign through `RwLockReadGuard` dereference"),
         "{err}"
     );
+}
+
+#[test]
+fn typecheck_condvar_surface() {
+    let src = include_str!("../../../examples/tests/ok_condvar_wait_notify.nia");
+    check_all(src).expect("Condvar wait/notify surface should typecheck");
+}
+
+#[test]
+fn typecheck_condvar_wait_requires_mutex_guard() {
+    let src = r#"
+fn main() i32 {
+    let rw: RwLock[i32] = rwlock_new(0);
+    let cv: Condvar = condvar_new();
+    let guard: RwLockReadGuard[i32] = rw.read();
+    cv.wait(guard);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Condvar wait must reject non-mutex guard");
+    assert!(err.contains("expects a MutexGuard[T]"), "{err}");
+}
+
+#[test]
+fn typecheck_condvar_is_send_sync_for_arc() {
+    let src = r#"
+fn main() i32 {
+    let cv: Arc[Condvar] = arc_new(condvar_new());
+    let moved = cv.clone();
+    let t: Thread = spawn move || {
+        (*moved).notify_all();
+    };
+    join(t);
+    drop(cv);
+    0
+}
+"#;
+    check_all(src).expect("Arc[Condvar] should be send + sync");
 }
 
 #[test]

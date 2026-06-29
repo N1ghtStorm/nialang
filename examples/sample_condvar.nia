@@ -1,0 +1,36 @@
+// Phase 5 concurrency sample: Condvar paired with Mutex[T].
+//
+// `wait` consumes a MutexGuard[T] and returns it after waking and re-locking.
+
+fn main() i32 {
+    let state: Arc[Mutex[i32]] = arc_new(mutex_new(0));
+    let cv: Arc[Condvar] = arc_new(condvar_new());
+
+    let waiter_state = state.clone();
+    let waiter_cv = cv.clone();
+    let waiter: Thread = spawn move || {
+        let guard: MutexGuard[i32] = (*waiter_state).lock();
+        while *guard == 0 {
+            let next: MutexGuard[i32] = (*waiter_cv).wait(guard);
+            guard = next;
+        }
+        println(*guard);
+        drop(guard);
+    };
+
+    let notifier_state = state.clone();
+    let notifier_cv = cv.clone();
+    let notifier: Thread = spawn move || {
+        let guard: MutexGuard[i32] = (*notifier_state).lock();
+        *guard = 1;
+        (*notifier_cv).notify_one();
+        drop(guard);
+    };
+
+    join(notifier);
+    join(waiter);
+
+    drop(state);
+    drop(cv);
+    0
+}

@@ -76,6 +76,8 @@ pub enum Ty {
     RwLockReadGuard(Box<Ty>),
     /// RAII exclusive write guard, written as `RwLockWriteGuard[T]`.
     RwLockWriteGuard(Box<Ty>),
+    /// Built-in condition variable owner, written as `Condvar`.
+    Condvar,
     /// Built-in optional value type, written as `Option[T]`.
     Option(Box<Ty>),
     /// Built-in fallible value type, written as `Result[T, E]`.
@@ -195,6 +197,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::RwLock(elem) => format!("rwlock_{}", ty_symbol_fragment(elem)),
         Ty::RwLockReadGuard(elem) => format!("rwlock_read_guard_{}", ty_symbol_fragment(elem)),
         Ty::RwLockWriteGuard(elem) => format!("rwlock_write_guard_{}", ty_symbol_fragment(elem)),
+        Ty::Condvar => "condvar".into(),
         Ty::Option(elem) => format!("option_{}", ty_symbol_fragment(elem)),
         Ty::ResultType(ok, err) => {
             format!(

@@ -13,18 +13,19 @@ use crate::nia_std::{
     ATOMIC_I128_TYPE, ATOMIC_ISIZE, ATOMIC_ISIZE_TYPE, ATOMIC_PTR, ATOMIC_U8, ATOMIC_U8_TYPE,
     ATOMIC_U16, ATOMIC_U16_TYPE, ATOMIC_U32, ATOMIC_U32_TYPE, ATOMIC_U64, ATOMIC_U64_TYPE,
     ATOMIC_U128, ATOMIC_U128_TYPE, ATOMIC_USIZE, ATOMIC_USIZE_TYPE, AtomicOrdering, CIS,
-    COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, COS, DEALLOC,
-    DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ,
-    GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1,
-    GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y,
-    GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
-    MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS,
-    MATRIX_SET, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA,
-    MERKLE_VERIFY, MUTEX_LOCK, MUTEX_NEW, MUTEX_TRY_LOCK, MUTEX_TYPE, OPTION_NONE, OPTION_SOME,
-    OPTION_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT_ERR, RESULT_OK,
-    RESULT_TYPE, RWLOCK_NEW, RWLOCK_READ, RWLOCK_TRY_READ, RWLOCK_TRY_WRITE, RWLOCK_TYPE,
-    RWLOCK_WRITE, SHA256, SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
-    VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, CONDVAR_NEW,
+    CONDVAR_NOTIFY_ALL, CONDVAR_NOTIFY_ONE, CONDVAR_TYPE, CONDVAR_WAIT, COS, DEALLOC, DIGEST_EQ,
+    GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS,
+    GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX,
+    GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN,
+    LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
+    MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
+    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
+    MUTEX_LOCK, MUTEX_NEW, MUTEX_TRY_LOCK, MUTEX_TYPE, OPTION_NONE, OPTION_SOME, OPTION_TYPE,
+    OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT_ERR, RESULT_OK, RESULT_TYPE,
+    RWLOCK_NEW, RWLOCK_READ, RWLOCK_TRY_READ, RWLOCK_TRY_WRITE, RWLOCK_TYPE, RWLOCK_WRITE, SHA256,
+    SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET,
+    VECTOR_LEN, VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -542,6 +543,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::RwLock(elem) => format!("RwLock[{}]", ty_print_label(elem)),
         Ty::RwLockReadGuard(elem) => format!("RwLockReadGuard[{}]", ty_print_label(elem)),
         Ty::RwLockWriteGuard(elem) => format!("RwLockWriteGuard[{}]", ty_print_label(elem)),
+        Ty::Condvar => "Condvar".into(),
         Ty::Option(elem) => format!("Option[{}]", ty_print_label(elem)),
         Ty::ResultType(ok, err) => {
             format!("Result[{}, {}]", ty_print_label(ok), ty_print_label(err))
@@ -776,6 +778,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::RwLock(_) => "ptr".into(),
         Ty::RwLockReadGuard(_) => "ptr".into(),
         Ty::RwLockWriteGuard(_) => "ptr".into(),
+        Ty::Condvar => "ptr".into(),
         Ty::Matrix(_, _) => "ptr".into(),
         Ty::Fn(_, _) => fn_value_ll_ty().into(),
     }
@@ -800,6 +803,7 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         Ty::Struct(name) if name == RWLOCK_TYPE => {
             panic!("typechecked RwLock without type argument")
         }
+        Ty::Struct(name) if name == CONDVAR_TYPE => Ty::Condvar,
         Ty::Struct(name) if name == crate::nia_std::ATOMIC_BOOL_TYPE => Ty::AtomicBool,
         Ty::Struct(name) if name == ATOMIC_I8_TYPE => Ty::AtomicI8,
         Ty::Struct(name) if name == ATOMIC_U8_TYPE => Ty::AtomicU8,
@@ -827,6 +831,7 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         Ty::RwLock(inner) => Ty::RwLock(Box::new(normalize_codegen_ty(inner))),
         Ty::RwLockReadGuard(inner) => Ty::RwLockReadGuard(Box::new(normalize_codegen_ty(inner))),
         Ty::RwLockWriteGuard(inner) => Ty::RwLockWriteGuard(Box::new(normalize_codegen_ty(inner))),
+        Ty::Condvar => Ty::Condvar,
         Ty::Option(inner) => Ty::Option(Box::new(normalize_codegen_ty(inner))),
         Ty::ResultType(ok, err) => Ty::ResultType(
             Box::new(normalize_codegen_ty(ok)),
@@ -1488,6 +1493,7 @@ impl<'a> Gen<'a> {
             | Ty::RwLock(_)
             | Ty::RwLockReadGuard(_)
             | Ty::RwLockWriteGuard(_)
+            | Ty::Condvar
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -2092,6 +2098,7 @@ impl<'a> Gen<'a> {
             | Ty::RwLock(_)
             | Ty::RwLockReadGuard(_)
             | Ty::RwLockWriteGuard(_)
+            | Ty::Condvar
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _) => false,
@@ -2307,6 +2314,7 @@ impl<'a> Gen<'a> {
             Ty::RwLock(elem_ty) => self.emit_rwlock_drop_value(elem_ty, &value),
             Ty::RwLockReadGuard(elem_ty) => self.emit_rwlock_guard_drop_value(elem_ty, &value),
             Ty::RwLockWriteGuard(elem_ty) => self.emit_rwlock_guard_drop_value(elem_ty, &value),
+            Ty::Condvar => self.emit_condvar_drop_value(&value),
             Ty::Option(elem_ty) => self.emit_option_drop_value(elem_ty, &value),
             Ty::ResultType(ok_ty, err_ty) => self.emit_result_drop_value(ok_ty, err_ty, &value),
             Ty::Matrix(_, _) => self.emit_matrix_drop_value(&value),
@@ -2696,6 +2704,7 @@ impl<'a> Gen<'a> {
                 | Ty::RwLock(_)
                 | Ty::RwLockReadGuard(_)
                 | Ty::RwLockWriteGuard(_)
+                | Ty::Condvar
                 | Ty::Matrix(_, _)
         )
     }
@@ -2878,6 +2887,9 @@ impl<'a> Gen<'a> {
                     || name == RWLOCK_WRITE
                     || name == RWLOCK_TRY_READ
                     || name == RWLOCK_TRY_WRITE
+                    || name == CONDVAR_WAIT
+                    || name == CONDVAR_NOTIFY_ONE
+                    || name == CONDVAR_NOTIFY_ALL
                 {
                     self.clear_consumed_custom_drop_locals_expr(
                         receiver, locals, drop_flags, false,
@@ -4192,6 +4204,73 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  call void @free(ptr {})", rwlock).unwrap();
     }
 
+    fn condvar_inner_ll_ty(&self) -> &'static str {
+        "[64 x i8]"
+    }
+
+    fn emit_condvar_new_value(&mut self) -> String {
+        let size = self.emit_sizeof_ll_ty_i64(self.condvar_inner_ll_ty());
+        let raw = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", raw, size).unwrap();
+        let condvar = format!("%{raw}");
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_cond_init(ptr {}, ptr null)",
+            rc, condvar
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "condvar.init.abort");
+        condvar
+    }
+
+    fn emit_condvar_wait_value(&mut self, elem_ty: &Ty, condvar: &str, guard: &str) -> String {
+        let mutex_ptr = self.mutex_lock_ptr(guard, elem_ty);
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_cond_wait(ptr {}, ptr {})",
+            rc, condvar, mutex_ptr
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "condvar.wait.abort");
+        guard.to_string()
+    }
+
+    fn emit_condvar_notify_one_value(&mut self, condvar: &str) {
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_cond_signal(ptr {})",
+            rc, condvar
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "condvar.signal.abort");
+    }
+
+    fn emit_condvar_notify_all_value(&mut self, condvar: &str) {
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_cond_broadcast(ptr {})",
+            rc, condvar
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "condvar.broadcast.abort");
+    }
+
+    fn emit_condvar_drop_value(&mut self, condvar: &str) {
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_cond_destroy(ptr {})",
+            rc, condvar
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "condvar.destroy.abort");
+        writeln!(self.out, "  call void @free(ptr {})", condvar).unwrap();
+    }
+
     fn emit_pi_value(&mut self) -> String {
         let out = self.fresh();
         writeln!(
@@ -5244,6 +5323,7 @@ impl<'a> Gen<'a> {
             | Ty::RwLock(_)
             | Ty::RwLockReadGuard(_)
             | Ty::RwLockWriteGuard(_)
+            | Ty::Condvar
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -5381,6 +5461,7 @@ impl<'a> Gen<'a> {
             | Ty::RwLock(_)
             | Ty::RwLockReadGuard(_)
             | Ty::RwLockWriteGuard(_)
+            | Ty::Condvar
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -9311,6 +9392,7 @@ impl<'a> Gen<'a> {
                     | Ty::RwLock(_)
                     | Ty::RwLockReadGuard(_)
                     | Ty::RwLockWriteGuard(_)
+                    | Ty::Condvar
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Matrix(_, _)
@@ -9450,6 +9532,7 @@ impl<'a> Gen<'a> {
                 | Some(Ty::RwLock(_))
                 | Some(Ty::RwLockReadGuard(_))
                 | Some(Ty::RwLockWriteGuard(_))
+                | Some(Ty::Condvar)
                 | Some(Ty::Option(_))
                 | Some(Ty::ResultType(_, _))
                 | Some(Ty::Enum(_))
@@ -9606,6 +9689,7 @@ impl<'a> Gen<'a> {
                     | Ty::RwLock(_)
                     | Ty::RwLockReadGuard(_)
                     | Ty::RwLockWriteGuard(_)
+                    | Ty::Condvar
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9704,6 +9788,7 @@ impl<'a> Gen<'a> {
                     | Ty::RwLock(_)
                     | Ty::RwLockReadGuard(_)
                     | Ty::RwLockWriteGuard(_)
+                    | Ty::Condvar
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9789,6 +9874,7 @@ impl<'a> Gen<'a> {
                     | Ty::RwLock(_)
                     | Ty::RwLockReadGuard(_)
                     | Ty::RwLockWriteGuard(_)
+                    | Ty::Condvar
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9938,6 +10024,7 @@ impl<'a> Gen<'a> {
                     | Ty::RwLock(_)
                     | Ty::RwLockReadGuard(_)
                     | Ty::RwLockWriteGuard(_)
+                    | Ty::Condvar
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -10106,6 +10193,7 @@ impl<'a> Gen<'a> {
                     | Ty::RwLock(_)
                     | Ty::RwLockReadGuard(_)
                     | Ty::RwLockWriteGuard(_)
+                    | Ty::Condvar
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -10444,6 +10532,10 @@ impl<'a> Gen<'a> {
                         self.emit_rwlock_new_value(&elem_ty, &value),
                     );
                 }
+                if name == CONDVAR_NEW {
+                    debug_assert!(args.is_empty());
+                    return (Ty::Condvar, self.emit_condvar_new_value());
+                }
                 if name == ATOMIC_FENCE {
                     let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[0]));
                     writeln!(self.out, "  fence {}", ordering).unwrap();
@@ -10775,6 +10867,27 @@ impl<'a> Gen<'a> {
                             Ty::Option(Box::new(Ty::RwLockWriteGuard(elem_ty.clone()))),
                             value,
                         );
+                    }
+                }
+                if matches!(recv_ty, Ty::Condvar) {
+                    if name == CONDVAR_WAIT {
+                        debug_assert_eq!(args.len(), 1);
+                        let (guard_ty, guard_val) = self.emit_expr(&args[0], locals, None);
+                        let Ty::MutexGuard(elem_ty) = guard_ty else {
+                            unreachable!("typechecked condvar wait guard")
+                        };
+                        let value = self.emit_condvar_wait_value(&elem_ty, &recv_val, &guard_val);
+                        return (Ty::MutexGuard(elem_ty), value);
+                    }
+                    if name == CONDVAR_NOTIFY_ONE {
+                        debug_assert!(args.is_empty());
+                        self.emit_condvar_notify_one_value(&recv_val);
+                        return (Ty::Unit, String::new());
+                    }
+                    if name == CONDVAR_NOTIFY_ALL {
+                        debug_assert!(args.is_empty());
+                        self.emit_condvar_notify_all_value(&recv_val);
+                        return (Ty::Unit, String::new());
                     }
                 }
                 if let Ty::List(elem_ty) = &recv_ty {
@@ -12042,6 +12155,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         | (Ty::AtomicU128, Ty::AtomicU128)
         | (Ty::AtomicIsize, Ty::AtomicIsize)
         | (Ty::AtomicUsize, Ty::AtomicUsize)
+        | (Ty::Condvar, Ty::Condvar)
         | (Ty::String, Ty::String)
         | (Ty::Qubit, Ty::Qubit)
         | (Ty::Result, Ty::Result)

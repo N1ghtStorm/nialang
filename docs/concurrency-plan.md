@@ -1,6 +1,6 @@
 # Concurrency Plan: Send, Sync, Arc, Mutex, RwLock, Condvar, and Threads
 
-Status: Phases 0-4 are implemented. Phase 5 is next.
+Status: Phases 0-5 are implemented. Phase 6 is next.
 
 Depends on:
 
@@ -568,9 +568,10 @@ Goal: read-heavy shared state.
 
 Goal: blocking until shared state changes.
 
-- `condvar_new`, `wait`, `notify_one`, `notify_all`;
-- sample producer/consumer with `Mutex` + `Condvar`;
-- tests: waiter wakes after `notify_one`, predicate loop handles spurious wakeup.
+- implemented: `Condvar`, `condvar_new`, `.wait`, `.notify_one`, `.notify_all`;
+- implemented: `wait` consumes and returns `MutexGuard[T]` after `pthread_cond_wait`;
+- added `examples/sample_condvar.nia`;
+- added tests for waiter wakeup, predicate loop shape, notify variants, and invalid guard rejection.
 
 ### Phase 6: Documentation and spec
 

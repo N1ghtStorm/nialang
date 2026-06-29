@@ -433,6 +433,13 @@ fn parse_fixture_rwlock_read_write() {
 }
 
 #[test]
+fn parse_fixture_condvar_wait_notify() {
+    parse_ok(include_str!(
+        "../../examples/tests/ok_condvar_wait_notify.nia"
+    ));
+}
+
+#[test]
 fn parse_fixture_option_result() {
     parse_ok(include_str!("../../examples/tests/ok_option_result.nia"));
 }
@@ -732,6 +739,34 @@ fn main() i32 {
             ));
         }
         other => panic!("expected typed rwlock let, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_condvar_type_constructor_and_methods() {
+    let src = r#"
+fn main() i32 {
+    let cv: Condvar = condvar_new();
+    cv.notify_all();
+    drop(cv);
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    match &fns[0].body.stmts[0] {
+        Stmt::Let {
+            ty: Some(ty),
+            init: Some(init),
+            ..
+        } => {
+            assert_eq!(ty, &Ty::Condvar);
+            assert!(matches!(
+                init,
+                Expr::Call { name, args } if name == "condvar_new" && args.is_empty()
+            ));
+        }
+        other => panic!("expected typed condvar let, got {other:?}"),
     }
 }
 
