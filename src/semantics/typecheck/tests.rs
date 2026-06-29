@@ -64,6 +64,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_atomic_narrow_int.nia"),
         include_str!("../../../examples/tests/ok_atomic_i128.nia"),
         include_str!("../../../examples/tests/ok_threads_minimal.nia"),
+        include_str!("../../../examples/tests/ok_option_result.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
         include_str!("../../../examples/sample_struct_methods_big.nia"),
@@ -1143,6 +1144,72 @@ fn main() i32 {
 "#;
     let r = check_all(src);
     assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_option_and_result_constructors_and_match() {
+    let src = r#"
+fn make_some() Option[i32] {
+    Some(42)
+}
+
+fn make_none() Option[i32] {
+    None
+}
+
+fn unwrap_or_zero(x: Option[i32]) i32 {
+    match x {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn make_ok() Result[i32, string] {
+    Ok(7)
+}
+
+fn make_err() Result[i32, string] {
+    Err("bad")
+}
+
+fn unwrap_result(x: Result[i32, string]) i32 {
+    match x {
+        Ok(n) => n,
+        Err(e) => 0,
+    }
+}
+
+fn main() i32 {
+    unwrap_or_zero(make_some()) + unwrap_or_zero(make_none()) + unwrap_result(make_ok()) + unwrap_result(make_err())
+}
+"#;
+    let r = check_all(src);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn typecheck_option_result_reject_non_exhaustive_match() {
+    let src = r#"
+fn unwrap_or_zero(x: Option[i32]) i32 {
+    match x {
+        Some(n) => n,
+    }
+}
+"#;
+    let err = check_all(src).expect_err("non-exhaustive Option match should fail");
+    assert!(err.contains("non-exhaustive match"), "{err}");
+}
+
+#[test]
+fn typecheck_result_constructors_need_expected_type() {
+    let src = r#"
+fn main() i32 {
+    let x = Ok(1);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Ok without Result hint should fail");
+    assert!(err.contains("expected Result[T, E]"), "{err}");
 }
 
 #[test]

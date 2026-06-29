@@ -6,7 +6,8 @@ use crate::ast::{
 };
 use crate::lexer::Token;
 use crate::nia_std::{
-    ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY, OPTION_TYPE, RESULT_TYPE,
+    ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY, OPTION_NONE, OPTION_SOME,
+    OPTION_TYPE, RESULT_ERR, RESULT_OK, RESULT_TYPE,
 };
 
 pub struct Parser {
@@ -136,6 +137,28 @@ impl Parser {
             return Err("match pattern must use `Enum::Variant` path syntax".into());
         };
         Ok((enum_name.to_string(), variant.to_string()))
+    }
+
+    fn builtin_option_result_variant(segments: &[String]) -> Option<(String, String)> {
+        match segments {
+            [variant] if variant == OPTION_SOME || variant == OPTION_NONE => {
+                Some((OPTION_TYPE.into(), variant.clone()))
+            }
+            [variant] if variant == RESULT_OK || variant == RESULT_ERR => {
+                Some((RESULT_TYPE.into(), variant.clone()))
+            }
+            [ty, variant]
+                if ty == OPTION_TYPE && (variant == OPTION_SOME || variant == OPTION_NONE) =>
+            {
+                Some((OPTION_TYPE.into(), variant.clone()))
+            }
+            [ty, variant]
+                if ty == RESULT_TYPE && (variant == RESULT_OK || variant == RESULT_ERR) =>
+            {
+                Some((RESULT_TYPE.into(), variant.clone()))
+            }
+            _ => None,
+        }
     }
 
     /// Parses a complete source file into `(structs, enums, functions, vectors)`.
@@ -1599,8 +1622,14 @@ impl Parser {
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
             let segments = self.parse_path_segments()?;
-            let path = self.resolve_item_path(&segments)?;
-            let (enum_name, variant) = Self::split_variant_path(path)?;
+            let (enum_name, variant) = if let Some((enum_name, variant)) =
+                Self::builtin_option_result_variant(&segments)
+            {
+                (enum_name, variant)
+            } else {
+                let path = self.resolve_item_path(&segments)?;
+                Self::split_variant_path(path)?
+            };
             let pat = if matches!(self.peek(), Token::LParen) {
                 self.bump();
                 let mut bindings = Vec::new();

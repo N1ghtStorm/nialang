@@ -27,6 +27,10 @@ pub const VECTOR_DROP: &str = "vector_drop";
 pub const LIST_TYPE: &str = "List";
 pub const OPTION_TYPE: &str = "Option";
 pub const RESULT_TYPE: &str = "Result";
+pub const OPTION_SOME: &str = "Some";
+pub const OPTION_NONE: &str = "None";
+pub const RESULT_OK: &str = "Ok";
+pub const RESULT_ERR: &str = "Err";
 pub const LIST_NEW: &str = "list_new";
 pub const LIST_WITH_CAPACITY: &str = "list_with_capacity";
 pub const LIST_LEN: &str = "len";
@@ -212,7 +216,7 @@ pub fn builtin_enums() -> Vec<EnumDef> {
 }
 
 pub fn is_builtin_enum_type_name(name: &str) -> bool {
-    matches!(name, ORDERING_TYPE)
+    matches!(name, ORDERING_TYPE | OPTION_TYPE | RESULT_TYPE)
 }
 
 pub fn is_reserved_type_name(name: &str) -> bool {
@@ -267,6 +271,10 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | VECTOR_DROP
             | LIST_NEW
             | LIST_WITH_CAPACITY
+            | OPTION_SOME
+            | OPTION_NONE
+            | RESULT_OK
+            | RESULT_ERR
             | OUTER
             | COMPLEX_NEW
             | COMPLEX_ADD

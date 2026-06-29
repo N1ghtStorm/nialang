@@ -56,6 +56,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_atomic_narrow_int.nia",
         "examples/tests/ok_atomic_i128.nia",
         "examples/tests/ok_threads_minimal.nia",
+        "examples/tests/ok_option_result.nia",
         "examples/sample_threads.nia",
         "examples/tests/ok_string.nia",
         "examples/sample_all.nia",

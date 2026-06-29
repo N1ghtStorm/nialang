@@ -96,6 +96,53 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_option_result_constructors_and_match() {
+    let ll = emit(
+        r#"
+fn make_some() Option[i32] {
+    Some(42)
+}
+
+fn make_none() Option[i32] {
+    None
+}
+
+fn unwrap_or_zero(x: Option[i32]) i32 {
+    match x {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn make_ok() Result[i32, string] {
+    Ok(7)
+}
+
+fn make_err() Result[i32, string] {
+    Err("bad")
+}
+
+fn unwrap_result(x: Result[i32, string]) i32 {
+    match x {
+        Ok(n) => n,
+        Err(e) => 0,
+    }
+}
+
+fn main() i32 {
+    unwrap_or_zero(make_some()) + unwrap_or_zero(make_none()) + unwrap_result(make_ok()) + unwrap_result(make_err())
+}
+"#,
+    );
+    assert!(ll.contains("call ptr @malloc(i64 16)"), "IR:\n{ll}");
+    assert!(ll.contains("store i32 1, ptr %"), "IR:\n{ll}");
+    assert!(ll.contains("store i32 0, ptr %"), "IR:\n{ll}");
+    assert!(ll.contains("getelementptr i8, ptr %"), "IR:\n{ll}");
+    assert!(ll.contains("switch i32 %"), "IR:\n{ll}");
+    assert!(ll.contains("call void @free(ptr %"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_builtin_ordering_enum_value() {
     let ll = emit(
         r#"

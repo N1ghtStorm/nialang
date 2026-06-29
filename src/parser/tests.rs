@@ -414,6 +414,11 @@ fn parse_fixture_threads_minimal() {
 }
 
 #[test]
+fn parse_fixture_option_result() {
+    parse_ok(include_str!("../../examples/tests/ok_option_result.nia"));
+}
+
+#[test]
 fn parse_rejects_old_spawn_call_syntax() {
     let src = r#"
 fn worker() {
@@ -612,6 +617,53 @@ fn main() i32 {
 "#;
     let r = Parser::new(tokenize(bare_result)).parse_file();
     assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn parse_option_result_constructors_and_match_patterns() {
+    let src = r#"
+fn unwrap_or_zero(x: Option[i32]) i32 {
+    match x {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn unwrap_result(x: Result[i32, string]) i32 {
+    match x {
+        Ok(n) => n,
+        Err(e) => 0,
+    }
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    let Some(Expr::Match { arms, .. }) = &fns[0].body.tail else {
+        panic!("expected option match tail");
+    };
+    assert!(matches!(
+        &arms[0].0,
+        MatchPattern::Tuple { enum_name, variant, bindings }
+            if enum_name == "Option" && variant == "Some" && bindings == &vec!["n".to_string()]
+    ));
+    assert!(matches!(
+        &arms[1].0,
+        MatchPattern::Unit { enum_name, variant }
+            if enum_name == "Option" && variant == "None"
+    ));
+    let Some(Expr::Match { arms, .. }) = &fns[1].body.tail else {
+        panic!("expected result match tail");
+    };
+    assert!(matches!(
+        &arms[0].0,
+        MatchPattern::Tuple { enum_name, variant, bindings }
+            if enum_name == "Result" && variant == "Ok" && bindings == &vec!["n".to_string()]
+    ));
+    assert!(matches!(
+        &arms[1].0,
+        MatchPattern::Tuple { enum_name, variant, bindings }
+            if enum_name == "Result" && variant == "Err" && bindings == &vec!["e".to_string()]
+    ));
 }
 
 #[test]

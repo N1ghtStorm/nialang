@@ -1,0 +1,37 @@
+fn make_some() Option[i32] {
+    Some(42)
+}
+
+fn make_none() Option[i32] {
+    None
+}
+
+fn unwrap_or_zero(x: Option[i32]) i32 {
+    match x {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn make_ok() Result[i32, string] {
+    Ok(7)
+}
+
+fn make_err() Result[i32, string] {
+    Err("bad")
+}
+
+fn unwrap_result(x: Result[i32, string]) i32 {
+    match x {
+        Ok(n) => n,
+        Err(e) => 0,
+    }
+}
+
+fn main() i32 {
+    let total = unwrap_or_zero(make_some()) + unwrap_or_zero(make_none()) + unwrap_result(make_ok()) + unwrap_result(make_err());
+    if total == 49 {
+        return 0
+    }
+    1
+}

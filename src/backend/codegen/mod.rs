@@ -20,9 +20,9 @@ use crate::nia_std::{
     LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
     MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
     MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
-    OPTION_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT_TYPE, SHA256, SIN,
-    THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
-    VECTOR_SET,
+    OPTION_NONE, OPTION_SOME, OPTION_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD,
+    RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC,
+    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -1099,12 +1099,8 @@ fn supports_clone_method_ty(
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
             supports_clone_method_ty(elem, structs, enums, vectors)
         }
-        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Option(elem) | Ty::Matrix(elem, _) => {
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
             supports_clone_method_ty(elem, structs, enums, vectors)
-        }
-        Ty::ResultType(ok, err) => {
-            supports_clone_method_ty(ok, structs, enums, vectors)
-                && supports_clone_method_ty(err, structs, enums, vectors)
         }
         Ty::Fn(_, _) => true,
         _ => false,
@@ -1453,7 +1449,12 @@ impl<'a> Gen<'a> {
                     && self.is_language_drop_ty(elem)
             }
             Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_language_drop_ty(elem),
-            Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) | Ty::Thread => true,
+            Ty::HeapVector(_)
+            | Ty::List(_)
+            | Ty::Option(_)
+            | Ty::ResultType(_, _)
+            | Ty::Matrix(_, _)
+            | Ty::Thread => true,
             Ty::Fn(_, _) => true,
             _ => false,
         }
@@ -2044,11 +2045,12 @@ impl<'a> Gen<'a> {
             | Ty::AtomicPtr(_)
             | Ty::Thread
             | Ty::Fn(_, _) => false,
-            Ty::Array(elem, _) | Ty::AnonVector(elem, _) | Ty::Option(elem) => {
-                self.is_copy_like_ty(elem)
-            }
-            Ty::ResultType(ok, err) => self.is_copy_like_ty(ok) && self.is_copy_like_ty(err),
-            Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
+            Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_copy_like_ty(elem),
+            Ty::HeapVector(_)
+            | Ty::List(_)
+            | Ty::Option(_)
+            | Ty::ResultType(_, _)
+            | Ty::Matrix(_, _) => false,
             Ty::Struct(name) if name == crate::nia_std::COMPLEX_TYPE => true,
             Ty::Struct(name) => {
                 self.structs
@@ -2255,6 +2257,8 @@ impl<'a> Gen<'a> {
             }
             Ty::HeapVector(elem_ty) => self.emit_heap_vector_drop_value(elem_ty, &value),
             Ty::List(elem_ty) => self.emit_list_drop_value(elem_ty, &value),
+            Ty::Option(elem_ty) => self.emit_option_drop_value(elem_ty, &value),
+            Ty::ResultType(ok_ty, err_ty) => self.emit_result_drop_value(ok_ty, err_ty, &value),
             Ty::Matrix(_, _) => self.emit_matrix_drop_value(&value),
             Ty::Thread => self.emit_thread_detach_drop(&value),
             Ty::Vector(name, elem_ty) => {
@@ -2303,6 +2307,103 @@ impl<'a> Gen<'a> {
             Ty::Fn(_, _) => self.emit_fn_value_drop(&value),
             _ => {}
         }
+    }
+
+    fn emit_sum_payload_ptr(&mut self, value: &str) -> String {
+        let slot = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr i8, ptr {}, i64 8",
+            slot, value
+        )
+        .unwrap();
+        let payload = self.fresh();
+        writeln!(self.out, "  %{} = load ptr, ptr %{}", payload, slot).unwrap();
+        format!("%{payload}")
+    }
+
+    fn emit_option_drop_value(&mut self, elem_ty: &Ty, value: &str) {
+        let tag = self.fresh();
+        let drop_payload_lbl = self.fresh_label("option.drop.payload");
+        let free_lbl = self.fresh_label("option.drop.free");
+        writeln!(self.out, "  %{} = load i32, ptr {}", tag, value).unwrap();
+        let is_some = self.fresh();
+        writeln!(self.out, "  %{} = icmp eq i32 %{}, 1", is_some, tag).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_some, drop_payload_lbl, free_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", drop_payload_lbl).unwrap();
+        let payload = self.emit_sum_payload_ptr(value);
+        if self.is_language_drop_ty(elem_ty) {
+            let loaded = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = load {}, ptr {}",
+                loaded,
+                llvm_ty(elem_ty, self.structs),
+                payload
+            )
+            .unwrap();
+            self.emit_drop_value(elem_ty, format!("%{loaded}"));
+        }
+        writeln!(self.out, "  call void @free(ptr {})", payload).unwrap();
+        writeln!(self.out, "  br label %{}", free_lbl).unwrap();
+        writeln!(self.out, "{}:", free_lbl).unwrap();
+        writeln!(self.out, "  call void @free(ptr {})", value).unwrap();
+    }
+
+    fn emit_result_drop_value(&mut self, ok_ty: &Ty, err_ty: &Ty, value: &str) {
+        let tag = self.fresh();
+        let ok_lbl = self.fresh_label("result.drop.ok");
+        let err_lbl = self.fresh_label("result.drop.err");
+        let free_lbl = self.fresh_label("result.drop.free");
+        writeln!(self.out, "  %{} = load i32, ptr {}", tag, value).unwrap();
+        writeln!(
+            self.out,
+            "  switch i32 %{}, label %{} [ i32 0, label %{} i32 1, label %{} ]",
+            tag, free_lbl, ok_lbl, err_lbl
+        )
+        .unwrap();
+
+        writeln!(self.out, "{}:", ok_lbl).unwrap();
+        let payload = self.emit_sum_payload_ptr(value);
+        if self.is_language_drop_ty(ok_ty) {
+            let loaded = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = load {}, ptr {}",
+                loaded,
+                llvm_ty(ok_ty, self.structs),
+                payload
+            )
+            .unwrap();
+            self.emit_drop_value(ok_ty, format!("%{loaded}"));
+        }
+        writeln!(self.out, "  call void @free(ptr {})", payload).unwrap();
+        writeln!(self.out, "  br label %{}", free_lbl).unwrap();
+
+        writeln!(self.out, "{}:", err_lbl).unwrap();
+        let payload = self.emit_sum_payload_ptr(value);
+        if self.is_language_drop_ty(err_ty) {
+            let loaded = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = load {}, ptr {}",
+                loaded,
+                llvm_ty(err_ty, self.structs),
+                payload
+            )
+            .unwrap();
+            self.emit_drop_value(err_ty, format!("%{loaded}"));
+        }
+        writeln!(self.out, "  call void @free(ptr {})", payload).unwrap();
+        writeln!(self.out, "  br label %{}", free_lbl).unwrap();
+
+        writeln!(self.out, "{}:", free_lbl).unwrap();
+        writeln!(self.out, "  call void @free(ptr {})", value).unwrap();
     }
 
     fn emit_drop_struct_fields(&mut self, name: &str, value: &str) {
@@ -3541,6 +3642,204 @@ impl<'a> Gen<'a> {
         )
         .unwrap();
         format!("%{out}")
+    }
+
+    fn emit_sum_value(
+        &mut self,
+        tag: i32,
+        payload_ty: Option<&Ty>,
+        payload_value: Option<&str>,
+    ) -> String {
+        let obj = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 16)", obj).unwrap();
+        writeln!(self.out, "  store i32 {}, ptr %{}", tag, obj).unwrap();
+        let payload_slot = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr i8, ptr %{}, i64 8",
+            payload_slot, obj
+        )
+        .unwrap();
+        if let (Some(payload_ty), Some(payload_value)) = (payload_ty, payload_value) {
+            let payload_size = self.emit_sizeof_i64(payload_ty);
+            let payload = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = call ptr @malloc(i64 {})",
+                payload, payload_size
+            )
+            .unwrap();
+            writeln!(
+                self.out,
+                "  store {} {}, ptr %{}",
+                llvm_ty(payload_ty, self.structs),
+                payload_value,
+                payload
+            )
+            .unwrap();
+            writeln!(self.out, "  store ptr %{}, ptr %{}", payload, payload_slot).unwrap();
+        } else {
+            writeln!(self.out, "  store ptr null, ptr %{}", payload_slot).unwrap();
+        }
+        format!("%{obj}")
+    }
+
+    fn emit_option_none_value(&mut self, hint: Option<&Ty>) -> (Ty, String) {
+        let Some(Ty::Option(elem_ty)) = hint else {
+            unreachable!("typechecked None")
+        };
+        let value = self.emit_sum_value(0, None, None);
+        (Ty::Option(elem_ty.clone()), value)
+    }
+
+    fn emit_option_some_value(
+        &mut self,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+        hint: Option<&Ty>,
+    ) -> (Ty, String) {
+        let (elem_ty, payload) = match hint {
+            Some(Ty::Option(elem_ty)) => {
+                let elem_ty = elem_ty.as_ref().clone();
+                let (_, payload) = self.emit_expr(&args[0], locals, Some(&elem_ty));
+                (elem_ty, payload)
+            }
+            _ => self.emit_expr(&args[0], locals, None),
+        };
+        let value = self.emit_sum_value(1, Some(&elem_ty), Some(&payload));
+        (Ty::Option(Box::new(elem_ty)), value)
+    }
+
+    fn emit_result_value(
+        &mut self,
+        tag: i32,
+        args: &[Expr],
+        locals: &HashMap<String, (Ty, String)>,
+        hint: Option<&Ty>,
+    ) -> (Ty, String) {
+        let Some(Ty::ResultType(ok_ty, err_ty)) = hint else {
+            unreachable!("typechecked Result constructor")
+        };
+        let payload_ty = if tag == 0 {
+            ok_ty.as_ref()
+        } else {
+            err_ty.as_ref()
+        };
+        let (_, payload) = self.emit_expr(&args[0], locals, Some(payload_ty));
+        let value = self.emit_sum_value(tag, Some(payload_ty), Some(&payload));
+        (Ty::ResultType(ok_ty.clone(), err_ty.clone()), value)
+    }
+
+    fn emit_builtin_sum_match(
+        &mut self,
+        sum_value: &str,
+        variants: &[(&str, Option<Ty>, i32)],
+        arms: &[(MatchPattern, Expr)],
+        locals: &HashMap<String, (Ty, String)>,
+        hint: Option<&Ty>,
+    ) -> (Ty, String) {
+        let tag_tmp = self.fresh();
+        writeln!(self.out, "  %{} = load i32, ptr {}", tag_tmp, sum_value).unwrap();
+        let cont_lbl = self.fresh_label("match.cont");
+        let default_lbl = self.fresh_label("match.default");
+        let arm_labels = arms
+            .iter()
+            .map(|_| self.fresh_label("match.arm"))
+            .collect::<Vec<_>>();
+        writeln!(
+            self.out,
+            "  switch i32 %{}, label %{} [",
+            tag_tmp, default_lbl
+        )
+        .unwrap();
+        for ((pat, _), lbl) in arms.iter().zip(&arm_labels) {
+            let variant = match pat {
+                MatchPattern::Unit { variant, .. }
+                | MatchPattern::Tuple { variant, .. }
+                | MatchPattern::Struct { variant, .. } => variant,
+            };
+            let tag = variants
+                .iter()
+                .find(|(candidate, _, _)| candidate == variant)
+                .map(|(_, _, tag)| *tag)
+                .expect("typechecked builtin sum variant");
+            writeln!(self.out, "    i32 {}, label %{}", tag, lbl).unwrap();
+        }
+        writeln!(self.out, "  ]").unwrap();
+        writeln!(self.out, "{}:", default_lbl).unwrap();
+        writeln!(self.out, "  unreachable").unwrap();
+
+        let mut arm_vals: Vec<(String, String)> = Vec::new();
+        let mut out_ty: Option<Ty> = None;
+        for ((pat, arm_expr), lbl) in arms.iter().zip(&arm_labels) {
+            writeln!(self.out, "{}:", lbl).unwrap();
+            let mut arm_locals = locals.clone();
+            let variant = match pat {
+                MatchPattern::Unit { variant, .. }
+                | MatchPattern::Tuple { variant, .. }
+                | MatchPattern::Struct { variant, .. } => variant,
+            };
+            if let MatchPattern::Tuple { bindings, .. } = pat {
+                let payload_ty = variants
+                    .iter()
+                    .find(|(candidate, _, _)| candidate == variant)
+                    .and_then(|(_, payload_ty, _)| payload_ty.as_ref())
+                    .expect("typechecked builtin sum payload");
+                let payload_ptr = self.emit_sum_payload_ptr(sum_value);
+                let loaded = self.fresh();
+                writeln!(
+                    self.out,
+                    "  %{} = load {}, ptr {}",
+                    loaded,
+                    llvm_ty(payload_ty, self.structs),
+                    payload_ptr
+                )
+                .unwrap();
+                let ptr = format!("%{}.addr", sanitize(&bindings[0]));
+                writeln!(
+                    self.out,
+                    "  {} = alloca {}",
+                    ptr,
+                    llvm_ty(payload_ty, self.structs)
+                )
+                .unwrap();
+                writeln!(
+                    self.out,
+                    "  store {} %{}, ptr {}",
+                    llvm_ty(payload_ty, self.structs),
+                    loaded,
+                    ptr
+                )
+                .unwrap();
+                writeln!(self.out, "  call void @free(ptr {})", payload_ptr).unwrap();
+                arm_locals.insert(bindings[0].clone(), (payload_ty.clone(), ptr));
+            }
+            let arm_hint = hint.or(out_ty.as_ref());
+            let (at, av) = self.emit_expr(arm_expr, &arm_locals, arm_hint);
+            if !matches!(at, Ty::Unit) {
+                arm_vals.push((av.clone(), lbl.clone()));
+            }
+            if out_ty.is_none() {
+                out_ty = Some(at.clone());
+            }
+            writeln!(self.out, "  call void @free(ptr {})", sum_value).unwrap();
+            writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        }
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        let out_ty = out_ty.expect("typechecked non-empty match");
+        if matches!(out_ty, Ty::Unit) {
+            (Ty::Unit, String::new())
+        } else {
+            let phi = self.fresh();
+            let ll = llvm_ty(&out_ty, self.structs);
+            let incoming = arm_vals
+                .iter()
+                .map(|(v, l)| format!("[ {}, %{} ]", v, l))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(self.out, "  %{} = phi {} {}", phi, ll, incoming).unwrap();
+            (out_ty, format!("%{phi}"))
+        }
     }
 
     fn emit_f64_binop(&mut self, op: &str, left: &str, right: &str) -> String {
@@ -8636,6 +8935,9 @@ impl<'a> Gen<'a> {
                 (Ty::String, format!("%{tmp}"))
             }
             Expr::Ident(name) => {
+                if name == OPTION_NONE {
+                    return self.emit_option_none_value(hint);
+                }
                 let Some((ty, ptr)) = locals.get(name) else {
                     if name == PI {
                         return (Ty::F64, self.emit_pi_value());
@@ -9404,6 +9706,15 @@ impl<'a> Gen<'a> {
                 self.emit_fn_value_call(&callee_val, &params, &ret, args, locals)
             }
             Expr::Call { name, args } => {
+                if name == OPTION_SOME {
+                    return self.emit_option_some_value(args, locals, hint);
+                }
+                if name == RESULT_OK {
+                    return self.emit_result_value(0, args, locals, hint);
+                }
+                if name == RESULT_ERR {
+                    return self.emit_result_value(1, args, locals, hint);
+                }
                 if let Some((Ty::Fn(params, ret), ptr)) = locals.get(name) {
                     let params = params.clone();
                     let ret = ret.as_ref().clone();
@@ -10121,6 +10432,30 @@ impl<'a> Gen<'a> {
             }
             Expr::Match { scrutinee, arms } => {
                 let (st, sv) = self.emit_expr(scrutinee, locals, None);
+                if let Ty::Option(elem_ty) = &st {
+                    return self.emit_builtin_sum_match(
+                        &sv,
+                        &[
+                            (OPTION_NONE, None, 0),
+                            (OPTION_SOME, Some(elem_ty.as_ref().clone()), 1),
+                        ],
+                        arms,
+                        locals,
+                        hint,
+                    );
+                }
+                if let Ty::ResultType(ok_ty, err_ty) = &st {
+                    return self.emit_builtin_sum_match(
+                        &sv,
+                        &[
+                            (RESULT_OK, Some(ok_ty.as_ref().clone()), 0),
+                            (RESULT_ERR, Some(err_ty.as_ref().clone()), 1),
+                        ],
+                        arms,
+                        locals,
+                        hint,
+                    );
+                }
                 let Ty::Enum(enum_name) = st else {
                     unreachable!("typechecked match enum")
                 };
@@ -10299,7 +10634,8 @@ impl<'a> Gen<'a> {
                         }
                         _ => unreachable!("typechecked pattern kind"),
                     }
-                    let (at, av) = self.emit_expr(arm_expr, &arm_locals, hint);
+                    let arm_hint = hint.or(out_ty.as_ref());
+                    let (at, av) = self.emit_expr(arm_expr, &arm_locals, arm_hint);
                     if !matches!(at, Ty::Unit) {
                         arm_vals.push((av.clone(), lbl.clone()));
                     }

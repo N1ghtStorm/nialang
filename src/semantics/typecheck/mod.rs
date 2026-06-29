@@ -18,9 +18,9 @@ use crate::nia_std::{
     LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP,
     MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE,
     MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
-    OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT,
-    RESULT_TYPE, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE,
-    VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    OPTION_NONE, OPTION_SOME, OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
+    RECORD, RESULT, RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY,
+    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -830,15 +830,17 @@ fn has_formal_ability(
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) if !matches!(ability, Ability::Deref) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
-        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Option(elem)
+        Ty::HeapVector(elem) | Ty::List(elem)
             if matches!(ability, Ability::Clone | Ability::Drop) =>
         {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
-        Ty::Option(elem) if matches!(ability, Ability::Copy | Ability::Send | Ability::Sync) => {
+        Ty::Option(elem) if matches!(ability, Ability::Drop | Ability::Send | Ability::Sync) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
-        Ty::ResultType(ok, err) if !matches!(ability, Ability::Deref) => {
+        Ty::ResultType(ok, err)
+            if matches!(ability, Ability::Drop | Ability::Send | Ability::Sync) =>
+        {
             has_formal_ability(ok, ability, structs, enums, vectors)
                 && has_formal_ability(err, ability, structs, enums, vectors)
         }
@@ -1039,7 +1041,7 @@ fn ability_failure_reason(
         Ty::Thread if matches!(ability, Ability::Copy | Ability::Clone) => {
             "Thread handles are move-only; use `join(t)` or `drop(t)` to consume them".into()
         }
-        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Option(elem) | Ty::Matrix(elem, _)
+        Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _)
             if matches!(ability, Ability::Clone | Ability::Drop) =>
         {
             format!(
@@ -1049,11 +1051,20 @@ fn ability_failure_reason(
                 ability_failure_reason(elem, ability, structs, enums, vectors)
             )
         }
+        Ty::Option(elem) if matches!(ability, Ability::Copy | Ability::Clone) => {
+            format!(
+                "Option values are move-only runtime owners; payload type {} is stored behind a runtime handle",
+                ty_diag_label(elem)
+            )
+        }
         Ty::Option(elem) => format!(
             "Option payload type {} is missing `{ability_name}`: {}",
             ty_diag_label(elem),
             ability_failure_reason(elem, ability, structs, enums, vectors)
         ),
+        Ty::ResultType(_, _) if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "Result values are move-only runtime owners".into()
+        }
         Ty::ResultType(ok, err) => format!(
             "Result payload types {}, {} must both support `{ability_name}`",
             ty_diag_label(ok),
@@ -2332,11 +2343,12 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::AtomicPtr(_)
         | Ty::Thread
         | Ty::Fn(_, _) => false,
-        Ty::Array(elem, _) | Ty::AnonVector(elem, _) | Ty::Option(elem) => {
-            is_copy_for_moves(elem, ctx)
-        }
-        Ty::ResultType(ok, err) => is_copy_for_moves(ok, ctx) && is_copy_for_moves(err, ctx),
-        Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _) => false,
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
+        Ty::HeapVector(_)
+        | Ty::List(_)
+        | Ty::Option(_)
+        | Ty::ResultType(_, _)
+        | Ty::Matrix(_, _) => false,
         Ty::Struct(name) if name == COMPLEX_TYPE => true,
         Ty::Struct(name) if ctx.vectors.contains_key(name) => {
             let vector = ctx.vectors.get(name).expect("checked vector existence");
@@ -2901,6 +2913,19 @@ fn check_moves_call(
         return Ok(());
     }
 
+    if (name == OPTION_SOME || name == RESULT_OK || name == RESULT_ERR) && args.len() == 1 {
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )?;
+        return Ok(());
+    }
+
     if let Some(def) = ctx.structs.get(name) {
         if def.is_tuple {
             let params = def
@@ -3334,6 +3359,28 @@ fn check_moves_match_arm_bindings(
     }
 }
 
+fn check_moves_builtin_sum_match_arm_bindings(
+    pattern: &MatchPattern,
+    variants: &[(&str, Option<Ty>)],
+    arm_env: &mut HashMap<String, Ty>,
+    arm_states: &mut MoveStates,
+) {
+    let MatchPattern::Tuple {
+        variant, bindings, ..
+    } = pattern
+    else {
+        return;
+    };
+    let Some((_, Some(payload_ty))) = variants.iter().find(|(candidate, _)| candidate == variant)
+    else {
+        return;
+    };
+    if let Some(binding) = bindings.first() {
+        arm_env.insert(binding.clone(), payload_ty.clone());
+        arm_states.insert(binding.clone(), LocalMoveState::Available);
+    }
+}
+
 fn check_moves_closure(
     is_move: bool,
     params: &[(String, Option<Ty>)],
@@ -3590,18 +3637,40 @@ fn check_moves_expr(
                 None,
                 ExprMoveMode::Consume(MoveReason::ExpressionResult),
             )?;
-            let Ty::Enum(enum_name) = scrutinee_ty else {
-                return Ok(inferred);
+            let builtin_variants = match &scrutinee_ty {
+                Ty::Option(elem_ty) => Some(vec![
+                    (OPTION_NONE, None),
+                    (OPTION_SOME, Some(elem_ty.as_ref().clone())),
+                ]),
+                Ty::ResultType(ok_ty, err_ty) => Some(vec![
+                    (RESULT_OK, Some(ok_ty.as_ref().clone())),
+                    (RESULT_ERR, Some(err_ty.as_ref().clone())),
+                ]),
+                _ => None,
             };
-            let Some(edef) = ctx.enums.get(&enum_name) else {
-                return Ok(inferred);
+            let enum_def = if let Ty::Enum(enum_name) = &scrutinee_ty {
+                ctx.enums.get(enum_name)
+            } else {
+                None
             };
+            if builtin_variants.is_none() && enum_def.is_none() {
+                return Ok(inferred);
+            }
             let mut merged_states = states.clone();
             for (pattern, arm_expr) in arms {
                 let mut arm_env = env.clone();
                 let mut arm_states = states.clone();
                 let mut arm_fn_values = fn_values.clone();
-                check_moves_match_arm_bindings(pattern, edef, &mut arm_env, &mut arm_states);
+                if let Some(variants) = &builtin_variants {
+                    check_moves_builtin_sum_match_arm_bindings(
+                        pattern,
+                        variants,
+                        &mut arm_env,
+                        &mut arm_states,
+                    );
+                } else if let Some(edef) = enum_def {
+                    check_moves_match_arm_bindings(pattern, edef, &mut arm_env, &mut arm_states);
+                }
                 check_moves_expr(
                     arm_expr,
                     &mut arm_env,
@@ -5251,6 +5320,9 @@ fn infer_expr(
             Some(other) => Err(format!("string literal cannot satisfy {other:?}")),
         },
         Expr::Ident(name) => {
+            if name == OPTION_NONE {
+                return infer_option_none(hint);
+            }
             if let Some(t) = env.get(name) {
                 if is_atomic_ty(t) {
                     return Err(format!(
@@ -5373,6 +5445,14 @@ fn infer_expr(
             infer_fn_value_call(&callee_ty, args, env, structs, enums, vectors, fns)
         }
         Expr::Call { name, args } => {
+            if name == OPTION_SOME {
+                return infer_option_some(args, env, structs, enums, vectors, fns, hint);
+            }
+            if name == RESULT_OK || name == RESULT_ERR {
+                return infer_result_constructor(
+                    name, args, env, structs, enums, vectors, fns, hint,
+                );
+            }
             if let Some(local_ty) = env.get(name) {
                 if matches!(local_ty, Ty::Fn(_, _)) {
                     return infer_fn_value_call(local_ty, args, env, structs, enums, vectors, fns);
@@ -6612,8 +6692,40 @@ fn infer_expr(
         }
         Expr::Match { scrutinee, arms } => {
             let st = infer_expr(scrutinee, env, structs, enums, vectors, fns, None)?;
+            if let Ty::Option(elem_ty) = &st {
+                return infer_builtin_sum_match(
+                    OPTION_TYPE,
+                    &[
+                        (OPTION_NONE, None),
+                        (OPTION_SOME, Some(elem_ty.as_ref().clone())),
+                    ],
+                    arms,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    hint,
+                );
+            }
+            if let Ty::ResultType(ok_ty, err_ty) = &st {
+                return infer_builtin_sum_match(
+                    RESULT_TYPE,
+                    &[
+                        (RESULT_OK, Some(ok_ty.as_ref().clone())),
+                        (RESULT_ERR, Some(err_ty.as_ref().clone())),
+                    ],
+                    arms,
+                    env,
+                    structs,
+                    enums,
+                    vectors,
+                    fns,
+                    hint,
+                );
+            }
             let Ty::Enum(enum_name) = st else {
-                return Err("`match` scrutinee must be enum".into());
+                return Err("`match` scrutinee must be enum, Option[T], or Result[T, E]".into());
             };
             let edef = enums
                 .get(&enum_name)
@@ -6703,7 +6815,8 @@ fn infer_expr(
                         ));
                     }
                 }
-                let at = infer_expr(arm_expr, &arm_env, structs, enums, vectors, fns, hint)?;
+                let arm_hint = hint.or(out_ty.as_ref());
+                let at = infer_expr(arm_expr, &arm_env, structs, enums, vectors, fns, arm_hint)?;
                 if let Some(prev) = &out_ty {
                     if !types_equal(prev, &at) {
                         return Err(format!(
@@ -7417,6 +7530,186 @@ fn check_stmt(
         }
     }
     Ok(())
+}
+
+fn infer_option_some(
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+    hint: Option<&Ty>,
+) -> Result<Ty, String> {
+    if args.len() != 1 {
+        return Err(format!("`{OPTION_SOME}` expects exactly 1 argument"));
+    }
+    if let Some(Ty::Option(elem_ty)) = hint {
+        let got = infer_expr(&args[0], env, structs, enums, vectors, fns, Some(elem_ty))?;
+        if !types_equal(&got, elem_ty) {
+            return Err(format!(
+                "`{OPTION_SOME}` payload type mismatch: expected {elem_ty:?}, got {got:?}"
+            ));
+        }
+        return Ok(Ty::Option(elem_ty.clone()));
+    }
+    if let Some(other) = hint {
+        return Err(format!(
+            "`{OPTION_SOME}` requires expected Option[T] type, got {}",
+            ty_diag_label(other)
+        ));
+    }
+    let elem_ty = infer_expr(&args[0], env, structs, enums, vectors, fns, None)?;
+    if matches!(elem_ty, Ty::Unit) {
+        return Err(format!("`{OPTION_SOME}` payload cannot be `()`"));
+    }
+    Ok(Ty::Option(Box::new(elem_ty)))
+}
+
+fn infer_option_none(hint: Option<&Ty>) -> Result<Ty, String> {
+    match hint {
+        Some(Ty::Option(elem_ty)) => Ok(Ty::Option(elem_ty.clone())),
+        Some(other) => Err(format!(
+            "`{OPTION_NONE}` requires expected Option[T] type, got {}",
+            ty_diag_label(other)
+        )),
+        None => Err(format!(
+            "`{OPTION_NONE}` requires an expected Option[T] type annotation"
+        )),
+    }
+}
+
+fn infer_result_constructor(
+    name: &str,
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+    hint: Option<&Ty>,
+) -> Result<Ty, String> {
+    if args.len() != 1 {
+        return Err(format!("`{name}` expects exactly 1 argument"));
+    }
+    let Some(Ty::ResultType(ok_ty, err_ty)) = hint else {
+        return match hint {
+            Some(other) => Err(format!(
+                "`{name}` requires expected Result[T, E] type, got {}",
+                ty_diag_label(other)
+            )),
+            None => Err(format!(
+                "`{name}` requires an expected Result[T, E] type annotation"
+            )),
+        };
+    };
+    let payload_ty = if name == RESULT_OK { ok_ty } else { err_ty };
+    let got = infer_expr(
+        &args[0],
+        env,
+        structs,
+        enums,
+        vectors,
+        fns,
+        Some(payload_ty),
+    )?;
+    if !types_equal(&got, payload_ty) {
+        return Err(format!(
+            "`{name}` payload type mismatch: expected {payload_ty:?}, got {got:?}"
+        ));
+    }
+    Ok(Ty::ResultType(ok_ty.clone(), err_ty.clone()))
+}
+
+fn infer_builtin_sum_match(
+    sum_name: &str,
+    variants: &[(&str, Option<Ty>)],
+    arms: &[(MatchPattern, Expr)],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+    hint: Option<&Ty>,
+) -> Result<Ty, String> {
+    let mut seen = HashSet::new();
+    let mut out_ty: Option<Ty> = None;
+    for (pat, arm_expr) in arms {
+        let (pat_enum, pat_variant, pat_fields) = match pat {
+            MatchPattern::Unit { enum_name, variant } => (enum_name, variant, None),
+            MatchPattern::Tuple {
+                enum_name,
+                variant,
+                bindings,
+            } => (enum_name, variant, Some((true, bindings))),
+            MatchPattern::Struct {
+                enum_name,
+                variant,
+                bindings,
+            } => (enum_name, variant, Some((false, bindings))),
+        };
+        if pat_enum != sum_name {
+            return Err(format!(
+                "match pattern type mismatch: expected `{sum_name}`, got `{pat_enum}`"
+            ));
+        }
+        let Some((_, payload_ty)) = variants.iter().find(|(variant, _)| variant == pat_variant)
+        else {
+            return Err(format!("type `{sum_name}` has no variant `{pat_variant}`"));
+        };
+        if !seen.insert(pat_variant.to_string()) {
+            return Err(format!("duplicate match arm `{sum_name}::{pat_variant}`"));
+        }
+        let mut arm_env = env.clone();
+        match (payload_ty, pat_fields) {
+            (None, None) => {}
+            (None, Some(_)) => {
+                return Err(format!(
+                    "unit variant `{sum_name}::{pat_variant}` cannot bind fields"
+                ));
+            }
+            (Some(_), None) => {
+                return Err(format!(
+                    "payload variant `{sum_name}::{pat_variant}` requires tuple pattern"
+                ));
+            }
+            (Some(_), Some((false, _))) => {
+                return Err(format!(
+                    "payload variant `{sum_name}::{pat_variant}` requires tuple pattern"
+                ));
+            }
+            (Some(payload_ty), Some((true, bindings))) => {
+                if bindings.len() != 1 {
+                    return Err(format!(
+                        "match tuple pattern `{sum_name}::{pat_variant}` expects 1 binding, got {}",
+                        bindings.len()
+                    ));
+                }
+                let binding = &bindings[0];
+                if arm_env.contains_key(binding) {
+                    return Err(format!(
+                        "match pattern: `{binding}` is already bound (duplicate binding or shadowing is not allowed)"
+                    ));
+                }
+                arm_env.insert(binding.clone(), payload_ty.clone());
+            }
+        }
+        let arm_hint = hint.or(out_ty.as_ref());
+        let at = infer_expr(arm_expr, &arm_env, structs, enums, vectors, fns, arm_hint)?;
+        if let Some(prev) = &out_ty {
+            if !types_equal(prev, &at) {
+                return Err(format!(
+                    "match arm types differ: expected {prev:?}, got {at:?}"
+                ));
+            }
+        } else {
+            out_ty = Some(at);
+        }
+    }
+    if seen.len() != variants.len() {
+        return Err(format!("non-exhaustive match on `{sum_name}`"));
+    }
+    Ok(out_ty.unwrap_or(Ty::Unit))
 }
 
 #[cfg(test)]
