@@ -530,32 +530,7 @@ Goal: shared ownership across threads.
   non-`send + sync` inner rejection, atomic refcount increment/decrement, and `Arc[AtomicI32]`
   method access through `*arc`.
 
-### Phase 2: Mutex[T]
-
-Goal: exclusive access to shared data.
-
-- `mutex_new`, `.lock`, `.try_lock`, `MutexGuard` RAII;
-- `mut guard` exposes `&mut T` through deref;
-- sample: `examples/sample_mutex.nia`;
-- stress test: two threads increment shared `Arc[Mutex[i32]]`.
-
-### Phase 3: RwLock[T]
-
-Goal: read-heavy shared state.
-
-- `rwlock_new`, read/write guards, try variants;
-- sample: `examples/sample_rwlock.nia`;
-- tests: concurrent readers, exclusive writer.
-
-### Phase 4: Condvar
-
-Goal: blocking until shared state changes.
-
-- `condvar_new`, `wait`, `notify_one`, `notify_all`;
-- sample producer/consumer with `Mutex` + `Condvar`;
-- tests: waiter wakes after `notify_one`, predicate loop handles spurious wakeup.
-
-### Phase 5: spawn move ||
+### Phase 2: spawn move ||
 
 Goal: thread closures with moved `send` captures.
 
@@ -565,6 +540,31 @@ Goal: thread closures with moved `send` captures.
 - keep `spawn top_level_fn` working;
 - migrate [`examples/sample_threads.nia`](../examples/sample_threads.nia) and add
   `examples/sample_threads_closure.nia`.
+
+### Phase 3: Mutex[T]
+
+Goal: exclusive access to shared data.
+
+- `mutex_new`, `.lock`, `.try_lock`, `MutexGuard` RAII;
+- `mut guard` exposes `&mut T` through deref;
+- sample: `examples/sample_mutex.nia`;
+- stress test: two threads increment shared `Arc[Mutex[i32]]`.
+
+### Phase 4: RwLock[T]
+
+Goal: read-heavy shared state.
+
+- `rwlock_new`, read/write guards, try variants;
+- sample: `examples/sample_rwlock.nia`;
+- tests: concurrent readers, exclusive writer.
+
+### Phase 5: Condvar
+
+Goal: blocking until shared state changes.
+
+- `condvar_new`, `wait`, `notify_one`, `notify_all`;
+- sample producer/consumer with `Mutex` + `Condvar`;
+- tests: waiter wakes after `notify_one`, predicate loop handles spurious wakeup.
 
 ### Phase 6: Documentation and spec
 
@@ -641,12 +641,12 @@ Runtime integration (execute compiled binary):
 
 1. Phase 0 — `send` / `sync` queries and declared-ability validation.
 2. Phase 1 — `Arc[T]` (needed by every later example).
-3. Phase 5 — `spawn move ||` (can ship right after Arc if thread closures are higher priority than
-   locks; mutex tests want Arc first).
-4. Phase 2 — `Mutex[T]`.
-5. Phase 3 — `RwLock[T]`.
-6. Phase 4 — `Condvar`.
+3. Phase 2 — `spawn move ||` (can ship right after Arc; mutex integration tests want thread
+   closures available).
+4. Phase 3 — `Mutex[T]`.
+5. Phase 4 — `RwLock[T]`.
+6. Phase 5 — `Condvar`.
 7. Phase 6 — docs and spec.
 
-Practical parallel track: Phases 2–4 runtime code can be developed against placeholder `send`/`sync`
+Practical parallel track: Phases 3–5 runtime code can be developed against placeholder `send`/`sync`
 checks, but do not ship without Phase 0 enforcement.
