@@ -1,6 +1,6 @@
 # Concurrency Plan: Send, Sync, Arc, Mutex, RwLock, Condvar, and Threads
 
-Status: Phases 0-3 are implemented. Phase 4 is next.
+Status: Phases 0-4 are implemented. Phase 5 is next.
 
 Depends on:
 
@@ -403,11 +403,14 @@ Declare in the LLVM prelude:
 declare i32 @pthread_mutex_init(ptr, ptr)
 declare i32 @pthread_mutex_destroy(ptr)
 declare i32 @pthread_mutex_lock(ptr)
+declare i32 @pthread_mutex_trylock(ptr)
 declare i32 @pthread_mutex_unlock(ptr)
 declare i32 @pthread_rwlock_init(ptr, ptr)
 declare i32 @pthread_rwlock_destroy(ptr)
 declare i32 @pthread_rwlock_rdlock(ptr)
 declare i32 @pthread_rwlock_wrlock(ptr)
+declare i32 @pthread_rwlock_tryrdlock(ptr)
+declare i32 @pthread_rwlock_trywrlock(ptr)
 declare i32 @pthread_rwlock_unlock(ptr)
 declare i32 @pthread_cond_init(ptr, ptr)
 declare i32 @pthread_cond_destroy(ptr)
@@ -548,15 +551,18 @@ Goal: exclusive access to shared data.
 - implemented: `MutexGuard` RAII unlock on `drop` / scope exit;
 - implemented: `*guard` read/write access to protected value;
 - added `examples/sample_mutex.nia`;
-- added runtime stress sample: two threads increment shared `Arc[Mutex[i32]]` to 2000.
+- added runtime stress sample: two threads increment shared `Arc[Mutex[i32]]` to 20000.
 
 ### Phase 4: RwLock[T]
 
 Goal: read-heavy shared state.
 
-- `rwlock_new`, read/write guards, try variants;
-- sample: `examples/sample_rwlock.nia`;
-- tests: concurrent readers, exclusive writer.
+- implemented: `RwLock[T]`, `RwLockReadGuard[T]`, `RwLockWriteGuard[T]`;
+- implemented: `rwlock_new`, `.read`, `.write`, `.try_read`, `.try_write`;
+- implemented: guard RAII unlock on `drop` / scope exit;
+- implemented: read guard deref for read-only access and write guard deref for read/write access;
+- added `examples/sample_rwlock.nia`;
+- added tests for concurrent readers, exclusive writer, try variants, and read-only guard rejection.
 
 ### Phase 5: Condvar
 

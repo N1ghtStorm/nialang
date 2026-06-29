@@ -426,6 +426,13 @@ fn parse_fixture_mutex_basic() {
 }
 
 #[test]
+fn parse_fixture_rwlock_read_write() {
+    parse_ok(include_str!(
+        "../../examples/tests/ok_rwlock_read_write.nia"
+    ));
+}
+
+#[test]
 fn parse_fixture_option_result() {
     parse_ok(include_str!("../../examples/tests/ok_option_result.nia"));
 }
@@ -694,6 +701,37 @@ fn main() i32 {
             ));
         }
         other => panic!("expected typed mutex let, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_rwlock_types_guards_and_generic_constructor() {
+    let src = r#"
+fn main() i32 {
+    let rw: RwLock[i32] = rwlock_new[i32](1);
+    let r: RwLockReadGuard[i32] = rw.read();
+    let w: RwLockWriteGuard[i32] = rw.write();
+    drop(r);
+    drop(w);
+    0
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    match &fns[0].body.stmts[0] {
+        Stmt::Let {
+            ty: Some(ty),
+            init: Some(init),
+            ..
+        } => {
+            assert_eq!(ty, &Ty::RwLock(Box::new(Ty::I32)));
+            assert!(matches!(
+                init,
+                Expr::GenericCall { name, ty_args, args }
+                    if name == "rwlock_new" && ty_args == &vec![Ty::I32] && args.len() == 1
+            ));
+        }
+        other => panic!("expected typed rwlock let, got {other:?}"),
     }
 }
 

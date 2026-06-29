@@ -979,6 +979,94 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_rwlock_read_write_try_and_drop_use_pthread() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let rw: RwLock[i32] = rwlock_new(0);
+
+    let read_guard: RwLockReadGuard[i32] = rw.read();
+    println(*read_guard);
+    drop(read_guard);
+
+    let write_guard: RwLockWriteGuard[i32] = rw.write();
+    *write_guard = *write_guard + 1;
+    drop(write_guard);
+
+    let maybe_read: Option[RwLockReadGuard[i32]] = rw.try_read();
+    drop(maybe_read);
+
+    let maybe_write: Option[RwLockWriteGuard[i32]] = rw.try_write();
+    drop(maybe_write);
+
+    drop(rw);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_rwlock_init(ptr, ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_rwlock_rdlock(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_rwlock_wrlock(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_rwlock_tryrdlock(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_rwlock_trywrlock(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_rwlock_unlock(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_rwlock_destroy(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_rwlock_init(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_rwlock_rdlock(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_rwlock_wrlock(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_rwlock_tryrdlock(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_rwlock_trywrlock(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_rwlock_unlock(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_rwlock_destroy(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("getelementptr inbounds { [200 x i8], i32 }, ptr"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_explicit_drop_calls_custom_struct_drop() {
     let ll = emit(
         r#"

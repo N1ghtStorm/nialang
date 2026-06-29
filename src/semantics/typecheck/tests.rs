@@ -68,10 +68,12 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_send_sync_struct.nia"),
         include_str!("../../../examples/tests/ok_arc_basic.nia"),
         include_str!("../../../examples/tests/ok_mutex_basic.nia"),
+        include_str!("../../../examples/tests/ok_rwlock_read_write.nia"),
         include_str!("../../../examples/sample_send_sync.nia"),
         include_str!("../../../examples/sample_arc.nia"),
         include_str!("../../../examples/sample_threads_closure.nia"),
         include_str!("../../../examples/sample_mutex.nia"),
+        include_str!("../../../examples/sample_rwlock.nia"),
         include_str!("../../../examples/tests/ok_option_result.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
@@ -2248,6 +2250,71 @@ fn main() i32 {
     assert!(err.contains("capture `guard` requires `send`"), "{err}");
     assert!(
         err.contains("MutexGuard values cannot be transferred"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rwlock_surface() {
+    let src = include_str!("../../../examples/tests/ok_rwlock_read_write.nia");
+    check_all(src).expect("RwLock read/write/try guards should typecheck");
+}
+
+#[test]
+fn typecheck_rwlock_rejects_non_send_inner() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let rw: RwLock[Thread] = rwlock_new(spawn worker);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("RwLock[Thread] must fail send bound");
+    assert!(err.contains("requires inner type to be `send`"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rwlock_guards_are_not_send() {
+    let src = r#"
+fn main() i32 {
+    let rw: RwLock[i32] = rwlock_new(0);
+    let guard: RwLockReadGuard[i32] = rw.read();
+    let t: Thread = spawn move || {
+        println(*guard);
+    };
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("RwLockReadGuard capture must fail send bound");
+    assert!(err.contains("capture `guard` requires `send`"), "{err}");
+    assert!(
+        err.contains("RwLock guard values cannot be transferred"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_rwlock_read_guard_is_read_only() {
+    let src = r#"
+fn main() i32 {
+    let rw: RwLock[i32] = rwlock_new(0);
+    let guard: RwLockReadGuard[i32] = rw.read();
+    *guard = 1;
+    drop(guard);
+    drop(rw);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("assignment through read guard must fail");
+    assert!(
+        err.contains("cannot assign through `RwLockReadGuard` dereference"),
         "{err}"
     );
 }

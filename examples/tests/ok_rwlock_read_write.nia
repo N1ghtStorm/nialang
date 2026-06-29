@@ -1,0 +1,20 @@
+fn main() i32 {
+    let rw: RwLock[i32] = rwlock_new(1);
+
+    let read_guard: RwLockReadGuard[i32] = rw.read();
+    println(*read_guard);
+    drop(read_guard);
+
+    let write_guard: RwLockWriteGuard[i32] = rw.write();
+    *write_guard = *write_guard + 1;
+    drop(write_guard);
+
+    let maybe_read: Option[RwLockReadGuard[i32]] = rw.try_read();
+    drop(maybe_read);
+
+    let maybe_write: Option[RwLockWriteGuard[i32]] = rw.try_write();
+    drop(maybe_write);
+
+    drop(rw);
+    0
+}

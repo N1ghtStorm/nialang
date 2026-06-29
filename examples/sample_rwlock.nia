@@ -1,0 +1,36 @@
+// Phase 4 concurrency sample: Arc[RwLock[T]] shared read-heavy state.
+//
+// RwLock[T] allows several readers or one writer. Guards unlock on drop.
+
+fn main() i32 {
+    let shared: Arc[RwLock[i32]] = arc_new(rwlock_new(41));
+
+    let first_shared = shared.clone();
+    let second_shared = shared.clone();
+
+    let first: Thread = spawn move || {
+        let guard: RwLockReadGuard[i32] = (*first_shared).read();
+        println(*guard);
+        drop(guard);
+    };
+
+    let second: Thread = spawn move || {
+        let guard: RwLockReadGuard[i32] = (*second_shared).read();
+        println(*guard);
+        drop(guard);
+    };
+
+    join(first);
+    join(second);
+
+    let writer: RwLockWriteGuard[i32] = (*shared).write();
+    *writer = *writer + 1;
+    drop(writer);
+
+    let final_guard: RwLockReadGuard[i32] = (*shared).read();
+    println(*final_guard);
+    drop(final_guard);
+
+    drop(shared);
+    0
+}

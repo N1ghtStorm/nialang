@@ -20,8 +20,10 @@ use crate::nia_std::{
     MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA,
     MERKLE_VERIFY, MUTEX_GUARD_TYPE, MUTEX_LOCK, MUTEX_NEW, MUTEX_TRY_LOCK, MUTEX_TYPE,
     OPTION_NONE, OPTION_SOME, OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, RESULT, RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY,
-    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    RECORD, RESULT, RESULT_ERR, RESULT_OK, RESULT_TYPE, RWLOCK_NEW, RWLOCK_READ,
+    RWLOCK_READ_GUARD_TYPE, RWLOCK_TRY_READ, RWLOCK_TRY_WRITE, RWLOCK_TYPE, RWLOCK_WRITE,
+    RWLOCK_WRITE_GUARD_TYPE, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC,
+    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -78,6 +80,12 @@ fn normalize_ty(
                 Err("type `Mutex` requires a type argument `Mutex[T]`".into())
             } else if name == MUTEX_GUARD_TYPE {
                 Err("type `MutexGuard` requires a type argument `MutexGuard[T]`".into())
+            } else if name == RWLOCK_TYPE {
+                Err("type `RwLock` requires a type argument `RwLock[T]`".into())
+            } else if name == RWLOCK_READ_GUARD_TYPE {
+                Err("type `RwLockReadGuard` requires a type argument `RwLockReadGuard[T]`".into())
+            } else if name == RWLOCK_WRITE_GUARD_TYPE {
+                Err("type `RwLockWriteGuard` requires a type argument `RwLockWriteGuard[T]`".into())
             } else if name == ATOMIC_BOOL_TYPE {
                 Ok(Ty::AtomicBool)
             } else if let Some(atomic_ty) = atomic_int_type_name_ty(name) {
@@ -141,6 +149,17 @@ fn normalize_ty(
             Ok(Ty::Mutex(Box::new(norm)))
         }
         Ty::MutexGuard(elem) => Ok(Ty::MutexGuard(Box::new(normalize_ty(
+            elem, structs, enums, vectors,
+        )?))),
+        Ty::RwLock(elem) => {
+            let norm = normalize_ty(elem, structs, enums, vectors)?;
+            validate_rwlock_inner(&norm, structs, enums, vectors)?;
+            Ok(Ty::RwLock(Box::new(norm)))
+        }
+        Ty::RwLockReadGuard(elem) => Ok(Ty::RwLockReadGuard(Box::new(normalize_ty(
+            elem, structs, enums, vectors,
+        )?))),
+        Ty::RwLockWriteGuard(elem) => Ok(Ty::RwLockWriteGuard(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
         Ty::Option(elem) => Ok(Ty::Option(Box::new(normalize_ty(
@@ -504,6 +523,8 @@ fn has_send(
         }
         Ty::Mutex(elem) => has_send(elem, structs, enums, vectors),
         Ty::MutexGuard(_) => false,
+        Ty::RwLock(elem) => has_send(elem, structs, enums, vectors),
+        Ty::RwLockReadGuard(_) | Ty::RwLockWriteGuard(_) => false,
         Ty::Option(elem) => has_send(elem, structs, enums, vectors),
         Ty::ResultType(ok, err) => {
             has_send(ok, structs, enums, vectors) && has_send(err, structs, enums, vectors)
@@ -550,6 +571,8 @@ fn has_sync(
         }
         Ty::Mutex(elem) => has_send(elem, structs, enums, vectors),
         Ty::MutexGuard(_) => false,
+        Ty::RwLock(elem) => has_send(elem, structs, enums, vectors),
+        Ty::RwLockReadGuard(_) | Ty::RwLockWriteGuard(_) => false,
         Ty::Option(elem) => has_sync(elem, structs, enums, vectors),
         Ty::ResultType(ok, err) => {
             has_sync(ok, structs, enums, vectors) && has_sync(err, structs, enums, vectors)
@@ -725,6 +748,31 @@ fn validate_mutex_inner(
     if !has_send(inner, structs, enums, vectors) {
         return Err(format!(
             "`Mutex[{}]` requires inner type to be `send`: {}",
+            ty_diag_label(inner),
+            ability_failure_reason(inner, Ability::Send, structs, enums, vectors)
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rwlock_inner(
+    inner: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> Result<(), String> {
+    if matches!(inner, Ty::Unit) {
+        return Err("`RwLock[()]` is not supported".into());
+    }
+    if contains_quantum_ty(inner) {
+        return Err(format!(
+            "`RwLock[{}]` cannot contain quantum types",
+            ty_diag_label(inner)
+        ));
+    }
+    if !has_send(inner, structs, enums, vectors) {
+        return Err(format!(
+            "`RwLock[{}]` requires inner type to be `send`: {}",
             ty_diag_label(inner),
             ability_failure_reason(inner, Ability::Send, structs, enums, vectors)
         ));
@@ -1207,6 +1255,10 @@ fn has_formal_ability(
         Ty::Arc(_) => matches!(ability, Ability::Clone | Ability::Drop | Ability::Deref),
         Ty::Mutex(_) => matches!(ability, Ability::Drop),
         Ty::MutexGuard(_) => matches!(ability, Ability::Drop | Ability::Deref),
+        Ty::RwLock(_) => matches!(ability, Ability::Drop),
+        Ty::RwLockReadGuard(_) | Ty::RwLockWriteGuard(_) => {
+            matches!(ability, Ability::Drop | Ability::Deref)
+        }
         Ty::Option(elem) if matches!(ability, Ability::Drop) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
@@ -1302,6 +1354,9 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::Arc(elem) => format!("Arc[{}]", ty_diag_label(elem)),
         Ty::Mutex(elem) => format!("Mutex[{}]", ty_diag_label(elem)),
         Ty::MutexGuard(elem) => format!("MutexGuard[{}]", ty_diag_label(elem)),
+        Ty::RwLock(elem) => format!("RwLock[{}]", ty_diag_label(elem)),
+        Ty::RwLockReadGuard(elem) => format!("RwLockReadGuard[{}]", ty_diag_label(elem)),
+        Ty::RwLockWriteGuard(elem) => format!("RwLockWriteGuard[{}]", ty_diag_label(elem)),
         Ty::Option(elem) => format!("Option[{}]", ty_diag_label(elem)),
         Ty::ResultType(ok, err) => {
             format!("Result[{}, {}]", ty_diag_label(ok), ty_diag_label(err))
@@ -1425,6 +1480,15 @@ fn ability_failure_reason(
         Ty::MutexGuard(_) if matches!(ability, Ability::Copy | Ability::Clone) => {
             "MutexGuard values are move-only RAII tokens".into()
         }
+        Ty::RwLock(_) if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "RwLock values are runtime owners and are not copyable or cloneable".into()
+        }
+        Ty::RwLockReadGuard(_) if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "RwLockReadGuard values are move-only RAII tokens".into()
+        }
+        Ty::RwLockWriteGuard(_) if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "RwLockWriteGuard values are move-only RAII tokens".into()
+        }
         Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
             "Matrix is a runtime owner and is not `copy`; use `.clone()` to duplicate it".into()
         }
@@ -1472,6 +1536,18 @@ fn ability_failure_reason(
         }
         Ty::MutexGuard(_) if matches!(ability, Ability::Send | Ability::Sync) => {
             "MutexGuard values cannot be transferred or shared across threads".into()
+        }
+        Ty::RwLock(elem) if matches!(ability, Ability::Send | Ability::Sync) => {
+            format!(
+                "RwLock requires inner type {} to support `send`: {}",
+                ty_diag_label(elem),
+                ability_failure_reason(elem, Ability::Send, structs, enums, vectors)
+            )
+        }
+        Ty::RwLockReadGuard(_) | Ty::RwLockWriteGuard(_)
+            if matches!(ability, Ability::Send | Ability::Sync) =>
+        {
+            "RwLock guard values cannot be transferred or shared across threads".into()
         }
         Ty::AtomicBool
         | Ty::AtomicI8
@@ -1521,6 +1597,20 @@ fn ability_failure_reason(
         }
         Ty::MutexGuard(_) if matches!(ability, Ability::Deref) => {
             "MutexGuard values support built-in dereference".into()
+        }
+        Ty::RwLock(_) if matches!(ability, Ability::Drop) => {
+            "RwLock values support `drop` by destroying the pthread rwlock and inner value".into()
+        }
+        Ty::RwLockReadGuard(_) if matches!(ability, Ability::Drop) => {
+            "RwLockReadGuard values support `drop` by unlocking the rwlock".into()
+        }
+        Ty::RwLockWriteGuard(_) if matches!(ability, Ability::Drop) => {
+            "RwLockWriteGuard values support `drop` by unlocking the rwlock".into()
+        }
+        Ty::RwLockReadGuard(_) | Ty::RwLockWriteGuard(_)
+            if matches!(ability, Ability::Deref) =>
+        {
+            "RwLock guard values support built-in dereference".into()
         }
         Ty::Option(elem) if matches!(ability, Ability::Copy | Ability::Clone) => {
             format!(
@@ -1599,6 +1689,9 @@ fn custom_deref_target_ty(
         return Some(inner.as_ref().clone());
     }
     if let Ty::MutexGuard(inner) = t {
+        return Some(inner.as_ref().clone());
+    }
+    if let Ty::RwLockReadGuard(inner) | Ty::RwLockWriteGuard(inner) = t {
         return Some(inner.as_ref().clone());
     }
     let Ty::Struct(name) = t else {
@@ -2090,6 +2183,9 @@ fn contains_quantum_ty(t: &Ty) -> bool {
         | Ty::Arc(inner)
         | Ty::Mutex(inner)
         | Ty::MutexGuard(inner)
+        | Ty::RwLock(inner)
+        | Ty::RwLockReadGuard(inner)
+        | Ty::RwLockWriteGuard(inner)
         | Ty::AtomicPtr(inner)
         | Ty::Array(inner, _)
         | Ty::AnonVector(inner, _)
@@ -2867,6 +2963,9 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::Arc(_)
         | Ty::Mutex(_)
         | Ty::MutexGuard(_)
+        | Ty::RwLock(_)
+        | Ty::RwLockReadGuard(_)
+        | Ty::RwLockWriteGuard(_)
         | Ty::Thread
         | Ty::Fn(_, _) => false,
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
@@ -3300,6 +3399,19 @@ fn check_moves_call(
         .map(|_| ());
     }
 
+    if name == RWLOCK_NEW && args.len() == 1 {
+        return check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )
+        .map(|_| ());
+    }
+
     if name == JOIN && args.len() == 1 {
         return check_moves_expr(
             &args[0],
@@ -3569,6 +3681,18 @@ fn check_moves_generic_call(
         )?;
         return Ok(());
     }
+    if name == RWLOCK_NEW && args.len() == 1 {
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )?;
+        return Ok(());
+    }
     check_moves_args_fallback(args, env, states, fn_values, ctx)
 }
 
@@ -3792,7 +3916,7 @@ fn check_moves_method_call(
         return check_moves_args_fallback(args, env, states, fn_values, ctx);
     }
 
-    if matches!(recv_ty, Ty::Mutex(_)) {
+    if matches!(recv_ty, Ty::Mutex(_) | Ty::RwLock(_)) {
         check_moves_expr(
             receiver,
             env,
@@ -4560,6 +4684,9 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::Arc(x), Ty::Arc(y)) => types_equal(x, y),
         (Ty::Mutex(x), Ty::Mutex(y)) => types_equal(x, y),
         (Ty::MutexGuard(x), Ty::MutexGuard(y)) => types_equal(x, y),
+        (Ty::RwLock(x), Ty::RwLock(y)) => types_equal(x, y),
+        (Ty::RwLockReadGuard(x), Ty::RwLockReadGuard(y)) => types_equal(x, y),
+        (Ty::RwLockWriteGuard(x), Ty::RwLockWriteGuard(y)) => types_equal(x, y),
         (Ty::Option(x), Ty::Option(y)) => types_equal(x, y),
         (Ty::ResultType(xok, xerr), Ty::ResultType(yok, yerr)) => {
             types_equal(xok, yok) && types_equal(xerr, yerr)
@@ -6043,6 +6170,47 @@ fn infer_mutex_new_call(
     Ok(Ty::Mutex(Box::new(value_ty)))
 }
 
+fn infer_rwlock_new_call(
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+    hint: Option<&Ty>,
+) -> Result<Ty, String> {
+    if args.len() != 1 {
+        return Err(format!(
+            "`{RWLOCK_NEW}` expects exactly 1 argument, got {}",
+            args.len()
+        ));
+    }
+    let expected_inner = match hint {
+        Some(Ty::RwLock(inner)) => Some(inner.as_ref().clone()),
+        _ => None,
+    };
+    let value_ty = infer_expr(
+        &args[0],
+        env,
+        structs,
+        enums,
+        vectors,
+        fns,
+        expected_inner.as_ref(),
+    )?;
+    if let Some(expected) = &expected_inner
+        && !types_equal(&value_ty, expected)
+    {
+        return Err(format!(
+            "`{RWLOCK_NEW}` value type mismatch: expected {}, got {}",
+            ty_diag_label(expected),
+            ty_diag_label(&value_ty)
+        ));
+    }
+    validate_rwlock_inner(&value_ty, structs, enums, vectors)?;
+    Ok(Ty::RwLock(Box::new(value_ty)))
+}
+
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -6234,6 +6402,9 @@ fn infer_expr(
             }
             if name == MUTEX_NEW {
                 return infer_mutex_new_call(args, env, structs, enums, vectors, fns, hint);
+            }
+            if name == RWLOCK_NEW {
+                return infer_rwlock_new_call(args, env, structs, enums, vectors, fns, hint);
             }
             if let Some(local_ty) = env.get(name) {
                 if matches!(local_ty, Ty::Fn(_, _)) {
@@ -7160,9 +7331,32 @@ fn infer_expr(
                 }
                 return Ok(Ty::Mutex(Box::new(elem_ty)));
             }
+            if name == RWLOCK_NEW {
+                if ty_args.len() != 1 {
+                    return Err(format!("`{RWLOCK_NEW}` expects exactly 1 type argument"));
+                }
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{RWLOCK_NEW}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let elem_ty = normalize_ty(&ty_args[0], structs, enums, vectors)?;
+                validate_rwlock_inner(&elem_ty, structs, enums, vectors)?;
+                let value_ty =
+                    infer_expr(&args[0], env, structs, enums, vectors, fns, Some(&elem_ty))?;
+                if !types_equal(&value_ty, &elem_ty) {
+                    return Err(format!(
+                        "`{RWLOCK_NEW}` value type mismatch: expected {}, got {}",
+                        ty_diag_label(&elem_ty),
+                        ty_diag_label(&value_ty)
+                    ));
+                }
+                return Ok(Ty::RwLock(Box::new(elem_ty)));
+            }
             if name != LIST_NEW && name != LIST_WITH_CAPACITY {
                 return Err(format!(
-                    "generic calls are only supported for `{LIST_NEW}`, `{LIST_WITH_CAPACITY}`, `{ARC_NEW}`, and `{MUTEX_NEW}`"
+                    "generic calls are only supported for `{LIST_NEW}`, `{LIST_WITH_CAPACITY}`, `{ARC_NEW}`, `{MUTEX_NEW}`, and `{RWLOCK_NEW}`"
                 ));
             }
             if ty_args.len() != 1 {
@@ -7351,6 +7545,44 @@ fn infer_expr(
                         ));
                     }
                     return Ok(Ty::Option(Box::new(Ty::MutexGuard(elem_ty.clone()))));
+                }
+            }
+            if let Ty::RwLock(elem_ty) = &recv_ty {
+                if name == RWLOCK_READ {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `{RWLOCK_READ}`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Ty::RwLockReadGuard(elem_ty.clone()));
+                }
+                if name == RWLOCK_WRITE {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `{RWLOCK_WRITE}`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Ty::RwLockWriteGuard(elem_ty.clone()));
+                }
+                if name == RWLOCK_TRY_READ {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `{RWLOCK_TRY_READ}`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Ty::Option(Box::new(Ty::RwLockReadGuard(elem_ty.clone()))));
+                }
+                if name == RWLOCK_TRY_WRITE {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `{RWLOCK_TRY_WRITE}`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Ty::Option(Box::new(Ty::RwLockWriteGuard(elem_ty.clone()))));
                 }
             }
             if let Ty::List(elem_ty) = &recv_ty {
@@ -8139,11 +8371,17 @@ fn check_stmt(
                 if matches!(base_ty, Ty::Arc(_)) {
                     return Err("cannot assign through `Arc` dereference; `Arc[T]` provides shared read-only access".into());
                 }
+                if matches!(base_ty, Ty::RwLockReadGuard(_)) {
+                    return Err("cannot assign through `RwLockReadGuard` dereference; read guards provide shared read-only access".into());
+                }
             }
             if let Expr::Deref(inner) = index_chain_root(target) {
                 let base_ty = infer_expr(inner, env, struct_fields, enums, vectors, fn_sigs, None)?;
                 if matches!(base_ty, Ty::Arc(_)) {
                     return Err("cannot assign through `Arc` dereference; `Arc[T]` provides shared read-only access".into());
+                }
+                if matches!(base_ty, Ty::RwLockReadGuard(_)) {
+                    return Err("cannot assign through `RwLockReadGuard` dereference; read guards provide shared read-only access".into());
                 }
             }
             let vt = infer_expr(

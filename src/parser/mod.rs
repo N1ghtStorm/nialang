@@ -8,7 +8,7 @@ use crate::lexer::Token;
 use crate::nia_std::{
     ARC_NEW, ARC_TYPE, ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY, MUTEX_GUARD_TYPE,
     MUTEX_NEW, MUTEX_TYPE, OPTION_NONE, OPTION_SOME, OPTION_TYPE, RESULT_ERR, RESULT_OK,
-    RESULT_TYPE,
+    RESULT_TYPE, RWLOCK_NEW, RWLOCK_READ_GUARD_TYPE, RWLOCK_TYPE, RWLOCK_WRITE_GUARD_TYPE,
 };
 
 pub struct Parser {
@@ -959,6 +959,21 @@ impl Parser {
                         let elem = self.parse_ty()?;
                         self.expect(&Token::RBracket)?;
                         Ok(Ty::MutexGuard(Box::new(elem)))
+                    } else if n == RWLOCK_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let elem = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::RwLock(Box::new(elem)))
+                    } else if n == RWLOCK_READ_GUARD_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let elem = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::RwLockReadGuard(Box::new(elem)))
+                    } else if n == RWLOCK_WRITE_GUARD_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let elem = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::RwLockWriteGuard(Box::new(elem)))
                     } else if n == OPTION_TYPE {
                         self.expect(&Token::LBracket)?;
                         let elem = self.parse_ty()?;
@@ -1336,6 +1351,7 @@ impl Parser {
                             || name == LIST_WITH_CAPACITY
                             || name == ARC_NEW
                             || name == MUTEX_NEW
+                            || name == RWLOCK_NEW
                         {
                             let name = name.clone();
                             let ty_args = self.parse_generic_ty_args()?;
@@ -1493,7 +1509,8 @@ impl Parser {
                         && (segments[0] == LIST_NEW
                             || segments[0] == LIST_WITH_CAPACITY
                             || segments[0] == ARC_NEW
-                            || segments[0] == MUTEX_NEW)
+                            || segments[0] == MUTEX_NEW
+                            || segments[0] == RWLOCK_NEW)
                         && matches!(self.peek(), Token::LBracket)
                     {
                         let name = segments[0].clone();

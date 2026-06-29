@@ -70,6 +70,12 @@ pub enum Ty {
     Mutex(Box<Ty>),
     /// RAII mutex guard, written as `MutexGuard[T]`.
     MutexGuard(Box<Ty>),
+    /// Built-in readers-writer lock owner, written as `RwLock[T]`.
+    RwLock(Box<Ty>),
+    /// RAII shared read guard, written as `RwLockReadGuard[T]`.
+    RwLockReadGuard(Box<Ty>),
+    /// RAII exclusive write guard, written as `RwLockWriteGuard[T]`.
+    RwLockWriteGuard(Box<Ty>),
     /// Built-in optional value type, written as `Option[T]`.
     Option(Box<Ty>),
     /// Built-in fallible value type, written as `Result[T, E]`.
@@ -186,6 +192,9 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::Arc(elem) => format!("arc_{}", ty_symbol_fragment(elem)),
         Ty::Mutex(elem) => format!("mutex_{}", ty_symbol_fragment(elem)),
         Ty::MutexGuard(elem) => format!("mutex_guard_{}", ty_symbol_fragment(elem)),
+        Ty::RwLock(elem) => format!("rwlock_{}", ty_symbol_fragment(elem)),
+        Ty::RwLockReadGuard(elem) => format!("rwlock_read_guard_{}", ty_symbol_fragment(elem)),
+        Ty::RwLockWriteGuard(elem) => format!("rwlock_write_guard_{}", ty_symbol_fragment(elem)),
         Ty::Option(elem) => format!("option_{}", ty_symbol_fragment(elem)),
         Ty::ResultType(ok, err) => {
             format!(

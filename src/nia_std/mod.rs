@@ -38,6 +38,14 @@ pub const MUTEX_GUARD_TYPE: &str = "MutexGuard";
 pub const MUTEX_NEW: &str = "mutex_new";
 pub const MUTEX_LOCK: &str = "lock";
 pub const MUTEX_TRY_LOCK: &str = "try_lock";
+pub const RWLOCK_TYPE: &str = "RwLock";
+pub const RWLOCK_READ_GUARD_TYPE: &str = "RwLockReadGuard";
+pub const RWLOCK_WRITE_GUARD_TYPE: &str = "RwLockWriteGuard";
+pub const RWLOCK_NEW: &str = "rwlock_new";
+pub const RWLOCK_READ: &str = "read";
+pub const RWLOCK_WRITE: &str = "write";
+pub const RWLOCK_TRY_READ: &str = "try_read";
+pub const RWLOCK_TRY_WRITE: &str = "try_write";
 pub const LIST_NEW: &str = "list_new";
 pub const LIST_WITH_CAPACITY: &str = "list_with_capacity";
 pub const LIST_LEN: &str = "len";
@@ -235,6 +243,9 @@ pub fn is_reserved_type_name(name: &str) -> bool {
             | ARC_TYPE
             | MUTEX_TYPE
             | MUTEX_GUARD_TYPE
+            | RWLOCK_TYPE
+            | RWLOCK_READ_GUARD_TYPE
+            | RWLOCK_WRITE_GUARD_TYPE
             | OPTION_TYPE
             | RESULT_TYPE
             | QUBIT
@@ -289,6 +300,11 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | MUTEX_NEW
             | MUTEX_LOCK
             | MUTEX_TRY_LOCK
+            | RWLOCK_NEW
+            | RWLOCK_READ
+            | RWLOCK_WRITE
+            | RWLOCK_TRY_READ
+            | RWLOCK_TRY_WRITE
             | OUTER
             | COMPLEX_NEW
             | COMPLEX_ADD
@@ -435,6 +451,13 @@ declare i32 @pthread_mutex_destroy(ptr)
 declare i32 @pthread_mutex_lock(ptr)
 declare i32 @pthread_mutex_trylock(ptr)
 declare i32 @pthread_mutex_unlock(ptr)
+declare i32 @pthread_rwlock_init(ptr, ptr)
+declare i32 @pthread_rwlock_destroy(ptr)
+declare i32 @pthread_rwlock_rdlock(ptr)
+declare i32 @pthread_rwlock_wrlock(ptr)
+declare i32 @pthread_rwlock_tryrdlock(ptr)
+declare i32 @pthread_rwlock_trywrlock(ptr)
+declare i32 @pthread_rwlock_unlock(ptr)
 
 define ptr @nialang.thread.entry(ptr %arg) {
 entry:
