@@ -580,6 +580,33 @@ fn main() i32 {
 }
 
 #[test]
+fn parse_arc_type_and_generic_constructor() {
+    let src = r#"
+fn main() i32 {
+    let shared: Arc[i32] = arc_new[i32](1);
+    *shared
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    match &fns[0].body.stmts[0] {
+        Stmt::Let {
+            ty: Some(ty),
+            init: Some(init),
+            ..
+        } => {
+            assert_eq!(ty, &Ty::Arc(Box::new(Ty::I32)));
+            assert!(matches!(
+                init,
+                Expr::GenericCall { name, ty_args, args }
+                    if name == "arc_new" && ty_args == &vec![Ty::I32] && args.len() == 1
+            ));
+        }
+        other => panic!("expected typed arc let, got {other:?}"),
+    }
+}
+
+#[test]
 fn parse_option_and_result_types() {
     let src = r#"
 fn pass(x: Option[i32]) Result[Option[i32], string] {

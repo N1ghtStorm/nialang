@@ -841,6 +841,51 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_arc_clone_deref_and_drop_use_atomic_refcount() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let shared: Arc[i32] = arc_new(41);
+    let cloned = shared.clone();
+    let value = *cloned;
+    drop(shared);
+    drop(cloned);
+    value
+}
+"#,
+    );
+    assert!(
+        ll.contains("getelementptr inbounds { i64, i32 }, ptr"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("atomicrmw add ptr"), "IR:\n{ll}");
+    assert!(ll.contains("atomicrmw sub ptr"), "IR:\n{ll}");
+    assert!(ll.contains("fence acquire"), "IR:\n{ll}");
+    assert!(ll.contains("call void @free(ptr %"), "IR:\n{ll}");
+}
+
+#[test]
+fn codegen_arc_atomic_inner_uses_payload_ptr_for_atomic_methods() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let shared: Arc[AtomicI32] = arc_new(atomic_i32(0));
+    let old = (*shared).fetch_add(1, Ordering::AcqRel);
+    drop(shared);
+    old
+}
+"#,
+    );
+    assert!(
+        ll.contains("getelementptr inbounds { i64, i32 }, ptr"),
+        "IR:\n{ll}"
+    );
+    assert!(ll.contains("atomicrmw add ptr"), "IR:\n{ll}");
+    assert!(ll.contains(", i32 1 acq_rel"), "IR:\n{ll}");
+    assert!(ll.contains("atomicrmw sub ptr"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_explicit_drop_calls_custom_struct_drop() {
     let ll = emit(
         r#"

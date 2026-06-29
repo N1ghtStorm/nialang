@@ -8,21 +8,21 @@ use crate::ast::{
     VectorDef, method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, ATOMIC_BOOL, ATOMIC_FENCE, ATOMIC_I8, ATOMIC_I8_TYPE, ATOMIC_I16, ATOMIC_I16_TYPE,
-    ATOMIC_I32, ATOMIC_I32_TYPE, ATOMIC_I64, ATOMIC_I64_TYPE, ATOMIC_I128, ATOMIC_I128_TYPE,
-    ATOMIC_ISIZE, ATOMIC_ISIZE_TYPE, ATOMIC_PTR, ATOMIC_U8, ATOMIC_U8_TYPE, ATOMIC_U16,
-    ATOMIC_U16_TYPE, ATOMIC_U32, ATOMIC_U32_TYPE, ATOMIC_U64, ATOMIC_U64_TYPE, ATOMIC_U128,
-    ATOMIC_U128_TYPE, ATOMIC_USIZE, ATOMIC_USIZE_TYPE, AtomicOrdering, CIS, COMPLEX_ADD,
-    COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, COS, DEALLOC, DIGEST_EQ,
-    GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS,
-    GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX,
-    GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN,
-    LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
-    MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MEASURE,
-    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
-    OPTION_NONE, OPTION_SOME, OPTION_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD,
-    RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC,
-    VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    ALLOC, ARC_NEW, ARC_TYPE, ATOMIC_BOOL, ATOMIC_FENCE, ATOMIC_I8, ATOMIC_I8_TYPE, ATOMIC_I16,
+    ATOMIC_I16_TYPE, ATOMIC_I32, ATOMIC_I32_TYPE, ATOMIC_I64, ATOMIC_I64_TYPE, ATOMIC_I128,
+    ATOMIC_I128_TYPE, ATOMIC_ISIZE, ATOMIC_ISIZE_TYPE, ATOMIC_PTR, ATOMIC_U8, ATOMIC_U8_TYPE,
+    ATOMIC_U16, ATOMIC_U16_TYPE, ATOMIC_U32, ATOMIC_U32_TYPE, ATOMIC_U64, ATOMIC_U64_TYPE,
+    ATOMIC_U128, ATOMIC_U128_TYPE, ATOMIC_USIZE, ATOMIC_USIZE_TYPE, AtomicOrdering, CIS,
+    COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE, COMPLEX_SUB, COS, DEALLOC,
+    DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ,
+    GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1,
+    GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y,
+    GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
+    MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS,
+    MATRIX_SET, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA,
+    MERKLE_VERIFY, OPTION_NONE, OPTION_SOME, OPTION_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
+    RECORD, RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX,
+    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -552,6 +552,7 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::AnonVector(inner, n) => format!("{}<{}>", ty_print_label(inner), n),
         Ty::HeapVector(inner) => format!("{}<>", ty_print_label(inner)),
         Ty::List(inner) => format!("List[{}]", ty_print_label(inner)),
+        Ty::Arc(inner) => format!("Arc[{}]", ty_print_label(inner)),
         Ty::Matrix(inner, _) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
         Ty::Matrix(inner, _) => format!("Matrix<{}>", ty_print_label(inner)),
         Ty::Fn(params, ret) => {
@@ -761,6 +762,7 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::AnonVector(elem, n) => format!("[{} x {}]", n, llvm_ty(elem, _structs)),
         Ty::HeapVector(_) => "ptr".into(),
         Ty::List(_) => "ptr".into(),
+        Ty::Arc(_) => "ptr".into(),
         Ty::Matrix(_, _) => "ptr".into(),
         Ty::Fn(_, _) => fn_value_ll_ty().into(),
     }
@@ -775,6 +777,9 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         }
         Ty::Struct(name) if name == RESULT_TYPE => {
             panic!("typechecked Result without type arguments")
+        }
+        Ty::Struct(name) if name == ARC_TYPE => {
+            panic!("typechecked Arc without type argument")
         }
         Ty::Struct(name) if name == crate::nia_std::ATOMIC_BOOL_TYPE => Ty::AtomicBool,
         Ty::Struct(name) if name == ATOMIC_I8_TYPE => Ty::AtomicI8,
@@ -797,6 +802,7 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         Ty::AnonVector(inner, n) => Ty::AnonVector(Box::new(normalize_codegen_ty(inner)), *n),
         Ty::HeapVector(inner) => Ty::HeapVector(Box::new(normalize_codegen_ty(inner))),
         Ty::List(inner) => Ty::List(Box::new(normalize_codegen_ty(inner))),
+        Ty::Arc(inner) => Ty::Arc(Box::new(normalize_codegen_ty(inner))),
         Ty::Option(inner) => Ty::Option(Box::new(normalize_codegen_ty(inner))),
         Ty::ResultType(ok, err) => Ty::ResultType(
             Box::new(normalize_codegen_ty(ok)),
@@ -1102,6 +1108,7 @@ fn supports_clone_method_ty(
         Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
             supports_clone_method_ty(elem, structs, enums, vectors)
         }
+        Ty::Arc(_) => true,
         Ty::Fn(_, _) => true,
         _ => false,
     }
@@ -1451,6 +1458,7 @@ impl<'a> Gen<'a> {
             Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_language_drop_ty(elem),
             Ty::HeapVector(_)
             | Ty::List(_)
+            | Ty::Arc(_)
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -1984,6 +1992,7 @@ impl<'a> Gen<'a> {
             }
             Ty::HeapVector(_) => self.emit_heap_vector_clone_value(ty, value),
             Ty::List(elem_ty) => self.emit_list_clone_value(elem_ty, value),
+            Ty::Arc(elem_ty) => self.emit_arc_clone_value(elem_ty, value),
             Ty::Matrix(_, _) => self.emit_matrix_clone_value(ty, value),
             Ty::Fn(_, _) => self.emit_fn_value_clone(value),
             Ty::Struct(name) if self.vector_def(name).is_some() => {
@@ -2048,6 +2057,7 @@ impl<'a> Gen<'a> {
             Ty::Array(elem, _) | Ty::AnonVector(elem, _) => self.is_copy_like_ty(elem),
             Ty::HeapVector(_)
             | Ty::List(_)
+            | Ty::Arc(_)
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _) => false,
@@ -2257,6 +2267,7 @@ impl<'a> Gen<'a> {
             }
             Ty::HeapVector(elem_ty) => self.emit_heap_vector_drop_value(elem_ty, &value),
             Ty::List(elem_ty) => self.emit_list_drop_value(elem_ty, &value),
+            Ty::Arc(elem_ty) => self.emit_arc_drop_value(elem_ty, &value),
             Ty::Option(elem_ty) => self.emit_option_drop_value(elem_ty, &value),
             Ty::ResultType(ok_ty, err_ty) => self.emit_result_drop_value(ok_ty, err_ty, &value),
             Ty::Matrix(_, _) => self.emit_matrix_drop_value(&value),
@@ -2625,6 +2636,7 @@ impl<'a> Gen<'a> {
             Expr::AddrOf(inner) => Ty::Ptr(Box::new(self.expr_codegen_ty(inner, locals))),
             Expr::Deref(inner) => match self.expr_codegen_ty(inner, locals) {
                 Ty::Ptr(inner) => inner.as_ref().clone(),
+                Ty::Arc(inner) => inner.as_ref().clone(),
                 other => other,
             },
             Expr::Field(inner, _) => self.expr_codegen_ty(inner, locals),
@@ -2633,7 +2645,10 @@ impl<'a> Gen<'a> {
     }
 
     fn is_runtime_owner_ty(&self, ty: &Ty) -> bool {
-        matches!(ty, Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _))
+        matches!(
+            ty,
+            Ty::HeapVector(_) | Ty::List(_) | Ty::Arc(_) | Ty::Matrix(_, _)
+        )
     }
 
     fn clear_runtime_read_or_consumed_expr(
@@ -3631,6 +3646,105 @@ impl<'a> Gen<'a> {
         .unwrap();
         writeln!(self.out, "  %{} = ptrtoint ptr %{} to i64", sz, gep).unwrap();
         format!("%{sz}")
+    }
+
+    fn arc_inner_ll_ty(&self, elem_ty: &Ty) -> String {
+        format!("{{ i64, {} }}", llvm_ty(elem_ty, self.structs))
+    }
+
+    fn arc_refcount_ptr(&mut self, arc: &str, elem_ty: &Ty) -> String {
+        let inner_ll = self.arc_inner_ll_ty(elem_ty);
+        let ptr = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i32 0, i32 0",
+            ptr, inner_ll, arc
+        )
+        .unwrap();
+        format!("%{ptr}")
+    }
+
+    fn arc_value_ptr(&mut self, arc: &str, elem_ty: &Ty) -> String {
+        let inner_ll = self.arc_inner_ll_ty(elem_ty);
+        let ptr = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i32 0, i32 1",
+            ptr, inner_ll, arc
+        )
+        .unwrap();
+        format!("%{ptr}")
+    }
+
+    fn emit_arc_new_value(&mut self, elem_ty: &Ty, value: &str) -> String {
+        let inner_ll = self.arc_inner_ll_ty(elem_ty);
+        let size = self.emit_sizeof_ll_ty_i64(&inner_ll);
+        let raw = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", raw, size).unwrap();
+        let arc = format!("%{raw}");
+        let refcount_ptr = self.arc_refcount_ptr(&arc, elem_ty);
+        writeln!(self.out, "  store i64 1, ptr {}, align 8", refcount_ptr).unwrap();
+        let value_ptr = self.arc_value_ptr(&arc, elem_ty);
+        writeln!(
+            self.out,
+            "  store {} {}, ptr {}",
+            llvm_ty(elem_ty, self.structs),
+            value,
+            value_ptr
+        )
+        .unwrap();
+        arc
+    }
+
+    fn emit_arc_clone_value(&mut self, elem_ty: &Ty, arc: &str) -> String {
+        let refcount_ptr = self.arc_refcount_ptr(arc, elem_ty);
+        let old = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = atomicrmw add ptr {}, i64 1 monotonic, align 8",
+            old, refcount_ptr
+        )
+        .unwrap();
+        arc.to_string()
+    }
+
+    fn emit_arc_drop_value(&mut self, elem_ty: &Ty, arc: &str) {
+        let refcount_ptr = self.arc_refcount_ptr(arc, elem_ty);
+        let old = self.fresh();
+        let is_last = self.fresh();
+        let drop_lbl = self.fresh_label("arc.drop.last");
+        let cont_lbl = self.fresh_label("arc.drop.cont");
+        writeln!(
+            self.out,
+            "  %{} = atomicrmw sub ptr {}, i64 1 release, align 8",
+            old, refcount_ptr
+        )
+        .unwrap();
+        writeln!(self.out, "  %{} = icmp eq i64 %{}, 1", is_last, old).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_last, drop_lbl, cont_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", drop_lbl).unwrap();
+        writeln!(self.out, "  fence acquire").unwrap();
+        if self.is_language_drop_ty(elem_ty) {
+            let value_ptr = self.arc_value_ptr(arc, elem_ty);
+            let loaded = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = load {}, ptr {}",
+                loaded,
+                llvm_ty(elem_ty, self.structs),
+                value_ptr
+            )
+            .unwrap();
+            self.emit_drop_value(elem_ty, format!("%{loaded}"));
+        }
+        writeln!(self.out, "  call void @free(ptr {})", arc).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
     }
 
     fn emit_pi_value(&mut self) -> String {
@@ -4679,6 +4793,7 @@ impl<'a> Gen<'a> {
             | Ty::AnonVector(_, _)
             | Ty::HeapVector(_)
             | Ty::List(_)
+            | Ty::Arc(_)
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -4810,6 +4925,7 @@ impl<'a> Gen<'a> {
             | Ty::AnonVector(_, _)
             | Ty::HeapVector(_)
             | Ty::List(_)
+            | Ty::Arc(_)
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -8734,6 +8850,7 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Arc(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Matrix(_, _)
@@ -8867,6 +8984,7 @@ impl<'a> Gen<'a> {
                 | Some(Ty::AnonVector(_, _))
                 | Some(Ty::HeapVector(_))
                 | Some(Ty::List(_))
+                | Some(Ty::Arc(_))
                 | Some(Ty::Option(_))
                 | Some(Ty::ResultType(_, _))
                 | Some(Ty::Enum(_))
@@ -9017,6 +9135,7 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Arc(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9109,6 +9228,7 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Arc(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9188,6 +9308,7 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Arc(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9331,6 +9452,7 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Arc(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9493,6 +9615,7 @@ impl<'a> Gen<'a> {
                     | Ty::AnonVector(_, _)
                     | Ty::HeapVector(_)
                     | Ty::List(_)
+                    | Ty::Arc(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9645,6 +9768,17 @@ impl<'a> Gen<'a> {
                 ty_args,
                 args,
             } => {
+                if name == ARC_NEW {
+                    let [elem_ty] = ty_args.as_slice() else {
+                        unreachable!("typechecked arc_new type args")
+                    };
+                    let (value_ty, value) = self.emit_expr(&args[0], locals, Some(elem_ty));
+                    debug_assert!(types_match(&value_ty, elem_ty));
+                    return (
+                        Ty::Arc(Box::new(elem_ty.clone())),
+                        self.emit_arc_new_value(elem_ty, &value),
+                    );
+                }
                 if name == LIST_NEW {
                     let [elem_ty] = ty_args.as_slice() else {
                         unreachable!("typechecked list_new type args")
@@ -9757,6 +9891,19 @@ impl<'a> Gen<'a> {
                         unreachable!("typechecked atomic_ptr argument")
                     };
                     return (Ty::AtomicPtr(pointee), value);
+                }
+                if name == ARC_NEW {
+                    let elem_hint = match hint {
+                        Some(Ty::Arc(elem_ty)) => Some(elem_ty.as_ref().clone()),
+                        _ => None,
+                    };
+                    let (value_ty, value) = self.emit_expr(&args[0], locals, elem_hint.as_ref());
+                    let elem_ty = elem_hint.unwrap_or_else(|| value_ty.clone());
+                    debug_assert!(types_match(&value_ty, &elem_ty));
+                    return (
+                        Ty::Arc(Box::new(elem_ty.clone())),
+                        self.emit_arc_new_value(&elem_ty, &value),
+                    );
                 }
                 if name == ATOMIC_FENCE {
                     let ordering = llvm_atomic_ordering(atomic_ordering_from_expr(&args[0]));
@@ -10853,6 +11000,11 @@ impl<'a> Gen<'a> {
                 let (ti, v) = self.emit_expr(inner, locals, None);
                 let (pointee, ptr) = match ti {
                     Ty::Ptr(pointee) => ((*pointee).clone(), v),
+                    Ty::Arc(pointee) => {
+                        let pointee_ty = (*pointee).clone();
+                        let ptr = self.arc_value_ptr(&v, &pointee_ty);
+                        (pointee_ty, ptr)
+                    }
                     other => {
                         if let Some((target_ty, ptr)) = self.emit_custom_deref_ptr(&other, v) {
                             (target_ty, ptr)
@@ -10924,10 +11076,16 @@ impl<'a> Gen<'a> {
             Expr::Ident(name) => locals.get(name).expect("checked atomic local").clone(),
             Expr::Deref(inner) => {
                 let (ptr_ty, ptr) = self.emit_expr(inner, locals, None);
-                let Ty::Ptr(pointee) = ptr_ty else {
-                    unreachable!("typechecked atomic dereference receiver")
+                let (pointee, ptr) = match ptr_ty {
+                    Ty::Ptr(pointee) => ((*pointee).clone(), ptr),
+                    Ty::Arc(pointee) => {
+                        let pointee_ty = (*pointee).clone();
+                        let ptr = self.arc_value_ptr(&ptr, &pointee_ty);
+                        (pointee_ty, ptr)
+                    }
+                    _ => unreachable!("typechecked atomic dereference receiver"),
                 };
-                ((*pointee).clone(), ptr)
+                (pointee, ptr)
             }
             _ => unreachable!("typechecked atomic lvalue receiver"),
         }
@@ -11299,6 +11457,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_match(xt, yt),
         (Ty::HeapVector(xt), Ty::HeapVector(yt)) => types_match(xt, yt),
         (Ty::List(xt), Ty::List(yt)) => types_match(xt, yt),
+        (Ty::Arc(xt), Ty::Arc(yt)) => types_match(xt, yt),
         (Ty::Option(xt), Ty::Option(yt)) => types_match(xt, yt),
         (Ty::ResultType(xok, xerr), Ty::ResultType(yok, yerr)) => {
             types_match(xok, yok) && types_match(xerr, yerr)

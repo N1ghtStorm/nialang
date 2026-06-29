@@ -5,22 +5,23 @@ use crate::ast::{
     StructDef, Ty, VectorDef, method_symbol,
 };
 use crate::nia_std::{
-    ALLOC, ATOMIC_BOOL, ATOMIC_BOOL_TYPE, ATOMIC_FENCE, ATOMIC_I8, ATOMIC_I8_TYPE, ATOMIC_I16,
-    ATOMIC_I16_TYPE, ATOMIC_I32, ATOMIC_I32_TYPE, ATOMIC_I64, ATOMIC_I64_TYPE, ATOMIC_I128,
-    ATOMIC_I128_TYPE, ATOMIC_ISIZE, ATOMIC_ISIZE_TYPE, ATOMIC_PTR, ATOMIC_PTR_TYPE, ATOMIC_U8,
-    ATOMIC_U8_TYPE, ATOMIC_U16, ATOMIC_U16_TYPE, ATOMIC_U32, ATOMIC_U32_TYPE, ATOMIC_U64,
-    ATOMIC_U64_TYPE, ATOMIC_U128, ATOMIC_U128_TYPE, ATOMIC_USIZE, ATOMIC_USIZE_TYPE,
-    AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW, COMPLEX_SCALE,
-    COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ, GATE_CH, GATE_CNOT,
-    GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP, GATE_CT, GATE_CTDG,
-    GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ, GATE_S, GATE_SDG,
-    GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET,
-    LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP,
-    MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET, MATRIX_TYPE, MEASURE,
-    MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA, MERKLE_VERIFY,
-    OPTION_NONE, OPTION_SOME, OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, RESULT, RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY,
-    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    ALLOC, ARC_NEW, ARC_TYPE, ATOMIC_BOOL, ATOMIC_BOOL_TYPE, ATOMIC_FENCE, ATOMIC_I8,
+    ATOMIC_I8_TYPE, ATOMIC_I16, ATOMIC_I16_TYPE, ATOMIC_I32, ATOMIC_I32_TYPE, ATOMIC_I64,
+    ATOMIC_I64_TYPE, ATOMIC_I128, ATOMIC_I128_TYPE, ATOMIC_ISIZE, ATOMIC_ISIZE_TYPE, ATOMIC_PTR,
+    ATOMIC_PTR_TYPE, ATOMIC_U8, ATOMIC_U8_TYPE, ATOMIC_U16, ATOMIC_U16_TYPE, ATOMIC_U32,
+    ATOMIC_U32_TYPE, ATOMIC_U64, ATOMIC_U64_TYPE, ATOMIC_U128, ATOMIC_U128_TYPE, ATOMIC_USIZE,
+    ATOMIC_USIZE_TYPE, AtomicOrdering, CIS, COMPLEX_ADD, COMPLEX_DIV, COMPLEX_MUL, COMPLEX_NEW,
+    COMPLEX_SCALE, COMPLEX_SUB, COMPLEX_TYPE, COS, DEALLOC, DIGEST_EQ, GATE_CCNOT, GATE_CCZ,
+    GATE_CH, GATE_CNOT, GATE_CR1, GATE_CRX, GATE_CRY, GATE_CRZ, GATE_CS, GATE_CSDG, GATE_CSWAP,
+    GATE_CT, GATE_CTDG, GATE_CY, GATE_CZ, GATE_H, GATE_I, GATE_R1, GATE_RX, GATE_RY, GATE_RZ,
+    GATE_S, GATE_SDG, GATE_SWAP, GATE_T, GATE_TDG, GATE_X, GATE_Y, GATE_Z, JOIN, LEN,
+    LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
+    MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET,
+    MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA,
+    MERKLE_VERIFY, OPTION_NONE, OPTION_SOME, OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT,
+    READ, REALLOC, RECORD, RESULT, RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, SPAWN,
+    THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
+    VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -71,6 +72,8 @@ fn normalize_ty(
                 Err("type `Option` requires a type argument `Option[T]`".into())
             } else if name == RESULT_TYPE {
                 Err("type `Result` requires type arguments `Result[T, E]`".into())
+            } else if name == ARC_TYPE {
+                Err("type `Arc` requires a type argument `Arc[T]`".into())
             } else if name == ATOMIC_BOOL_TYPE {
                 Ok(Ty::AtomicBool)
             } else if let Some(atomic_ty) = atomic_int_type_name_ty(name) {
@@ -123,6 +126,11 @@ fn normalize_ty(
         Ty::List(elem) => Ok(Ty::List(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
+        Ty::Arc(elem) => {
+            let norm = normalize_ty(elem, structs, enums, vectors)?;
+            validate_arc_inner(&norm, structs, enums, vectors)?;
+            Ok(Ty::Arc(Box::new(norm)))
+        }
         Ty::Option(elem) => Ok(Ty::Option(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
@@ -155,6 +163,13 @@ fn index_chain_root_is_assignable_array_lvalue(e: &Expr) -> bool {
         Expr::Ident(_) | Expr::Deref(_) => true,
         Expr::Index(a, _) => index_chain_root_is_assignable_array_lvalue(a.as_ref()),
         _ => false,
+    }
+}
+
+fn index_chain_root(e: &Expr) -> &Expr {
+    match e {
+        Expr::Index(base, _) => index_chain_root(base.as_ref()),
+        other => other,
     }
 }
 
@@ -468,11 +483,12 @@ fn has_send(
     match t {
         Ty::Qubit | Ty::Result | Ty::Thread => false,
         Ty::Ptr(inner) => has_sync(inner, structs, enums, vectors),
-        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
-            has_send(elem, structs, enums, vectors)
-        }
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => has_send(elem, structs, enums, vectors),
         Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
             has_send(elem, structs, enums, vectors)
+        }
+        Ty::Arc(elem) => {
+            has_send(elem, structs, enums, vectors) && has_sync(elem, structs, enums, vectors)
         }
         Ty::Option(elem) => has_send(elem, structs, enums, vectors),
         Ty::ResultType(ok, err) => {
@@ -511,11 +527,12 @@ fn has_sync(
     match t {
         Ty::Qubit | Ty::Result | Ty::Thread => false,
         Ty::Ptr(inner) => has_sync(inner, structs, enums, vectors),
-        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => {
-            has_sync(elem, structs, enums, vectors)
-        }
+        Ty::Array(elem, _) | Ty::AnonVector(elem, _) => has_sync(elem, structs, enums, vectors),
         Ty::HeapVector(elem) | Ty::List(elem) | Ty::Matrix(elem, _) => {
             has_sync(elem, structs, enums, vectors)
+        }
+        Ty::Arc(elem) => {
+            has_send(elem, structs, enums, vectors) && has_sync(elem, structs, enums, vectors)
         }
         Ty::Option(elem) => has_sync(elem, structs, enums, vectors),
         Ty::ResultType(ok, err) => {
@@ -598,6 +615,7 @@ fn infer_atomic_lvalue_receiver_ty(
             let ptr_ty = infer_expr(inner, env, structs, enums, vectors, fns, None)?;
             match ptr_ty {
                 Ty::Ptr(pointee) => Ok((*pointee).clone()),
+                Ty::Arc(pointee) => Ok((*pointee).clone()),
                 other => custom_deref_target_ty(&other, structs, fns).ok_or_else(|| {
                     format!("atomic method receiver dereference requires a pointer, got {other:?}")
                 }),
@@ -636,6 +654,38 @@ fn validate_atomic_ptr_pointee(pointee: &Ty) -> Result<(), String> {
         return Err(format!(
             "`AtomicPtr[{}]` cannot point to quantum types",
             ty_diag_label(pointee)
+        ));
+    }
+    Ok(())
+}
+
+fn validate_arc_inner(
+    inner: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> Result<(), String> {
+    if matches!(inner, Ty::Unit) {
+        return Err("`Arc[()]` is not supported".into());
+    }
+    if contains_quantum_ty(inner) {
+        return Err(format!(
+            "`Arc[{}]` cannot contain quantum types",
+            ty_diag_label(inner)
+        ));
+    }
+    if !has_send(inner, structs, enums, vectors) {
+        return Err(format!(
+            "`Arc[{}]` requires inner type to be `send`: {}",
+            ty_diag_label(inner),
+            ability_failure_reason(inner, Ability::Send, structs, enums, vectors)
+        ));
+    }
+    if !has_sync(inner, structs, enums, vectors) {
+        return Err(format!(
+            "`Arc[{}]` requires inner type to be `sync`: {}",
+            ty_diag_label(inner),
+            ability_failure_reason(inner, Ability::Sync, structs, enums, vectors)
         ));
     }
     Ok(())
@@ -1063,6 +1113,7 @@ fn has_formal_ability(
         {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
+        Ty::Arc(_) => matches!(ability, Ability::Clone | Ability::Drop | Ability::Deref),
         Ty::Option(elem) if matches!(ability, Ability::Drop) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
@@ -1155,6 +1206,7 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::AnonVector(elem, n) => format!("{}<{n}>", ty_diag_label(elem)),
         Ty::HeapVector(elem) => format!("{}<>", ty_diag_label(elem)),
         Ty::List(elem) => format!("List[{}]", ty_diag_label(elem)),
+        Ty::Arc(elem) => format!("Arc[{}]", ty_diag_label(elem)),
         Ty::Option(elem) => format!("Option[{}]", ty_diag_label(elem)),
         Ty::ResultType(ok, err) => {
             format!("Result[{}, {}]", ty_diag_label(ok), ty_diag_label(err))
@@ -1269,6 +1321,9 @@ fn ability_failure_reason(
         Ty::List(_) if matches!(ability, Ability::Copy) => {
             "List values are runtime owners and are not `copy`; use `.clone()` when the element type supports it".into()
         }
+        Ty::Arc(_) if matches!(ability, Ability::Copy) => {
+            "Arc values are shared runtime owners and are not `copy`; use `.clone()` to bump the reference count".into()
+        }
         Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
             "Matrix is a runtime owner and is not `copy`; use `.clone()` to duplicate it".into()
         }
@@ -1292,6 +1347,19 @@ fn ability_failure_reason(
                 ty_diag_label(t),
                 ty_diag_label(elem),
                 ability_failure_reason(elem, ability, structs, enums, vectors)
+            )
+        }
+        Ty::Arc(elem) if matches!(ability, Ability::Send | Ability::Sync) => {
+            let missing = if !has_send(elem, structs, enums, vectors) {
+                Ability::Send
+            } else {
+                Ability::Sync
+            };
+            format!(
+                "Arc requires inner type {} to support `send + sync`; missing `{}`: {}",
+                ty_diag_label(elem),
+                ability_label(missing),
+                ability_failure_reason(elem, missing, structs, enums, vectors)
             )
         }
         Ty::AtomicBool
@@ -1324,6 +1392,15 @@ fn ability_failure_reason(
                 ty_diag_label(elem),
                 ability_failure_reason(elem, ability, structs, enums, vectors)
             )
+        }
+        Ty::Arc(_) if matches!(ability, Ability::Clone) => {
+            "Arc values support shallow `.clone()` by bumping the reference count".into()
+        }
+        Ty::Arc(_) if matches!(ability, Ability::Drop) => {
+            "Arc values support `drop` by decrementing the reference count".into()
+        }
+        Ty::Arc(_) if matches!(ability, Ability::Deref) => {
+            "Arc values support built-in dereference".into()
         }
         Ty::Option(elem) if matches!(ability, Ability::Copy | Ability::Clone) => {
             format!(
@@ -1398,6 +1475,9 @@ fn custom_deref_target_ty(
     structs: &HashMap<String, StructDef>,
     fn_sigs: &HashMap<String, FnSig>,
 ) -> Option<Ty> {
+    if let Ty::Arc(inner) = t {
+        return Some(inner.as_ref().clone());
+    }
     let Ty::Struct(name) = t else {
         return None;
     };
@@ -1883,6 +1963,7 @@ fn contains_quantum_ty(t: &Ty) -> bool {
     match t {
         Ty::Qubit | Ty::Result => true,
         Ty::Ptr(inner)
+        | Ty::Arc(inner)
         | Ty::AtomicPtr(inner)
         | Ty::Array(inner, _)
         | Ty::AnonVector(inner, _)
@@ -2654,6 +2735,7 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::AtomicIsize
         | Ty::AtomicUsize
         | Ty::AtomicPtr(_)
+        | Ty::Arc(_)
         | Ty::Thread
         | Ty::Fn(_, _) => false,
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
@@ -2899,7 +2981,10 @@ fn check_moves_args_fallback(
 }
 
 fn is_runtime_owner_ty(t: &Ty) -> bool {
-    matches!(t, Ty::HeapVector(_) | Ty::List(_) | Ty::Matrix(_, _))
+    matches!(
+        t,
+        Ty::HeapVector(_) | Ty::List(_) | Ty::Arc(_) | Ty::Matrix(_, _)
+    )
 }
 
 fn check_moves_runtime_read_or_consume(
@@ -3038,6 +3123,19 @@ fn check_moves_call(
 
     if name == ATOMIC_FENCE && args.len() == 1 {
         return Ok(());
+    }
+
+    if name == ARC_NEW && args.len() == 1 {
+        return check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )
+        .map(|_| ());
     }
 
     if name == JOIN && args.len() == 1 {
@@ -3281,6 +3379,18 @@ fn check_moves_generic_call(
             fn_values,
             ctx,
             Some(&Ty::I32),
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )?;
+        return Ok(());
+    }
+    if name == ARC_NEW && args.len() == 1 {
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
             ExprMoveMode::Consume(MoveReason::PassedByValue),
         )?;
         return Ok(());
@@ -4186,6 +4296,7 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::AnonVector(xt, xn), Ty::AnonVector(yt, yn)) => xn == yn && types_equal(xt, yt),
         (Ty::HeapVector(x), Ty::HeapVector(y)) => types_equal(x, y),
         (Ty::List(x), Ty::List(y)) => types_equal(x, y),
+        (Ty::Arc(x), Ty::Arc(y)) => types_equal(x, y),
         (Ty::Option(x), Ty::Option(y)) => types_equal(x, y),
         (Ty::ResultType(xok, xerr), Ty::ResultType(yok, yerr)) => {
             types_equal(xok, yok) && types_equal(xerr, yerr)
@@ -5584,6 +5695,47 @@ fn infer_closure_expr(
     Ok(Ty::Fn(closure_params, Box::new(ret_ty)))
 }
 
+fn infer_arc_new_call(
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+    hint: Option<&Ty>,
+) -> Result<Ty, String> {
+    if args.len() != 1 {
+        return Err(format!(
+            "`{ARC_NEW}` expects exactly 1 argument, got {}",
+            args.len()
+        ));
+    }
+    let expected_inner = match hint {
+        Some(Ty::Arc(inner)) => Some(inner.as_ref().clone()),
+        _ => None,
+    };
+    let value_ty = infer_expr(
+        &args[0],
+        env,
+        structs,
+        enums,
+        vectors,
+        fns,
+        expected_inner.as_ref(),
+    )?;
+    if let Some(expected) = &expected_inner
+        && !types_equal(&value_ty, expected)
+    {
+        return Err(format!(
+            "`{ARC_NEW}` value type mismatch: expected {}, got {}",
+            ty_diag_label(expected),
+            ty_diag_label(&value_ty)
+        ));
+    }
+    validate_arc_inner(&value_ty, structs, enums, vectors)?;
+    Ok(Ty::Arc(Box::new(value_ty)))
+}
+
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -5765,6 +5917,9 @@ fn infer_expr(
                 return infer_result_constructor(
                     name, args, env, structs, enums, vectors, fns, hint,
                 );
+            }
+            if name == ARC_NEW {
+                return infer_arc_new_call(args, env, structs, enums, vectors, fns, hint);
             }
             if let Some(local_ty) = env.get(name) {
                 if matches!(local_ty, Ty::Fn(_, _)) {
@@ -6645,9 +6800,32 @@ fn infer_expr(
             ty_args,
             args,
         } => {
+            if name == ARC_NEW {
+                if ty_args.len() != 1 {
+                    return Err(format!("`{ARC_NEW}` expects exactly 1 type argument"));
+                }
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{ARC_NEW}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let elem_ty = normalize_ty(&ty_args[0], structs, enums, vectors)?;
+                validate_arc_inner(&elem_ty, structs, enums, vectors)?;
+                let value_ty =
+                    infer_expr(&args[0], env, structs, enums, vectors, fns, Some(&elem_ty))?;
+                if !types_equal(&value_ty, &elem_ty) {
+                    return Err(format!(
+                        "`{ARC_NEW}` value type mismatch: expected {}, got {}",
+                        ty_diag_label(&elem_ty),
+                        ty_diag_label(&value_ty)
+                    ));
+                }
+                return Ok(Ty::Arc(Box::new(elem_ty)));
+            }
             if name != LIST_NEW && name != LIST_WITH_CAPACITY {
                 return Err(format!(
-                    "generic calls are only supported for `{LIST_NEW}` and `{LIST_WITH_CAPACITY}`"
+                    "generic calls are only supported for `{LIST_NEW}`, `{LIST_WITH_CAPACITY}`, and `{ARC_NEW}`"
                 ));
             }
             if ty_args.len() != 1 {
@@ -7446,9 +7624,19 @@ fn infer_expr(
                         Ok((*p).clone())
                     }
                 }
-                _ => custom_deref_target_ty(&ti, structs, fns).ok_or_else(|| {
-                    format!("dereference requires a pointer or `deref` ability, got {ti:?}")
-                }),
+                _ => {
+                    let target = custom_deref_target_ty(&ti, structs, fns).ok_or_else(|| {
+                        format!("dereference requires a pointer or `deref` ability, got {ti:?}")
+                    })?;
+                    if is_atomic_ty(&target) {
+                        Err(
+                            "atomic dereference cannot be read directly; use an atomic method"
+                                .into(),
+                        )
+                    } else {
+                        Ok(target)
+                    }
+                }
             }
         }
     }
@@ -7587,6 +7775,18 @@ fn check_stmt(
                         "assignment target must be variable, dereference, or indexed local array (e.g. `x`, `*p`, `a[i]`)"
                             .into(),
                     )
+                }
+            }
+            if let Expr::Deref(inner) = target {
+                let base_ty = infer_expr(inner, env, struct_fields, enums, vectors, fn_sigs, None)?;
+                if matches!(base_ty, Ty::Arc(_)) {
+                    return Err("cannot assign through `Arc` dereference; `Arc[T]` provides shared read-only access".into());
+                }
+            }
+            if let Expr::Deref(inner) = index_chain_root(target) {
+                let base_ty = infer_expr(inner, env, struct_fields, enums, vectors, fn_sigs, None)?;
+                if matches!(base_ty, Ty::Arc(_)) {
+                    return Err("cannot assign through `Arc` dereference; `Arc[T]` provides shared read-only access".into());
                 }
             }
             let vt = infer_expr(

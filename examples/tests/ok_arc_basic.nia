@@ -1,0 +1,16 @@
+fn main() i32 {
+    let shared: Arc[i32] = arc_new(7);
+    let cloned = shared.clone();
+    let a = *shared;
+    let b = *cloned;
+    println(a + b);
+    drop(shared);
+    drop(cloned);
+
+    let explicit = arc_new[i32](10);
+    let explicit_clone = explicit.clone();
+    println(*explicit_clone);
+    drop(explicit);
+    drop(explicit_clone);
+    0
+}

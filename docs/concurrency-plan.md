@@ -526,7 +526,9 @@ Goal: shared ownership across threads.
 - refcount lowering with `AtomicUsize`;
 - requires `T: send + sync`;
 - sample: `examples/sample_arc.nia`;
-- tests: clone drops inner at correct count, move into closure rejected without `send`.
+- tests: parser/typecheck/codegen coverage for `Arc[T]`, move-only semantics, read-only deref,
+  non-`send + sync` inner rejection, atomic refcount increment/decrement, and `Arc[AtomicI32]`
+  method access through `*arc`.
 
 ### Phase 2: Mutex[T]
 

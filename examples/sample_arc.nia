@@ -1,0 +1,19 @@
+// Phase 1 concurrency sample: Arc[T] shared ownership.
+//
+// Arc[T] is a move-only shared owner. `.clone()` bumps the refcount, `*arc`
+// reads through the shared handle, and `drop(arc)` releases one owner.
+
+fn main() i32 {
+    let shared: Arc[i32] = arc_new(41);
+    let cloned = shared.clone();
+
+    let first = *shared;
+    let second = *cloned + 1;
+
+    println(first);
+    println(second);
+
+    drop(shared);
+    drop(cloned);
+    0
+}

@@ -31,6 +31,8 @@ pub const OPTION_SOME: &str = "Some";
 pub const OPTION_NONE: &str = "None";
 pub const RESULT_OK: &str = "Ok";
 pub const RESULT_ERR: &str = "Err";
+pub const ARC_TYPE: &str = "Arc";
+pub const ARC_NEW: &str = "arc_new";
 pub const LIST_NEW: &str = "list_new";
 pub const LIST_WITH_CAPACITY: &str = "list_with_capacity";
 pub const LIST_LEN: &str = "len";
@@ -225,6 +227,7 @@ pub fn is_reserved_type_name(name: &str) -> bool {
         MATRIX_TYPE
             | COMPLEX_TYPE
             | LIST_TYPE
+            | ARC_TYPE
             | OPTION_TYPE
             | RESULT_TYPE
             | QUBIT
@@ -275,6 +278,7 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | OPTION_NONE
             | RESULT_OK
             | RESULT_ERR
+            | ARC_NEW
             | OUTER
             | COMPLEX_NEW
             | COMPLEX_ADD

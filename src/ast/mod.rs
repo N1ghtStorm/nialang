@@ -64,6 +64,8 @@ pub enum Ty {
     HeapVector(Box<Ty>),
     /// Heap-backed growable list, written as `List[T]`.
     List(Box<Ty>),
+    /// Atomic reference-counted shared owner, written as `Arc[T]`.
+    Arc(Box<Ty>),
     /// Built-in optional value type, written as `Option[T]`.
     Option(Box<Ty>),
     /// Built-in fallible value type, written as `Result[T, E]`.
@@ -177,6 +179,7 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::AnonVector(elem, n) => format!("anonvec_{}_{}", ty_symbol_fragment(elem), n),
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
+        Ty::Arc(elem) => format!("arc_{}", ty_symbol_fragment(elem)),
         Ty::Option(elem) => format!("option_{}", ty_symbol_fragment(elem)),
         Ty::ResultType(ok, err) => {
             format!(

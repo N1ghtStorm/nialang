@@ -65,7 +65,9 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_atomic_i128.nia"),
         include_str!("../../../examples/tests/ok_threads_minimal.nia"),
         include_str!("../../../examples/tests/ok_send_sync_struct.nia"),
+        include_str!("../../../examples/tests/ok_arc_basic.nia"),
         include_str!("../../../examples/sample_send_sync.nia"),
+        include_str!("../../../examples/sample_arc.nia"),
         include_str!("../../../examples/tests/ok_option_result.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
@@ -2114,6 +2116,89 @@ fn main() i32 {
 }
 
 #[test]
+fn typecheck_arc_rejects_non_send_sync_inner() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let shared: Arc[Thread] = arc_new(spawn worker);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Arc[Thread] must fail send/sync bounds");
+    assert!(err.contains("requires inner type to be `send`"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_arc_is_move_only_but_clone_keeps_source_usable() {
+    let ok = r#"
+fn main() i32 {
+    let shared: Arc[i32] = arc_new(1);
+    let cloned = shared.clone();
+    println(*shared);
+    println(*cloned);
+    drop(shared);
+    drop(cloned);
+    0
+}
+"#;
+    check_all(ok).expect("Arc clone should be shallow and keep source usable");
+
+    let moved = r#"
+fn main() i32 {
+    let shared: Arc[i32] = arc_new(1);
+    let moved = shared;
+    println(*shared);
+    drop(moved);
+    0
+}
+"#;
+    let err = check_all(moved).expect_err("Arc assignment should move the source");
+    assert!(err.contains("use of moved local `shared`"), "{err}");
+    assert!(
+        err.contains("Arc values are shared runtime owners"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_arc_deref_is_read_only() {
+    let src = r#"
+fn main() i32 {
+    let shared: Arc[i32] = arc_new(1);
+    *shared = 2;
+    drop(shared);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Arc deref assignment should fail");
+    assert!(
+        err.contains("cannot assign through `Arc` dereference"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_arc_allows_atomic_inner_via_atomic_methods() {
+    let src = r#"
+fn main() i32 {
+    let shared: Arc[AtomicI32] = arc_new(atomic_i32(0));
+    let old = (*shared).fetch_add(1, Ordering::AcqRel);
+    let now = (*shared).load(Ordering::Acquire);
+    println(old + now);
+    drop(shared);
+    0
+}
+"#;
+    check_all(src).expect("Arc[AtomicI32] should be usable through atomic methods");
+}
+
+#[test]
 fn typecheck_rejects_enum_send_with_thread_payload() {
     let src = r#"
 enum WorkerState has send, drop {
@@ -2208,24 +2293,20 @@ fn typecheck_atomic_types_are_send_and_sync() {
             "{ty:?} should be sync"
         );
     }
-    assert!(
-        !has_formal_ability(
-            &Ty::Thread,
-            Ability::Send,
-            &structs,
-            &enums,
-            &vectors
-        )
-    );
-    assert!(
-        !has_formal_ability(
-            &Ty::Thread,
-            Ability::Sync,
-            &structs,
-            &enums,
-            &vectors
-        )
-    );
+    assert!(!has_formal_ability(
+        &Ty::Thread,
+        Ability::Send,
+        &structs,
+        &enums,
+        &vectors
+    ));
+    assert!(!has_formal_ability(
+        &Ty::Thread,
+        Ability::Sync,
+        &structs,
+        &enums,
+        &vectors
+    ));
 }
 
 #[test]
