@@ -421,6 +421,11 @@ fn parse_fixture_spawn_move_closure() {
 }
 
 #[test]
+fn parse_fixture_mutex_basic() {
+    parse_ok(include_str!("../../examples/tests/ok_mutex_basic.nia"));
+}
+
+#[test]
 fn parse_fixture_option_result() {
     parse_ok(include_str!("../../examples/tests/ok_option_result.nia"));
 }
@@ -661,6 +666,34 @@ fn main() i32 {
             ));
         }
         other => panic!("expected typed arc let, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_mutex_type_guard_and_generic_constructor() {
+    let src = r#"
+fn main() i32 {
+    let m: Mutex[i32] = mutex_new[i32](1);
+    let guard: MutexGuard[i32] = m.lock();
+    *guard
+}
+"#;
+    let toks = tokenize(src);
+    let (_, _, fns, _) = Parser::new(toks).parse_file().expect("parse");
+    match &fns[0].body.stmts[0] {
+        Stmt::Let {
+            ty: Some(ty),
+            init: Some(init),
+            ..
+        } => {
+            assert_eq!(ty, &Ty::Mutex(Box::new(Ty::I32)));
+            assert!(matches!(
+                init,
+                Expr::GenericCall { name, ty_args, args }
+                    if name == "mutex_new" && ty_args == &vec![Ty::I32] && args.len() == 1
+            ));
+        }
+        other => panic!("expected typed mutex let, got {other:?}"),
     }
 }
 

@@ -1,0 +1,13 @@
+fn main() i32 {
+    let m: Mutex[i32] = mutex_new(0);
+
+    let guard: MutexGuard[i32] = m.lock();
+    *guard = *guard + 1;
+    drop(guard);
+
+    let maybe: Option[MutexGuard[i32]] = m.try_lock();
+    drop(maybe);
+
+    drop(m);
+    0
+}

@@ -1,0 +1,37 @@
+// Phase 3 concurrency sample: Arc[Mutex[T]] shared mutable state.
+//
+// Mutex[T] is a move-only owner. `.lock()` returns a move-only MutexGuard[T]
+// that unlocks on drop.
+
+fn main() i32 {
+    let shared: Arc[Mutex[i32]] = arc_new(mutex_new(0));
+
+    let left_shared = shared.clone();
+    let right_shared = shared.clone();
+
+    let left: Thread = spawn move || {
+        for i in 0..10000 {
+            let guard: MutexGuard[i32] = (*left_shared).lock();
+            *guard = *guard + 1;
+            drop(guard);
+        }
+    };
+
+    let right: Thread = spawn move || {
+        for i in 0..10000 {
+            let guard: MutexGuard[i32] = (*right_shared).lock();
+            *guard = *guard + 1;
+            drop(guard);
+        }
+    };
+
+    join(left);
+    join(right);
+
+    let final_guard: MutexGuard[i32] = (*shared).lock();
+    println(*final_guard);
+    drop(final_guard);
+
+    drop(shared);
+    0
+}

@@ -66,6 +66,10 @@ pub enum Ty {
     List(Box<Ty>),
     /// Atomic reference-counted shared owner, written as `Arc[T]`.
     Arc(Box<Ty>),
+    /// Built-in mutex owner, written as `Mutex[T]`.
+    Mutex(Box<Ty>),
+    /// RAII mutex guard, written as `MutexGuard[T]`.
+    MutexGuard(Box<Ty>),
     /// Built-in optional value type, written as `Option[T]`.
     Option(Box<Ty>),
     /// Built-in fallible value type, written as `Result[T, E]`.
@@ -180,6 +184,8 @@ fn ty_symbol_fragment(t: &Ty) -> String {
         Ty::HeapVector(elem) => format!("heapvec_{}", ty_symbol_fragment(elem)),
         Ty::List(elem) => format!("list_{}", ty_symbol_fragment(elem)),
         Ty::Arc(elem) => format!("arc_{}", ty_symbol_fragment(elem)),
+        Ty::Mutex(elem) => format!("mutex_{}", ty_symbol_fragment(elem)),
+        Ty::MutexGuard(elem) => format!("mutex_guard_{}", ty_symbol_fragment(elem)),
         Ty::Option(elem) => format!("option_{}", ty_symbol_fragment(elem)),
         Ty::ResultType(ok, err) => {
             format!(

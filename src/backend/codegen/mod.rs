@@ -20,9 +20,10 @@ use crate::nia_std::{
     GATE_Z, JOIN, LEN, LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY,
     MATRIX_CLONE, MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS,
     MATRIX_SET, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA,
-    MERKLE_VERIFY, OPTION_NONE, OPTION_SOME, OPTION_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
-    RECORD, RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX,
-    TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
+    MERKLE_VERIFY, MUTEX_LOCK, MUTEX_NEW, MUTEX_TRY_LOCK, MUTEX_TYPE, OPTION_NONE, OPTION_SOME,
+    OPTION_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC, RECORD, RESULT_ERR, RESULT_OK,
+    RESULT_TYPE, SHA256, SIN, THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP,
+    VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 use crate::semantics::typecheck::{FnSig, closure_capture_names};
 
@@ -534,6 +535,9 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::AtomicUsize => "AtomicUsize".into(),
         Ty::AtomicPtr(elem) => format!("AtomicPtr[{}]", ty_print_label(elem)),
         Ty::Thread => "Thread".into(),
+        Ty::Arc(elem) => format!("Arc[{}]", ty_print_label(elem)),
+        Ty::Mutex(elem) => format!("Mutex[{}]", ty_print_label(elem)),
+        Ty::MutexGuard(elem) => format!("MutexGuard[{}]", ty_print_label(elem)),
         Ty::Option(elem) => format!("Option[{}]", ty_print_label(elem)),
         Ty::ResultType(ok, err) => {
             format!("Result[{}, {}]", ty_print_label(ok), ty_print_label(err))
@@ -553,7 +557,6 @@ fn ty_print_label(t: &Ty) -> String {
         Ty::AnonVector(inner, n) => format!("{}<{}>", ty_print_label(inner), n),
         Ty::HeapVector(inner) => format!("{}<>", ty_print_label(inner)),
         Ty::List(inner) => format!("List[{}]", ty_print_label(inner)),
-        Ty::Arc(inner) => format!("Arc[{}]", ty_print_label(inner)),
         Ty::Matrix(inner, _) if matches!(inner.as_ref(), Ty::Unit) => "Matrix".into(),
         Ty::Matrix(inner, _) => format!("Matrix<{}>", ty_print_label(inner)),
         Ty::Fn(params, ret) => {
@@ -764,6 +767,8 @@ fn llvm_ty(t: &Ty, _structs: &[StructDef]) -> String {
         Ty::HeapVector(_) => "ptr".into(),
         Ty::List(_) => "ptr".into(),
         Ty::Arc(_) => "ptr".into(),
+        Ty::Mutex(_) => "ptr".into(),
+        Ty::MutexGuard(_) => "ptr".into(),
         Ty::Matrix(_, _) => "ptr".into(),
         Ty::Fn(_, _) => fn_value_ll_ty().into(),
     }
@@ -781,6 +786,9 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         }
         Ty::Struct(name) if name == ARC_TYPE => {
             panic!("typechecked Arc without type argument")
+        }
+        Ty::Struct(name) if name == MUTEX_TYPE => {
+            panic!("typechecked Mutex without type argument")
         }
         Ty::Struct(name) if name == crate::nia_std::ATOMIC_BOOL_TYPE => Ty::AtomicBool,
         Ty::Struct(name) if name == ATOMIC_I8_TYPE => Ty::AtomicI8,
@@ -804,6 +812,8 @@ fn normalize_codegen_ty(t: &Ty) -> Ty {
         Ty::HeapVector(inner) => Ty::HeapVector(Box::new(normalize_codegen_ty(inner))),
         Ty::List(inner) => Ty::List(Box::new(normalize_codegen_ty(inner))),
         Ty::Arc(inner) => Ty::Arc(Box::new(normalize_codegen_ty(inner))),
+        Ty::Mutex(inner) => Ty::Mutex(Box::new(normalize_codegen_ty(inner))),
+        Ty::MutexGuard(inner) => Ty::MutexGuard(Box::new(normalize_codegen_ty(inner))),
         Ty::Option(inner) => Ty::Option(Box::new(normalize_codegen_ty(inner))),
         Ty::ResultType(ok, err) => Ty::ResultType(
             Box::new(normalize_codegen_ty(ok)),
@@ -1460,6 +1470,8 @@ impl<'a> Gen<'a> {
             Ty::HeapVector(_)
             | Ty::List(_)
             | Ty::Arc(_)
+            | Ty::Mutex(_)
+            | Ty::MutexGuard(_)
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -2059,6 +2071,8 @@ impl<'a> Gen<'a> {
             Ty::HeapVector(_)
             | Ty::List(_)
             | Ty::Arc(_)
+            | Ty::Mutex(_)
+            | Ty::MutexGuard(_)
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _) => false,
@@ -2269,6 +2283,8 @@ impl<'a> Gen<'a> {
             Ty::HeapVector(elem_ty) => self.emit_heap_vector_drop_value(elem_ty, &value),
             Ty::List(elem_ty) => self.emit_list_drop_value(elem_ty, &value),
             Ty::Arc(elem_ty) => self.emit_arc_drop_value(elem_ty, &value),
+            Ty::Mutex(elem_ty) => self.emit_mutex_drop_value(elem_ty, &value),
+            Ty::MutexGuard(elem_ty) => self.emit_mutex_guard_drop_value(elem_ty, &value),
             Ty::Option(elem_ty) => self.emit_option_drop_value(elem_ty, &value),
             Ty::ResultType(ok_ty, err_ty) => self.emit_result_drop_value(ok_ty, err_ty, &value),
             Ty::Matrix(_, _) => self.emit_matrix_drop_value(&value),
@@ -2638,6 +2654,7 @@ impl<'a> Gen<'a> {
             Expr::Deref(inner) => match self.expr_codegen_ty(inner, locals) {
                 Ty::Ptr(inner) => inner.as_ref().clone(),
                 Ty::Arc(inner) => inner.as_ref().clone(),
+                Ty::MutexGuard(inner) => inner.as_ref().clone(),
                 other => other,
             },
             Expr::Field(inner, _) => self.expr_codegen_ty(inner, locals),
@@ -2648,7 +2665,12 @@ impl<'a> Gen<'a> {
     fn is_runtime_owner_ty(&self, ty: &Ty) -> bool {
         matches!(
             ty,
-            Ty::HeapVector(_) | Ty::List(_) | Ty::Arc(_) | Ty::Matrix(_, _)
+            Ty::HeapVector(_)
+                | Ty::List(_)
+                | Ty::Arc(_)
+                | Ty::Mutex(_)
+                | Ty::MutexGuard(_)
+                | Ty::Matrix(_, _)
         )
     }
 
@@ -2824,6 +2846,8 @@ impl<'a> Gen<'a> {
                     || name == LIST_CAPACITY
                     || name == LIST_GET
                     || name == LIST_PUSH
+                    || name == MUTEX_LOCK
+                    || name == MUTEX_TRY_LOCK
                 {
                     self.clear_consumed_custom_drop_locals_expr(
                         receiver, locals, drop_flags, false,
@@ -3749,6 +3773,166 @@ impl<'a> Gen<'a> {
         writeln!(self.out, "  call void @free(ptr {})", arc).unwrap();
         writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
         writeln!(self.out, "{}:", cont_lbl).unwrap();
+    }
+
+    fn mutex_inner_ll_ty(&self, elem_ty: &Ty) -> String {
+        format!("{{ [64 x i8], {} }}", llvm_ty(elem_ty, self.structs))
+    }
+
+    fn mutex_lock_ptr(&mut self, mutex: &str, elem_ty: &Ty) -> String {
+        let inner_ll = self.mutex_inner_ll_ty(elem_ty);
+        let ptr = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i32 0, i32 0",
+            ptr, inner_ll, mutex
+        )
+        .unwrap();
+        format!("%{ptr}")
+    }
+
+    fn mutex_value_ptr(&mut self, mutex: &str, elem_ty: &Ty) -> String {
+        let inner_ll = self.mutex_inner_ll_ty(elem_ty);
+        let ptr = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = getelementptr inbounds {}, ptr {}, i32 0, i32 1",
+            ptr, inner_ll, mutex
+        )
+        .unwrap();
+        format!("%{ptr}")
+    }
+
+    fn emit_mutex_new_value(&mut self, elem_ty: &Ty, value: &str) -> String {
+        let inner_ll = self.mutex_inner_ll_ty(elem_ty);
+        let size = self.emit_sizeof_ll_ty_i64(&inner_ll);
+        let raw = self.fresh();
+        writeln!(self.out, "  %{} = call ptr @malloc(i64 {})", raw, size).unwrap();
+        let mutex = format!("%{raw}");
+        let lock_ptr = self.mutex_lock_ptr(&mutex, elem_ty);
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_mutex_init(ptr {}, ptr null)",
+            rc, lock_ptr
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "mutex.init.abort");
+        let value_ptr = self.mutex_value_ptr(&mutex, elem_ty);
+        writeln!(
+            self.out,
+            "  store {} {}, ptr {}",
+            llvm_ty(elem_ty, self.structs),
+            value,
+            value_ptr
+        )
+        .unwrap();
+        mutex
+    }
+
+    fn emit_mutex_lock_value(&mut self, elem_ty: &Ty, mutex: &str) -> String {
+        let lock_ptr = self.mutex_lock_ptr(mutex, elem_ty);
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_mutex_lock(ptr {})",
+            rc, lock_ptr
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "mutex.lock.abort");
+        mutex.to_string()
+    }
+
+    fn emit_mutex_try_lock_value(&mut self, elem_ty: &Ty, mutex: &str) -> String {
+        let lock_ptr = self.mutex_lock_ptr(mutex, elem_ty);
+        let rc = self.fresh();
+        let some_lbl = self.fresh_label("mutex.try_lock.some");
+        let busy_lbl = self.fresh_label("mutex.try_lock.busy");
+        let none_lbl = self.fresh_label("mutex.try_lock.none");
+        let abort_lbl = self.fresh_label("mutex.try_lock.abort");
+        let cont_lbl = self.fresh_label("mutex.try_lock.cont");
+        let result_slot = self.fresh();
+        writeln!(self.out, "  %{} = alloca ptr", result_slot).unwrap();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_mutex_trylock(ptr {})",
+            rc, lock_ptr
+        )
+        .unwrap();
+        let is_ok = self.fresh();
+        writeln!(self.out, "  %{} = icmp eq i32 %{}, 0", is_ok, rc).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_ok, some_lbl, busy_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", some_lbl).unwrap();
+        let some = self.emit_sum_value(
+            1,
+            Some(&Ty::MutexGuard(Box::new(elem_ty.clone()))),
+            Some(mutex),
+        );
+        writeln!(self.out, "  store ptr {}, ptr %{}", some, result_slot).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", busy_lbl).unwrap();
+        let is_busy = self.fresh();
+        writeln!(self.out, "  %{} = icmp eq i32 %{}, 16", is_busy, rc).unwrap();
+        writeln!(
+            self.out,
+            "  br i1 %{}, label %{}, label %{}",
+            is_busy, none_lbl, abort_lbl
+        )
+        .unwrap();
+        writeln!(self.out, "{}:", none_lbl).unwrap();
+        let none = self.emit_sum_value(0, None, None);
+        writeln!(self.out, "  store ptr {}, ptr %{}", none, result_slot).unwrap();
+        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+        writeln!(self.out, "{}:", abort_lbl).unwrap();
+        writeln!(self.out, "  call void @abort()").unwrap();
+        writeln!(self.out, "  unreachable").unwrap();
+        writeln!(self.out, "{}:", cont_lbl).unwrap();
+        let out = self.fresh();
+        writeln!(self.out, "  %{} = load ptr, ptr %{}", out, result_slot).unwrap();
+        format!("%{out}")
+    }
+
+    fn emit_mutex_guard_drop_value(&mut self, elem_ty: &Ty, guard: &str) {
+        let lock_ptr = self.mutex_lock_ptr(guard, elem_ty);
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_mutex_unlock(ptr {})",
+            rc, lock_ptr
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "mutex.unlock.abort");
+    }
+
+    fn emit_mutex_drop_value(&mut self, elem_ty: &Ty, mutex: &str) {
+        let lock_ptr = self.mutex_lock_ptr(mutex, elem_ty);
+        let rc = self.fresh();
+        writeln!(
+            self.out,
+            "  %{} = call i32 @pthread_mutex_destroy(ptr {})",
+            rc, lock_ptr
+        )
+        .unwrap();
+        self.emit_abort_if_pthread_error(&format!("%{rc}"), "mutex.destroy.abort");
+        if self.is_language_drop_ty(elem_ty) {
+            let value_ptr = self.mutex_value_ptr(mutex, elem_ty);
+            let loaded = self.fresh();
+            writeln!(
+                self.out,
+                "  %{} = load {}, ptr {}",
+                loaded,
+                llvm_ty(elem_ty, self.structs),
+                value_ptr
+            )
+            .unwrap();
+            self.emit_drop_value(elem_ty, format!("%{loaded}"));
+        }
+        writeln!(self.out, "  call void @free(ptr {})", mutex).unwrap();
     }
 
     fn emit_pi_value(&mut self) -> String {
@@ -4798,6 +4982,8 @@ impl<'a> Gen<'a> {
             | Ty::HeapVector(_)
             | Ty::List(_)
             | Ty::Arc(_)
+            | Ty::Mutex(_)
+            | Ty::MutexGuard(_)
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -4930,6 +5116,8 @@ impl<'a> Gen<'a> {
             | Ty::HeapVector(_)
             | Ty::List(_)
             | Ty::Arc(_)
+            | Ty::Mutex(_)
+            | Ty::MutexGuard(_)
             | Ty::Option(_)
             | Ty::ResultType(_, _)
             | Ty::Matrix(_, _)
@@ -8855,6 +9043,8 @@ impl<'a> Gen<'a> {
                     | Ty::HeapVector(_)
                     | Ty::List(_)
                     | Ty::Arc(_)
+                    | Ty::Mutex(_)
+                    | Ty::MutexGuard(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Matrix(_, _)
@@ -8989,6 +9179,8 @@ impl<'a> Gen<'a> {
                 | Some(Ty::HeapVector(_))
                 | Some(Ty::List(_))
                 | Some(Ty::Arc(_))
+                | Some(Ty::Mutex(_))
+                | Some(Ty::MutexGuard(_))
                 | Some(Ty::Option(_))
                 | Some(Ty::ResultType(_, _))
                 | Some(Ty::Enum(_))
@@ -9140,6 +9332,8 @@ impl<'a> Gen<'a> {
                     | Ty::HeapVector(_)
                     | Ty::List(_)
                     | Ty::Arc(_)
+                    | Ty::Mutex(_)
+                    | Ty::MutexGuard(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9233,6 +9427,8 @@ impl<'a> Gen<'a> {
                     | Ty::HeapVector(_)
                     | Ty::List(_)
                     | Ty::Arc(_)
+                    | Ty::Mutex(_)
+                    | Ty::MutexGuard(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9313,6 +9509,8 @@ impl<'a> Gen<'a> {
                     | Ty::HeapVector(_)
                     | Ty::List(_)
                     | Ty::Arc(_)
+                    | Ty::Mutex(_)
+                    | Ty::MutexGuard(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9457,6 +9655,8 @@ impl<'a> Gen<'a> {
                     | Ty::HeapVector(_)
                     | Ty::List(_)
                     | Ty::Arc(_)
+                    | Ty::Mutex(_)
+                    | Ty::MutexGuard(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9620,6 +9820,8 @@ impl<'a> Gen<'a> {
                     | Ty::HeapVector(_)
                     | Ty::List(_)
                     | Ty::Arc(_)
+                    | Ty::Mutex(_)
+                    | Ty::MutexGuard(_)
                     | Ty::Option(_)
                     | Ty::ResultType(_, _)
                     | Ty::Enum(_)
@@ -9783,6 +9985,17 @@ impl<'a> Gen<'a> {
                         self.emit_arc_new_value(elem_ty, &value),
                     );
                 }
+                if name == MUTEX_NEW {
+                    let [elem_ty] = ty_args.as_slice() else {
+                        unreachable!("typechecked mutex_new type args")
+                    };
+                    let (value_ty, value) = self.emit_expr(&args[0], locals, Some(elem_ty));
+                    debug_assert!(types_match(&value_ty, elem_ty));
+                    return (
+                        Ty::Mutex(Box::new(elem_ty.clone())),
+                        self.emit_mutex_new_value(elem_ty, &value),
+                    );
+                }
                 if name == LIST_NEW {
                     let [elem_ty] = ty_args.as_slice() else {
                         unreachable!("typechecked list_new type args")
@@ -9908,6 +10121,19 @@ impl<'a> Gen<'a> {
                     return (
                         Ty::Arc(Box::new(elem_ty.clone())),
                         self.emit_arc_new_value(&elem_ty, &value),
+                    );
+                }
+                if name == MUTEX_NEW {
+                    let elem_hint = match hint {
+                        Some(Ty::Mutex(elem_ty)) => Some(elem_ty.as_ref().clone()),
+                        _ => None,
+                    };
+                    let (value_ty, value) = self.emit_expr(&args[0], locals, elem_hint.as_ref());
+                    let elem_ty = elem_hint.unwrap_or_else(|| value_ty.clone());
+                    debug_assert!(types_match(&value_ty, &elem_ty));
+                    return (
+                        Ty::Mutex(Box::new(elem_ty.clone())),
+                        self.emit_mutex_new_value(&elem_ty, &value),
                     );
                 }
                 if name == ATOMIC_FENCE {
@@ -10206,6 +10432,17 @@ impl<'a> Gen<'a> {
                     ));
                     let cloned = self.emit_clone_value(&recv_ty, &recv_val);
                     return (recv_ty, cloned);
+                }
+                if let Ty::Mutex(elem_ty) = &recv_ty {
+                    debug_assert!(args.is_empty());
+                    if name == MUTEX_LOCK {
+                        let guard = self.emit_mutex_lock_value(elem_ty, &recv_val);
+                        return (Ty::MutexGuard(elem_ty.clone()), guard);
+                    }
+                    if name == MUTEX_TRY_LOCK {
+                        let value = self.emit_mutex_try_lock_value(elem_ty, &recv_val);
+                        return (Ty::Option(Box::new(Ty::MutexGuard(elem_ty.clone()))), value);
+                    }
                 }
                 if let Ty::List(elem_ty) = &recv_ty {
                     let elem_ty = elem_ty.as_ref();
@@ -11010,6 +11247,11 @@ impl<'a> Gen<'a> {
                         let ptr = self.arc_value_ptr(&v, &pointee_ty);
                         (pointee_ty, ptr)
                     }
+                    Ty::MutexGuard(pointee) => {
+                        let pointee_ty = (*pointee).clone();
+                        let ptr = self.mutex_value_ptr(&v, &pointee_ty);
+                        (pointee_ty, ptr)
+                    }
                     other => {
                         if let Some((target_ty, ptr)) = self.emit_custom_deref_ptr(&other, v) {
                             (target_ty, ptr)
@@ -11398,6 +11640,11 @@ impl<'a> Gen<'a> {
                 let (pt, pv) = self.emit_expr(inner, locals, None);
                 match pt {
                     Ty::Ptr(pointee) => ((*pointee).clone(), pv),
+                    Ty::MutexGuard(pointee) => {
+                        let pointee_ty = (*pointee).clone();
+                        let ptr = self.mutex_value_ptr(&pv, &pointee_ty);
+                        (pointee_ty, ptr)
+                    }
                     other => {
                         if let Some((target_ty, ptr)) = self.emit_custom_deref_ptr(&other, pv) {
                             (target_ty, ptr)
@@ -11463,6 +11710,8 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::HeapVector(xt), Ty::HeapVector(yt)) => types_match(xt, yt),
         (Ty::List(xt), Ty::List(yt)) => types_match(xt, yt),
         (Ty::Arc(xt), Ty::Arc(yt)) => types_match(xt, yt),
+        (Ty::Mutex(xt), Ty::Mutex(yt)) => types_match(xt, yt),
+        (Ty::MutexGuard(xt), Ty::MutexGuard(yt)) => types_match(xt, yt),
         (Ty::Option(xt), Ty::Option(yt)) => types_match(xt, yt),
         (Ty::ResultType(xok, xerr), Ty::ResultType(yok, yerr)) => {
             types_match(xok, yok) && types_match(xerr, yerr)

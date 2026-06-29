@@ -18,10 +18,10 @@ use crate::nia_std::{
     LIST_CAPACITY, LIST_GET, LIST_LEN, LIST_NEW, LIST_PUSH, LIST_WITH_CAPACITY, MATRIX_CLONE,
     MATRIX_COLS, MATRIX_DROP, MATRIX_GET, MATRIX_LEN, MATRIX_NEW, MATRIX_ROWS, MATRIX_SET,
     MATRIX_TYPE, MEASURE, MERKLE_LEAF_HASH, MERKLE_NODE_HASH, MERKLE_ROOT, MERKLE_ROOT_FROM_DATA,
-    MERKLE_VERIFY, OPTION_NONE, OPTION_SOME, OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT,
-    READ, REALLOC, RECORD, RESULT, RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, SPAWN,
-    THREAD_TYPE, TO_ARRAY, TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN,
-    VECTOR_SET,
+    MERKLE_VERIFY, MUTEX_GUARD_TYPE, MUTEX_LOCK, MUTEX_NEW, MUTEX_TRY_LOCK, MUTEX_TYPE,
+    OPTION_NONE, OPTION_SOME, OPTION_TYPE, ORDERING_TYPE, OUTER, PI, PRINTLN, QUBIT, READ, REALLOC,
+    RECORD, RESULT, RESULT_ERR, RESULT_OK, RESULT_TYPE, SHA256, SIN, SPAWN, THREAD_TYPE, TO_ARRAY,
+    TO_MATRIX, TO_VEC, VECTOR_CLONE, VECTOR_DROP, VECTOR_GET, VECTOR_LEN, VECTOR_SET,
 };
 
 const QUANT_SCOPE_MARKER: &str = "\0nia.quant.scope";
@@ -74,6 +74,10 @@ fn normalize_ty(
                 Err("type `Result` requires type arguments `Result[T, E]`".into())
             } else if name == ARC_TYPE {
                 Err("type `Arc` requires a type argument `Arc[T]`".into())
+            } else if name == MUTEX_TYPE {
+                Err("type `Mutex` requires a type argument `Mutex[T]`".into())
+            } else if name == MUTEX_GUARD_TYPE {
+                Err("type `MutexGuard` requires a type argument `MutexGuard[T]`".into())
             } else if name == ATOMIC_BOOL_TYPE {
                 Ok(Ty::AtomicBool)
             } else if let Some(atomic_ty) = atomic_int_type_name_ty(name) {
@@ -131,6 +135,14 @@ fn normalize_ty(
             validate_arc_inner(&norm, structs, enums, vectors)?;
             Ok(Ty::Arc(Box::new(norm)))
         }
+        Ty::Mutex(elem) => {
+            let norm = normalize_ty(elem, structs, enums, vectors)?;
+            validate_mutex_inner(&norm, structs, enums, vectors)?;
+            Ok(Ty::Mutex(Box::new(norm)))
+        }
+        Ty::MutexGuard(elem) => Ok(Ty::MutexGuard(Box::new(normalize_ty(
+            elem, structs, enums, vectors,
+        )?))),
         Ty::Option(elem) => Ok(Ty::Option(Box::new(normalize_ty(
             elem, structs, enums, vectors,
         )?))),
@@ -490,6 +502,8 @@ fn has_send(
         Ty::Arc(elem) => {
             has_send(elem, structs, enums, vectors) && has_sync(elem, structs, enums, vectors)
         }
+        Ty::Mutex(elem) => has_send(elem, structs, enums, vectors),
+        Ty::MutexGuard(_) => false,
         Ty::Option(elem) => has_send(elem, structs, enums, vectors),
         Ty::ResultType(ok, err) => {
             has_send(ok, structs, enums, vectors) && has_send(err, structs, enums, vectors)
@@ -534,6 +548,8 @@ fn has_sync(
         Ty::Arc(elem) => {
             has_send(elem, structs, enums, vectors) && has_sync(elem, structs, enums, vectors)
         }
+        Ty::Mutex(elem) => has_send(elem, structs, enums, vectors),
+        Ty::MutexGuard(_) => false,
         Ty::Option(elem) => has_sync(elem, structs, enums, vectors),
         Ty::ResultType(ok, err) => {
             has_sync(ok, structs, enums, vectors) && has_sync(err, structs, enums, vectors)
@@ -686,6 +702,31 @@ fn validate_arc_inner(
             "`Arc[{}]` requires inner type to be `sync`: {}",
             ty_diag_label(inner),
             ability_failure_reason(inner, Ability::Sync, structs, enums, vectors)
+        ));
+    }
+    Ok(())
+}
+
+fn validate_mutex_inner(
+    inner: &Ty,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+) -> Result<(), String> {
+    if matches!(inner, Ty::Unit) {
+        return Err("`Mutex[()]` is not supported".into());
+    }
+    if contains_quantum_ty(inner) {
+        return Err(format!(
+            "`Mutex[{}]` cannot contain quantum types",
+            ty_diag_label(inner)
+        ));
+    }
+    if !has_send(inner, structs, enums, vectors) {
+        return Err(format!(
+            "`Mutex[{}]` requires inner type to be `send`: {}",
+            ty_diag_label(inner),
+            ability_failure_reason(inner, Ability::Send, structs, enums, vectors)
         ));
     }
     Ok(())
@@ -1164,6 +1205,8 @@ fn has_formal_ability(
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
         Ty::Arc(_) => matches!(ability, Ability::Clone | Ability::Drop | Ability::Deref),
+        Ty::Mutex(_) => matches!(ability, Ability::Drop),
+        Ty::MutexGuard(_) => matches!(ability, Ability::Drop | Ability::Deref),
         Ty::Option(elem) if matches!(ability, Ability::Drop) => {
             has_formal_ability(elem, ability, structs, enums, vectors)
         }
@@ -1257,6 +1300,8 @@ fn ty_diag_label(t: &Ty) -> String {
         Ty::HeapVector(elem) => format!("{}<>", ty_diag_label(elem)),
         Ty::List(elem) => format!("List[{}]", ty_diag_label(elem)),
         Ty::Arc(elem) => format!("Arc[{}]", ty_diag_label(elem)),
+        Ty::Mutex(elem) => format!("Mutex[{}]", ty_diag_label(elem)),
+        Ty::MutexGuard(elem) => format!("MutexGuard[{}]", ty_diag_label(elem)),
         Ty::Option(elem) => format!("Option[{}]", ty_diag_label(elem)),
         Ty::ResultType(ok, err) => {
             format!("Result[{}, {}]", ty_diag_label(ok), ty_diag_label(err))
@@ -1374,6 +1419,12 @@ fn ability_failure_reason(
         Ty::Arc(_) if matches!(ability, Ability::Copy) => {
             "Arc values are shared runtime owners and are not `copy`; use `.clone()` to bump the reference count".into()
         }
+        Ty::Mutex(_) if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "Mutex values are runtime owners and are not copyable or cloneable".into()
+        }
+        Ty::MutexGuard(_) if matches!(ability, Ability::Copy | Ability::Clone) => {
+            "MutexGuard values are move-only RAII tokens".into()
+        }
         Ty::Matrix(_, _) if matches!(ability, Ability::Copy) => {
             "Matrix is a runtime owner and is not `copy`; use `.clone()` to duplicate it".into()
         }
@@ -1411,6 +1462,16 @@ fn ability_failure_reason(
                 ability_label(missing),
                 ability_failure_reason(elem, missing, structs, enums, vectors)
             )
+        }
+        Ty::Mutex(elem) if matches!(ability, Ability::Send | Ability::Sync) => {
+            format!(
+                "Mutex requires inner type {} to support `send`: {}",
+                ty_diag_label(elem),
+                ability_failure_reason(elem, Ability::Send, structs, enums, vectors)
+            )
+        }
+        Ty::MutexGuard(_) if matches!(ability, Ability::Send | Ability::Sync) => {
+            "MutexGuard values cannot be transferred or shared across threads".into()
         }
         Ty::AtomicBool
         | Ty::AtomicI8
@@ -1451,6 +1512,15 @@ fn ability_failure_reason(
         }
         Ty::Arc(_) if matches!(ability, Ability::Deref) => {
             "Arc values support built-in dereference".into()
+        }
+        Ty::Mutex(_) if matches!(ability, Ability::Drop) => {
+            "Mutex values support `drop` by destroying the pthread mutex and inner value".into()
+        }
+        Ty::MutexGuard(_) if matches!(ability, Ability::Drop) => {
+            "MutexGuard values support `drop` by unlocking the mutex".into()
+        }
+        Ty::MutexGuard(_) if matches!(ability, Ability::Deref) => {
+            "MutexGuard values support built-in dereference".into()
         }
         Ty::Option(elem) if matches!(ability, Ability::Copy | Ability::Clone) => {
             format!(
@@ -1526,6 +1596,9 @@ fn custom_deref_target_ty(
     fn_sigs: &HashMap<String, FnSig>,
 ) -> Option<Ty> {
     if let Ty::Arc(inner) = t {
+        return Some(inner.as_ref().clone());
+    }
+    if let Ty::MutexGuard(inner) = t {
         return Some(inner.as_ref().clone());
     }
     let Ty::Struct(name) = t else {
@@ -2015,6 +2088,8 @@ fn contains_quantum_ty(t: &Ty) -> bool {
         Ty::Qubit | Ty::Result => true,
         Ty::Ptr(inner)
         | Ty::Arc(inner)
+        | Ty::Mutex(inner)
+        | Ty::MutexGuard(inner)
         | Ty::AtomicPtr(inner)
         | Ty::Array(inner, _)
         | Ty::AnonVector(inner, _)
@@ -2790,6 +2865,8 @@ fn is_copy_for_moves(t: &Ty, ctx: &MoveCtx<'_>) -> bool {
         | Ty::AtomicUsize
         | Ty::AtomicPtr(_)
         | Ty::Arc(_)
+        | Ty::Mutex(_)
+        | Ty::MutexGuard(_)
         | Ty::Thread
         | Ty::Fn(_, _) => false,
         Ty::Array(elem, _) | Ty::AnonVector(elem, _) => is_copy_for_moves(elem, ctx),
@@ -3210,6 +3287,19 @@ fn check_moves_call(
         .map(|_| ());
     }
 
+    if name == MUTEX_NEW && args.len() == 1 {
+        return check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )
+        .map(|_| ());
+    }
+
     if name == JOIN && args.len() == 1 {
         return check_moves_expr(
             &args[0],
@@ -3467,6 +3557,18 @@ fn check_moves_generic_call(
         )?;
         return Ok(());
     }
+    if name == MUTEX_NEW && args.len() == 1 {
+        check_moves_expr(
+            &args[0],
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::Consume(MoveReason::PassedByValue),
+        )?;
+        return Ok(());
+    }
     check_moves_args_fallback(args, env, states, fn_values, ctx)
 }
 
@@ -3678,6 +3780,19 @@ fn check_moves_method_call(
     }
 
     if name == TO_MATRIX || name == TO_ARRAY || name == TO_VEC || name == "det" {
+        check_moves_expr(
+            receiver,
+            env,
+            states,
+            fn_values,
+            ctx,
+            None,
+            ExprMoveMode::ReadOnly,
+        )?;
+        return check_moves_args_fallback(args, env, states, fn_values, ctx);
+    }
+
+    if matches!(recv_ty, Ty::Mutex(_)) {
         check_moves_expr(
             receiver,
             env,
@@ -4443,6 +4558,8 @@ fn types_equal(a: &Ty, b: &Ty) -> bool {
         (Ty::HeapVector(x), Ty::HeapVector(y)) => types_equal(x, y),
         (Ty::List(x), Ty::List(y)) => types_equal(x, y),
         (Ty::Arc(x), Ty::Arc(y)) => types_equal(x, y),
+        (Ty::Mutex(x), Ty::Mutex(y)) => types_equal(x, y),
+        (Ty::MutexGuard(x), Ty::MutexGuard(y)) => types_equal(x, y),
         (Ty::Option(x), Ty::Option(y)) => types_equal(x, y),
         (Ty::ResultType(xok, xerr), Ty::ResultType(yok, yerr)) => {
             types_equal(xok, yok) && types_equal(xerr, yerr)
@@ -5885,6 +6002,47 @@ fn infer_arc_new_call(
     Ok(Ty::Arc(Box::new(value_ty)))
 }
 
+fn infer_mutex_new_call(
+    args: &[Expr],
+    env: &HashMap<String, Ty>,
+    structs: &HashMap<String, StructDef>,
+    enums: &HashMap<String, EnumDef>,
+    vectors: &HashMap<String, VectorDef>,
+    fns: &HashMap<String, FnSig>,
+    hint: Option<&Ty>,
+) -> Result<Ty, String> {
+    if args.len() != 1 {
+        return Err(format!(
+            "`{MUTEX_NEW}` expects exactly 1 argument, got {}",
+            args.len()
+        ));
+    }
+    let expected_inner = match hint {
+        Some(Ty::Mutex(inner)) => Some(inner.as_ref().clone()),
+        _ => None,
+    };
+    let value_ty = infer_expr(
+        &args[0],
+        env,
+        structs,
+        enums,
+        vectors,
+        fns,
+        expected_inner.as_ref(),
+    )?;
+    if let Some(expected) = &expected_inner
+        && !types_equal(&value_ty, expected)
+    {
+        return Err(format!(
+            "`{MUTEX_NEW}` value type mismatch: expected {}, got {}",
+            ty_diag_label(expected),
+            ty_diag_label(&value_ty)
+        ));
+    }
+    validate_mutex_inner(&value_ty, structs, enums, vectors)?;
+    Ok(Ty::Mutex(Box::new(value_ty)))
+}
+
 fn infer_expr(
     e: &Expr,
     env: &HashMap<String, Ty>,
@@ -6073,6 +6231,9 @@ fn infer_expr(
             }
             if name == ARC_NEW {
                 return infer_arc_new_call(args, env, structs, enums, vectors, fns, hint);
+            }
+            if name == MUTEX_NEW {
+                return infer_mutex_new_call(args, env, structs, enums, vectors, fns, hint);
             }
             if let Some(local_ty) = env.get(name) {
                 if matches!(local_ty, Ty::Fn(_, _)) {
@@ -6976,9 +7137,32 @@ fn infer_expr(
                 }
                 return Ok(Ty::Arc(Box::new(elem_ty)));
             }
+            if name == MUTEX_NEW {
+                if ty_args.len() != 1 {
+                    return Err(format!("`{MUTEX_NEW}` expects exactly 1 type argument"));
+                }
+                if args.len() != 1 {
+                    return Err(format!(
+                        "`{MUTEX_NEW}` expects exactly 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let elem_ty = normalize_ty(&ty_args[0], structs, enums, vectors)?;
+                validate_mutex_inner(&elem_ty, structs, enums, vectors)?;
+                let value_ty =
+                    infer_expr(&args[0], env, structs, enums, vectors, fns, Some(&elem_ty))?;
+                if !types_equal(&value_ty, &elem_ty) {
+                    return Err(format!(
+                        "`{MUTEX_NEW}` value type mismatch: expected {}, got {}",
+                        ty_diag_label(&elem_ty),
+                        ty_diag_label(&value_ty)
+                    ));
+                }
+                return Ok(Ty::Mutex(Box::new(elem_ty)));
+            }
             if name != LIST_NEW && name != LIST_WITH_CAPACITY {
                 return Err(format!(
-                    "generic calls are only supported for `{LIST_NEW}`, `{LIST_WITH_CAPACITY}`, and `{ARC_NEW}`"
+                    "generic calls are only supported for `{LIST_NEW}`, `{LIST_WITH_CAPACITY}`, `{ARC_NEW}`, and `{MUTEX_NEW}`"
                 ));
             }
             if ty_args.len() != 1 {
@@ -7149,6 +7333,26 @@ fn infer_expr(
                 };
             }
             let recv_ty = infer_expr(receiver, env, structs, enums, vectors, fns, None)?;
+            if let Ty::Mutex(elem_ty) = &recv_ty {
+                if name == MUTEX_LOCK {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `{MUTEX_LOCK}`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Ty::MutexGuard(elem_ty.clone()));
+                }
+                if name == MUTEX_TRY_LOCK {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "method `{MUTEX_TRY_LOCK}`: expected 0 args, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Ty::Option(Box::new(Ty::MutexGuard(elem_ty.clone()))));
+                }
+            }
             if let Ty::List(elem_ty) = &recv_ty {
                 let elem_ty = elem_ty.as_ref();
                 if name == LIST_LEN || name == LIST_CAPACITY {

@@ -915,6 +915,70 @@ fn main() i32 {
 }
 
 #[test]
+fn codegen_mutex_lock_try_lock_and_drop_use_pthread() {
+    let ll = emit(
+        r#"
+fn main() i32 {
+    let m: Mutex[i32] = mutex_new(0);
+    let guard: MutexGuard[i32] = m.lock();
+    *guard = *guard + 1;
+    drop(guard);
+
+    let maybe: Option[MutexGuard[i32]] = m.try_lock();
+    drop(maybe);
+
+    drop(m);
+    0
+}
+"#,
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_mutex_init(ptr, ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_mutex_lock(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_mutex_trylock(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_mutex_unlock(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("declare i32 @pthread_mutex_destroy(ptr)"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_mutex_init(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_mutex_lock(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_mutex_trylock(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_mutex_unlock(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("call i32 @pthread_mutex_destroy(ptr %"),
+        "IR:\n{ll}"
+    );
+    assert!(
+        ll.contains("getelementptr inbounds { [64 x i8], i32 }, ptr"),
+        "IR:\n{ll}"
+    );
+}
+
+#[test]
 fn codegen_explicit_drop_calls_custom_struct_drop() {
     let ll = emit(
         r#"

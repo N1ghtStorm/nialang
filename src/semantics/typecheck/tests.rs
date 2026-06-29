@@ -67,9 +67,11 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_spawn_move_closure.nia"),
         include_str!("../../../examples/tests/ok_send_sync_struct.nia"),
         include_str!("../../../examples/tests/ok_arc_basic.nia"),
+        include_str!("../../../examples/tests/ok_mutex_basic.nia"),
         include_str!("../../../examples/sample_send_sync.nia"),
         include_str!("../../../examples/sample_arc.nia"),
         include_str!("../../../examples/sample_threads_closure.nia"),
+        include_str!("../../../examples/sample_mutex.nia"),
         include_str!("../../../examples/tests/ok_option_result.nia"),
         include_str!("../../../examples/tests/ok_floats.nia"),
         include_str!("../../../examples/tests/ok_string.nia"),
@@ -2200,6 +2202,52 @@ fn main() i32 {
     assert!(err.contains("requires inner type to be `send`"), "{err}");
     assert!(
         err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_mutex_surface() {
+    let src = include_str!("../../../examples/tests/ok_mutex_basic.nia");
+    check_all(src).expect("Mutex lock/try_lock/deref/drop should typecheck");
+}
+
+#[test]
+fn typecheck_mutex_rejects_non_send_inner() {
+    let src = r#"
+fn worker() {
+}
+
+fn main() i32 {
+    let m: Mutex[Thread] = mutex_new(spawn worker);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("Mutex[Thread] must fail send bound");
+    assert!(err.contains("requires inner type to be `send`"), "{err}");
+    assert!(
+        err.contains("Thread handles cannot be transferred to another thread"),
+        "{err}"
+    );
+}
+
+#[test]
+fn typecheck_mutex_guard_is_not_send() {
+    let src = r#"
+fn main() i32 {
+    let m: Mutex[i32] = mutex_new(0);
+    let guard: MutexGuard[i32] = m.lock();
+    let t: Thread = spawn move || {
+        println(*guard);
+    };
+    join(t);
+    0
+}
+"#;
+    let err = check_all(src).expect_err("MutexGuard capture must fail send bound");
+    assert!(err.contains("capture `guard` requires `send`"), "{err}");
+    assert!(
+        err.contains("MutexGuard values cannot be transferred"),
         "{err}"
     );
 }

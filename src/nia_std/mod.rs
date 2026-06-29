@@ -33,6 +33,11 @@ pub const RESULT_OK: &str = "Ok";
 pub const RESULT_ERR: &str = "Err";
 pub const ARC_TYPE: &str = "Arc";
 pub const ARC_NEW: &str = "arc_new";
+pub const MUTEX_TYPE: &str = "Mutex";
+pub const MUTEX_GUARD_TYPE: &str = "MutexGuard";
+pub const MUTEX_NEW: &str = "mutex_new";
+pub const MUTEX_LOCK: &str = "lock";
+pub const MUTEX_TRY_LOCK: &str = "try_lock";
 pub const LIST_NEW: &str = "list_new";
 pub const LIST_WITH_CAPACITY: &str = "list_with_capacity";
 pub const LIST_LEN: &str = "len";
@@ -228,6 +233,8 @@ pub fn is_reserved_type_name(name: &str) -> bool {
             | COMPLEX_TYPE
             | LIST_TYPE
             | ARC_TYPE
+            | MUTEX_TYPE
+            | MUTEX_GUARD_TYPE
             | OPTION_TYPE
             | RESULT_TYPE
             | QUBIT
@@ -279,6 +286,9 @@ pub fn is_reserved_fn_name(name: &str) -> bool {
             | RESULT_OK
             | RESULT_ERR
             | ARC_NEW
+            | MUTEX_NEW
+            | MUTEX_LOCK
+            | MUTEX_TRY_LOCK
             | OUTER
             | COMPLEX_NEW
             | COMPLEX_ADD
@@ -420,6 +430,11 @@ declare i32 @pthread_create(ptr, ptr, ptr, ptr)
 declare i32 @pthread_join(ptr, ptr)
 declare i32 @"\01_pthread_join"(ptr, ptr)
 declare i32 @pthread_detach(ptr)
+declare i32 @pthread_mutex_init(ptr, ptr)
+declare i32 @pthread_mutex_destroy(ptr)
+declare i32 @pthread_mutex_lock(ptr)
+declare i32 @pthread_mutex_trylock(ptr)
+declare i32 @pthread_mutex_unlock(ptr)
 
 define ptr @nialang.thread.entry(ptr %arg) {
 entry:

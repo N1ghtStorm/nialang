@@ -6,8 +6,9 @@ use crate::ast::{
 };
 use crate::lexer::Token;
 use crate::nia_std::{
-    ARC_NEW, ARC_TYPE, ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY, OPTION_NONE,
-    OPTION_SOME, OPTION_TYPE, RESULT_ERR, RESULT_OK, RESULT_TYPE,
+    ARC_NEW, ARC_TYPE, ATOMIC_PTR_TYPE, LIST_NEW, LIST_TYPE, LIST_WITH_CAPACITY, MUTEX_GUARD_TYPE,
+    MUTEX_NEW, MUTEX_TYPE, OPTION_NONE, OPTION_SOME, OPTION_TYPE, RESULT_ERR, RESULT_OK,
+    RESULT_TYPE,
 };
 
 pub struct Parser {
@@ -948,6 +949,16 @@ impl Parser {
                         let elem = self.parse_ty()?;
                         self.expect(&Token::RBracket)?;
                         Ok(Ty::Arc(Box::new(elem)))
+                    } else if n == MUTEX_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let elem = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::Mutex(Box::new(elem)))
+                    } else if n == MUTEX_GUARD_TYPE {
+                        self.expect(&Token::LBracket)?;
+                        let elem = self.parse_ty()?;
+                        self.expect(&Token::RBracket)?;
+                        Ok(Ty::MutexGuard(Box::new(elem)))
                     } else if n == OPTION_TYPE {
                         self.expect(&Token::LBracket)?;
                         let elem = self.parse_ty()?;
@@ -1321,7 +1332,11 @@ impl Parser {
                 }
                 Token::LBracket => {
                     if let Expr::Ident(name) = &e {
-                        if name == LIST_NEW || name == LIST_WITH_CAPACITY || name == ARC_NEW {
+                        if name == LIST_NEW
+                            || name == LIST_WITH_CAPACITY
+                            || name == ARC_NEW
+                            || name == MUTEX_NEW
+                        {
                             let name = name.clone();
                             let ty_args = self.parse_generic_ty_args()?;
                             let args = self.parse_call_args()?;
@@ -1477,7 +1492,8 @@ impl Parser {
                     if segments.len() == 1
                         && (segments[0] == LIST_NEW
                             || segments[0] == LIST_WITH_CAPACITY
-                            || segments[0] == ARC_NEW)
+                            || segments[0] == ARC_NEW
+                            || segments[0] == MUTEX_NEW)
                         && matches!(self.peek(), Token::LBracket)
                     {
                         let name = segments[0].clone();

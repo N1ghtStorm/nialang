@@ -1,6 +1,6 @@
 # Concurrency Plan: Send, Sync, Arc, Mutex, RwLock, Condvar, and Threads
 
-Status: Phases 0-2 are implemented. Phase 3 is next.
+Status: Phases 0-3 are implemented. Phase 4 is next.
 
 Depends on:
 
@@ -544,10 +544,11 @@ Goal: thread closures with moved `send` captures.
 
 Goal: exclusive access to shared data.
 
-- `mutex_new`, `.lock`, `.try_lock`, `MutexGuard` RAII;
-- `mut guard` exposes `&mut T` through deref;
-- sample: `examples/sample_mutex.nia`;
-- stress test: two threads increment shared `Arc[Mutex[i32]]`.
+- implemented: `Mutex[T]`, `MutexGuard[T]`, `mutex_new`, `.lock`, `.try_lock`;
+- implemented: `MutexGuard` RAII unlock on `drop` / scope exit;
+- implemented: `*guard` read/write access to protected value;
+- added `examples/sample_mutex.nia`;
+- added runtime stress sample: two threads increment shared `Arc[Mutex[i32]]` to 2000.
 
 ### Phase 4: RwLock[T]
 
