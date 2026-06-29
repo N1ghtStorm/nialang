@@ -1,6 +1,6 @@
 # Concurrency Plan: Send, Sync, Arc, Mutex, RwLock, Condvar, and Threads
 
-Status: Phases 0-5 are implemented. Phase 6 is next.
+Status: Phases 0-6 are implemented.
 
 Depends on:
 
@@ -55,7 +55,9 @@ Constraints in the compiler today:
 enforced** for cross-thread operations yet. Struct validation intentionally skips structural
 checks for `send`/`sync` ([`src/semantics/typecheck/mod.rs`](../src/semantics/typecheck/mod.rs)).
 
-Atomics are implemented; the atomics plan lists thread/shared-ownership APIs as follow-up work.
+Atomics are implemented. The atomics plan deliberately keeps thread spawning and shared ownership
+out of scope; this plan owns those APIs and links back to
+[`atomics-plan.md`](atomics-plan.md) for the atomic storage surface.
 
 ## Design Principles
 
@@ -575,10 +577,10 @@ Goal: blocking until shared state changes.
 
 ### Phase 6: Documentation and spec
 
-- document stable subset in `spec.txt`;
-- update `README.md` concurrency section;
-- cross-link from [atomics-plan.md](atomics-plan.md) non-goals into this plan;
-- note pthread / platform requirements in driver docs.
+- implemented: documented stable atomics/concurrency subset in [`spec.txt`](../spec.txt);
+- implemented: added README concurrency overview and sample links;
+- implemented: cross-linked atomics non-goals with this plan;
+- implemented: documented pthread / platform requirements in README and driver docs.
 
 ## Tests
 
@@ -592,17 +594,17 @@ Typecheck ok fixtures:
 
 - `ok_send_sync_struct.nia`
 - `ok_arc_basic.nia`
-- `ok_mutex_guard_mut.nia`
+- `ok_mutex_basic.nia`
 - `ok_rwlock_read_write.nia`
 - `ok_condvar_wait_notify.nia`
 - `ok_spawn_move_closure.nia`
-- `ok_arc_mutex_threads.nia` — integration-style typecheck fixture
+- `sample_mutex.nia` — integration-style typecheck/runtime fixture
 
 Typecheck error fixtures:
 
 - non-`send` capture in `spawn move || ...`
 - `arc_new` with non-`sync` inner type
-- `mutex_new` with `qubit` inner type
+- `mutex_new` with non-`send` inner type
 - use of moved guard after `drop(guard)`
 - `Thread` in `Arc[Thread]`
 
@@ -612,12 +614,14 @@ Codegen tests:
 - `Arc` drop emits atomic decrement + conditional destroy
 - `Mutex::lock` emits `pthread_mutex_lock`
 - guard drop emits `pthread_mutex_unlock`
+- `RwLock` lowers to `pthread_rwlock_*`
+- `Condvar` lowers to `pthread_cond_*`
 - `spawn move ||` emits `pthread_create` + `nialang.thread.entry`
 
 Runtime integration (execute compiled binary):
 
-- two threads increment `Arc[Mutex[i32]]` to 2000
-- `Condvar` ping-pong between two threads
+- two threads increment `Arc[Mutex[i32]]` to 20000
+- `Condvar` predicate loop between two threads
 
 ## Non-Goals
 

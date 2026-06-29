@@ -550,7 +550,7 @@ Codegen tests:
 - Atomic floats.
 - Atomic structs/enums.
 - Pointer arithmetic atomics.
-- Thread spawning API.
-- Shared ownership API.
+- Thread spawning API — covered by [concurrency-plan.md](concurrency-plan.md).
+- Shared ownership API — covered by [concurrency-plan.md](concurrency-plan.md).
 - QIR atomics.
 - GPU atomics.

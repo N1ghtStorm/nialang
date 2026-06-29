@@ -71,7 +71,7 @@ Compound assignment operators: `+=`, `-=`, `*=`, `/=` (integers only;
 ## Primitive Types
 
 ```
-i8  u8  i16  u16  i32  i64  u64  i128  u128  isize  usize
+i8  u8  i16  u16  i32  u32  i64  u64  i128  u128  isize  usize
 f16  f32  f64
 bool
 string
@@ -299,6 +299,165 @@ loop {
 
 The body of `loop` must contain at least one `break`.
 `break` inside `while` / `for` is not yet supported.
+
+## Ownership Abilities
+
+Types may declare abilities with `has`:
+
+```
+struct Packet has drop, send, sync {
+    ready: AtomicBool,
+}
+```
+
+The stable built-in abilities are `copy`, `clone`, `drop`, `deref`, `send`,
+and `sync`.
+
+- `copy` values may be reused after assignment or by-value calls.
+- `clone` enables `.clone()`.
+- `drop` enables `drop(x)` and automatic scope cleanup for live locals.
+- `deref` enables `*x`.
+- `send` means a value may be moved to another OS thread.
+- `sync` means a value may be shared across OS threads through shared handles.
+
+Runtime owners such as `List[T]`, `Matrix`, `Arc[T]`, `Mutex[T]`, `RwLock[T]`,
+`Condvar`, guards, and `Thread` are not `copy`. `drop(x)` consumes its argument.
+
+## Atomics
+
+Atomic storage cells are compiler-known built-ins, not ordinary scalar values:
+
+```
+let ready: AtomicBool = atomic_bool(false);
+let count: AtomicI32 = atomic_i32(0);
+let slot: AtomicPtr[i32] = atomic_ptr(&value);
+
+ready.store(true, Ordering::Release);
+let old = count.fetch_add(1, Ordering::AcqRel);
+let p = slot.load(Ordering::Acquire);
+```
+
+Supported atomic storage types:
+
+```
+AtomicBool
+AtomicI8   AtomicU8
+AtomicI16  AtomicU16
+AtomicI32  AtomicU32
+AtomicI64  AtomicU64
+AtomicI128 AtomicU128
+AtomicIsize AtomicUsize
+AtomicPtr[T]
+```
+
+Supported orderings are `Ordering::Relaxed`, `Ordering::Acquire`,
+`Ordering::Release`, `Ordering::AcqRel`, and `Ordering::SeqCst`.
+
+Atomic cells are not read or assigned directly. Use `.load`, `.store`, `.swap`,
+`.compare_exchange`, or integer fetch methods. `atomic_fence(ordering)` emits
+a standalone fence.
+
+There is no generic `Atomic[T]`.
+
+## Threads And Synchronization
+
+The native thread/sync surface targets pthread-compatible platforms in the MVP.
+
+Top-level functions can be spawned directly:
+
+```
+fn worker() {
+    println(1);
+}
+
+fn main() i32 {
+    let t: Thread = spawn worker;
+    join(t);
+    0
+}
+```
+
+Closures must use `move` and must capture only `send` values:
+
+```
+let shared: Arc[Mutex[i32]] = arc_new(mutex_new(0));
+let t: Thread = spawn move || {
+    let guard: MutexGuard[i32] = (*shared).lock();
+    *guard = *guard + 1;
+    drop(guard);
+};
+join(t);
+```
+
+`Thread` is move-only. `join(t)` consumes the handle. `drop(t)` detaches it.
+
+Shared ownership:
+
+```
+let shared: Arc[i32] = arc_new(42);
+let other = shared.clone();
+println(*other);
+drop(other);
+drop(shared);
+```
+
+`Arc[T]` requires `T: send + sync`, supports shallow `.clone()`, supports
+read-only dereference with `*arc`, and is not `copy`.
+
+Mutex:
+
+```
+let m: Mutex[i32] = mutex_new(0);
+let guard: MutexGuard[i32] = m.lock();
+*guard = *guard + 1;
+drop(guard);
+
+let maybe: Option[MutexGuard[i32]] = m.try_lock();
+drop(maybe);
+drop(m);
+```
+
+`Mutex[T]` requires `T: send`. `MutexGuard[T]` unlocks on `drop` or scope exit,
+supports `*guard`, and is not `send` or `sync`.
+
+Readers-writer lock:
+
+```
+let rw: RwLock[i32] = rwlock_new(1);
+let r: RwLockReadGuard[i32] = rw.read();
+println(*r);
+drop(r);
+
+let w: RwLockWriteGuard[i32] = rw.write();
+*w = *w + 1;
+drop(w);
+drop(rw);
+```
+
+`RwLock[T]` requires `T: send`. Read guards are read-only; write guards can be
+used for read/write access. Try variants return `Option[...]`.
+
+Condition variables:
+
+```
+let state: Arc[Mutex[i32]] = arc_new(mutex_new(0));
+let cv: Arc[Condvar] = arc_new(condvar_new());
+
+let guard: MutexGuard[i32] = (*state).lock();
+while *guard == 0 {
+    let next: MutexGuard[i32] = (*cv).wait(guard);
+    guard = next;
+}
+drop(guard);
+drop(state);
+drop(cv);
+```
+
+`Condvar` is a non-generic runtime owner. `.wait(guard)` consumes a
+`MutexGuard[T]`, atomically releases the mutex while waiting, and returns a
+`MutexGuard[T]` after wakeup. Spurious wakeups are allowed; callers should loop
+on a predicate. `.notify_one()` wakes one waiter and `.notify_all()` wakes all
+waiters.
 
 ## Scoped Blocks
 

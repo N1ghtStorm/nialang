@@ -28,6 +28,8 @@ Requirements:
 
 - a recent Rust toolchain;
 - `clang` for native executables, assembly, and shared libraries;
+- pthread-compatible native threading support for `spawn`, `Arc`, `Mutex`, `RwLock`, and `Condvar`
+  examples; the current MVP targets macOS/Linux-style pthread platforms;
 - the optional `qir-runner` feature for quantum programs.
 
 Build and run an example:
@@ -588,6 +590,132 @@ fn main() i32 {
 }
 ```
 
+## Concurrency
+
+Nia has a small pthread-backed native concurrency surface. It is intentionally
+Rust-like in shape but compiler-known rather than implemented through user-level
+generics.
+
+### Threads
+
+Top-level functions can be spawned directly, and `move` closures can capture
+values that are `send`:
+
+```nia
+fn worker() {
+    println(1);
+}
+
+fn main() i32 {
+    let direct: Thread = spawn worker;
+    join(direct);
+
+    let shared: Arc[Mutex[i32]] = arc_new(mutex_new(0));
+    let t: Thread = spawn move || {
+        let guard: MutexGuard[i32] = (*shared).lock();
+        *guard = *guard + 1;
+        drop(guard);
+    };
+    join(t);
+
+    0
+}
+```
+
+`Thread` is move-only. `join(t)` consumes the handle; `drop(t)` detaches it.
+Non-`move` closure spawn is rejected, and every captured value must be `send`.
+
+### Shared Ownership
+
+`Arc[T]` is an atomic reference-counted shared owner:
+
+```nia
+let shared: Arc[i32] = arc_new(42);
+let cloned = shared.clone();
+println(*cloned);
+drop(cloned);
+drop(shared);
+```
+
+`Arc[T]` requires `T: send + sync`. It is not `copy`; `.clone()` bumps the
+reference count and `*arc` gives read-only access to the inner value.
+
+### Locks
+
+`Mutex[T]` provides exclusive access and `RwLock[T]` provides many-readers or
+one-writer access. Both require `T: send`; their guards are move-only RAII
+tokens and are deliberately not `send`.
+
+```nia
+let m: Mutex[i32] = mutex_new(0);
+let guard: MutexGuard[i32] = m.lock();
+*guard = *guard + 1;
+drop(guard);
+drop(m);
+
+let rw: RwLock[i32] = rwlock_new(41);
+let r: RwLockReadGuard[i32] = rw.read();
+println(*r);
+drop(r);
+
+let w: RwLockWriteGuard[i32] = rw.write();
+*w = *w + 1;
+drop(w);
+drop(rw);
+```
+
+Try-lock methods return options:
+
+```nia
+let maybe_m: Option[MutexGuard[i32]] = m.try_lock();
+let maybe_r: Option[RwLockReadGuard[i32]] = rw.try_read();
+let maybe_w: Option[RwLockWriteGuard[i32]] = rw.try_write();
+```
+
+`RwLockReadGuard[T]` is read-only through `*guard`; `RwLockWriteGuard[T]` allows
+read/write access.
+
+### Condition Variables
+
+`Condvar` pairs with `MutexGuard[T]`. `wait` consumes a guard, atomically
+unlocks while sleeping, then returns a guard after wakeup and re-locking.
+Spurious wakeups are allowed, so wait in a predicate loop:
+
+```nia
+let state: Arc[Mutex[i32]] = arc_new(mutex_new(0));
+let cv: Arc[Condvar] = arc_new(condvar_new());
+
+let waiter_state = state.clone();
+let waiter_cv = cv.clone();
+let waiter: Thread = spawn move || {
+    let guard: MutexGuard[i32] = (*waiter_state).lock();
+    while *guard == 0 {
+        let next: MutexGuard[i32] = (*waiter_cv).wait(guard);
+        guard = next;
+    }
+    println(*guard);
+    drop(guard);
+};
+
+let notifier_state = state.clone();
+let notifier_cv = cv.clone();
+let notifier: Thread = spawn move || {
+    let guard: MutexGuard[i32] = (*notifier_state).lock();
+    *guard = 1;
+    (*notifier_cv).notify_one();
+    drop(guard);
+};
+
+join(notifier);
+join(waiter);
+drop(state);
+drop(cv);
+```
+
+The native backend links generated programs with pthread support on non-Windows
+targets. The current synchronization runtime is a Unix/macOS MVP; a portable
+Windows synchronization backend is future work.
+
 ## Quantum Computing
 
 NiaLang has a QIR backend for small static quantum programs. Quantum code is
@@ -886,6 +1014,13 @@ Good places to start:
 | `examples/abilities/primitive_abilities.nia` | clone/drop for runtime primitives and aggregates |
 | `examples/abilities/move_closure_captures.nia` | `move ||` captures and closure environment cleanup |
 | `examples/abilities/function_value_abilities.nia` | copy/clone/drop behavior for `fn(...) -> ...` values |
+| `examples/sample_send_sync.nia` | `send` / `sync` ability checks |
+| `examples/sample_arc.nia` | `Arc[T]` shallow clone and read-only deref |
+| `examples/sample_threads.nia` | top-level function thread spawn and join |
+| `examples/sample_threads_closure.nia` | `spawn move ||` closure captures |
+| `examples/sample_mutex.nia` | `Arc[Mutex[i32]]` shared counter across threads |
+| `examples/sample_rwlock.nia` | `Arc[RwLock[i32]]` readers and writer |
+| `examples/sample_condvar.nia` | `Condvar` predicate loop with `MutexGuard[T]` |
 | `examples/sample_extern_lib.nia` | C ABI exports and shared-library mode |
 | `examples/quantum/qubit_create.nia` | QIR gates, rotations, measurement, and result recording |
 | `examples/quantum/qubit_read.nia` | read a QIR measurement result as `bool` with `q_read` |

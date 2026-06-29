@@ -787,6 +787,7 @@ fn find_function_bounds(src: &str, name: &str) -> Option<(usize, usize)> {
 /// - Optionally runs generated QIR through qir-runner when `-q` is selected.
 /// - Optionally dumps generated IR to disk when `-o` is provided in run mode.
 /// - Invokes `clang` to produce a temporary native executable.
+/// - Links pthread support for native thread/synchronization builtins on non-Windows targets.
 /// - Runs that executable and returns *its* exit status to caller.
 /// - Removes temporary artifacts (`.ll` and executable) best-effort.
 ///
