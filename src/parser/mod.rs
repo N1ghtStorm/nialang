@@ -820,12 +820,29 @@ impl Parser {
         Ok(Stmt::Let { name, ty, init })
     }
 
-    /// Parses `if <cond> { ... }` statement.
+    /// Parses `if <cond> { ... }` statement with optional `else` block.
     fn parse_if_stmt(&mut self) -> Result<Stmt, String> {
         self.expect(&Token::If)?;
         let cond = self.parse_if_cond()?;
         let then_block = self.parse_block()?;
-        Ok(Stmt::If { cond, then_block })
+        let else_block = if matches!(self.peek(), Token::Else) {
+            self.bump();
+            if matches!(self.peek(), Token::If) {
+                Some(Block {
+                    stmts: vec![self.parse_if_stmt()?],
+                    tail: None,
+                })
+            } else {
+                Some(self.parse_block()?)
+            }
+        } else {
+            None
+        };
+        Ok(Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        })
     }
 
     /// Parses `while <cond> { ... }` (same narrow condition grammar as `if`).

@@ -1,0 +1,14 @@
+fn choose(value: i32) i32 {
+    if value < 0 {
+        return 1
+    } else if value == 0 {
+        return 2
+    } else {
+        return 3
+    }
+    0
+}
+
+fn main() i32 {
+    choose(42)
+}

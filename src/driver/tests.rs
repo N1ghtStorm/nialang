@@ -19,6 +19,7 @@ fn compile_fixtures_pipeline() {
     let files = [
         "examples/tests/ok_minimal.nia",
         "examples/tests/ok_if_return.nia",
+        "examples/tests/ok_if_else.nia",
         "examples/tests/ok_tuple_struct.nia",
         "examples/tests/ok_struct_named.nia",
         "examples/tests/ok_impl_methods.nia",

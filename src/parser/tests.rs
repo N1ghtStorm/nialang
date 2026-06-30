@@ -18,6 +18,11 @@ fn parse_fixture_if_return() {
 }
 
 #[test]
+fn parse_fixture_if_else() {
+    parse_ok(include_str!("../../examples/tests/ok_if_else.nia"));
+}
+
+#[test]
 fn parse_fixture_tuple_struct() {
     parse_ok(include_str!("../../examples/tests/ok_tuple_struct.nia"));
 }

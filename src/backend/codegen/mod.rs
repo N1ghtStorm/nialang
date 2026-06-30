@@ -162,9 +162,16 @@ fn collect_string_literals_stmt(st: &Stmt, out: &mut BTreeSet<String>) {
             collect_string_literals_expr(target, out);
             collect_string_literals_expr(value, out);
         }
-        Stmt::If { cond, then_block } => {
+        Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
             collect_string_literals_expr(cond, out);
             collect_string_literals_block(then_block, out);
+            if let Some(else_block) = else_block {
+                collect_string_literals_block(else_block, out);
+            }
         }
         Stmt::While { cond, body } => {
             collect_string_literals_expr(cond, out);
@@ -2993,10 +3000,25 @@ impl<'a> Gen<'a> {
             Stmt::Assign { value, .. } => {
                 self.clear_consumed_custom_drop_locals_expr(value, locals, drop_flags, true);
             }
-            Stmt::If { cond, then_block } => {
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+            } => {
                 self.clear_consumed_custom_drop_locals_expr(cond, locals, drop_flags, true);
                 for st in &then_block.stmts {
                     self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
+                }
+                if let Some(tail) = &then_block.tail {
+                    self.clear_consumed_custom_drop_locals_expr(tail, locals, drop_flags, true);
+                }
+                if let Some(else_block) = else_block {
+                    for st in &else_block.stmts {
+                        self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
+                    }
+                    if let Some(tail) = &else_block.tail {
+                        self.clear_consumed_custom_drop_locals_expr(tail, locals, drop_flags, true);
+                    }
                 }
             }
             Stmt::While { cond, body } => {
@@ -9080,17 +9102,24 @@ impl<'a> Gen<'a> {
                 writeln!(self.out, "  br label %{}", exit).unwrap();
                 self.terminated = true;
             }
-            Stmt::If { cond, then_block } => {
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+            } => {
                 let (ct, cv) = self.emit_expr(cond, locals, Some(&Ty::Bool));
                 debug_assert!(matches!(ct, Ty::Bool));
                 let then_lbl = self.fresh_label("if.then");
+                let else_lbl = else_block.as_ref().map(|_| self.fresh_label("if.else"));
                 let cont_lbl = self.fresh_label("if.cont");
+                let false_lbl = else_lbl.as_deref().unwrap_or(&cont_lbl);
                 writeln!(
                     self.out,
                     "  br i1 {}, label %{}, label %{}",
-                    cv, then_lbl, cont_lbl
+                    cv, then_lbl, false_lbl
                 )
                 .unwrap();
+
                 writeln!(self.out, "{}:", then_lbl).unwrap();
                 let mut then_locals = locals.clone();
                 let mut then_drop_flags = drop_flags.clone();
@@ -9109,7 +9138,8 @@ impl<'a> Gen<'a> {
                         break;
                     }
                 }
-                if !self.terminated {
+                let then_terminated = self.terminated;
+                if !then_terminated {
                     if let Some(tail) = &then_block.tail {
                         self.emit_expr(tail, &then_locals, None);
                         self.clear_consumed_custom_drop_locals_expr(
@@ -9127,8 +9157,56 @@ impl<'a> Gen<'a> {
                     );
                     writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
                 }
+
+                let mut else_terminated = false;
+                if let (Some(else_lbl), Some(else_block)) = (else_lbl.as_deref(), else_block) {
+                    self.terminated = false;
+                    writeln!(self.out, "{}:", else_lbl).unwrap();
+                    let mut else_locals = locals.clone();
+                    let mut else_drop_flags = drop_flags.clone();
+                    let mut else_visible_order = visible_order.clone();
+                    let else_scope_start = else_visible_order.len();
+                    for st in &else_block.stmts {
+                        self.emit_stmt(
+                            st,
+                            &mut else_locals,
+                            &mut else_drop_flags,
+                            &mut else_visible_order,
+                            fn_ret,
+                        );
+                        if self.terminated {
+                            break;
+                        }
+                    }
+                    else_terminated = self.terminated;
+                    if !else_terminated {
+                        if let Some(tail) = &else_block.tail {
+                            self.emit_expr(tail, &else_locals, None);
+                            self.clear_consumed_custom_drop_locals_expr(
+                                tail,
+                                &else_locals,
+                                &else_drop_flags,
+                                true,
+                            );
+                        }
+                        self.emit_drop_scope_from(
+                            else_scope_start,
+                            &else_visible_order,
+                            &else_locals,
+                            &else_drop_flags,
+                        );
+                        writeln!(self.out, "  br label %{}", cont_lbl).unwrap();
+                    }
+                }
+
+                let both_branches_terminate =
+                    else_block.is_some() && then_terminated && else_terminated;
                 self.terminated = false;
-                writeln!(self.out, "{}:", cont_lbl).unwrap();
+                if !both_branches_terminate {
+                    writeln!(self.out, "{}:", cont_lbl).unwrap();
+                } else {
+                    self.terminated = true;
+                }
             }
             Stmt::While { cond, body } => {
                 if self.terminated {

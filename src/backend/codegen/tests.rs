@@ -1415,6 +1415,14 @@ fn codegen_contains_if_branching() {
 }
 
 #[test]
+fn codegen_contains_if_else_branching() {
+    let ll = emit(include_str!("../../../examples/tests/ok_if_else.nia"));
+    assert!(ll.contains("br i1"));
+    assert!(ll.contains("if.then."));
+    assert!(ll.contains("if.else."));
+}
+
+#[test]
 fn codegen_quant_expression_emits_tail_value() {
     let ll = emit(
         r#"

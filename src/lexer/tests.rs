@@ -17,7 +17,7 @@ fn collect(src: &str) -> Vec<Token> {
 #[test]
 /// Verifies all supported keywords and primitive type names are recognized.
 fn lex_keywords_and_types() {
-    let src = "extern pub fn let mod struct impl quant gpu if return true false i8 u8 i16 u16 i32 u32 i64 u64 i128 isize usize u128 bool f16 f32 f64";
+    let src = "extern pub fn let mod struct impl quant gpu if else return true false i8 u8 i16 u16 i32 u32 i64 u64 i128 isize usize u128 bool f16 f32 f64";
     let toks = collect(src);
     assert_eq!(
         toks,
@@ -32,6 +32,7 @@ fn lex_keywords_and_types() {
             Token::Quant,
             Token::Gpu,
             Token::If,
+            Token::Else,
             Token::Return,
             Token::Bool(true),
             Token::Bool(false),

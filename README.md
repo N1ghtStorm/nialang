@@ -544,6 +544,8 @@ fn main() i32 {
 
     if n > 0 {
         println("positive");
+    } else {
+        println("zero or negative");
     }
 
     let acc = 0;
@@ -567,8 +569,8 @@ fn main() i32 {
 }
 ```
 
-`if` currently has no `else` branch. `break` is supported by `loop`; breaking
-from `while` or `for` is not implemented yet.
+`if` supports `else` blocks and `else if` chains. `break` is supported by
+`loop`; breaking from `while` or `for` is not implemented yet.
 
 ### Scoped Blocks
 
@@ -1058,7 +1060,6 @@ Currently available:
 
 Still intentionally small or unfinished:
 
-- no `else` branch yet
 - `break` works only with `loop`, not `while` or `for`
 - no sparse matrices
 - no eigenvalues, QR, SVD, or advanced decomposition APIs

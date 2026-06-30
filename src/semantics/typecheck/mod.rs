@@ -1829,8 +1829,18 @@ fn stmt_contains_direct_self_clone(st: &Stmt) -> bool {
         Stmt::Assign { target, value } => {
             expr_contains_direct_self_clone(target) || expr_contains_direct_self_clone(value)
         }
-        Stmt::If { cond, then_block }
-        | Stmt::While {
+        Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            expr_contains_direct_self_clone(cond)
+                || block_contains_direct_self_clone(then_block)
+                || else_block
+                    .as_ref()
+                    .is_some_and(block_contains_direct_self_clone)
+        }
+        Stmt::While {
             cond,
             body: then_block,
         } => expr_contains_direct_self_clone(cond) || block_contains_direct_self_clone(then_block),
@@ -2802,7 +2812,11 @@ fn check_moves_stmt(
             )?;
         }
         Stmt::Break => {}
-        Stmt::If { cond, then_block } => {
+        Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
             check_moves_expr(
                 cond,
                 env,
@@ -2812,9 +2826,12 @@ fn check_moves_stmt(
                 Some(&Ty::Bool),
                 ExprMoveMode::Consume(MoveReason::ExpressionResult),
             )?;
-            let mut then_env = env.clone();
-            let mut then_states = states.clone();
-            let mut then_fn_values = fn_values.clone();
+            let base_env = env.clone();
+            let base_states = states.clone();
+            let base_fn_values = fn_values.clone();
+            let mut then_env = base_env.clone();
+            let mut then_states = base_states.clone();
+            let mut then_fn_values = base_fn_values.clone();
             check_moves_block(
                 then_block,
                 &mut then_env,
@@ -2825,6 +2842,21 @@ fn check_moves_stmt(
                 None,
             )?;
             merge_moved_from_child(states, &then_states);
+            if let Some(else_block) = else_block {
+                let mut else_env = base_env;
+                let mut else_states = base_states;
+                let mut else_fn_values = base_fn_values;
+                check_moves_block(
+                    else_block,
+                    &mut else_env,
+                    &mut else_states,
+                    &mut else_fn_values,
+                    ctx,
+                    fn_ret,
+                    None,
+                )?;
+                merge_moved_from_child(states, &else_states);
+            }
         }
         Stmt::While { cond, body } => {
             check_moves_expr(
@@ -5823,9 +5855,16 @@ fn collect_block_captures(
                 collect_lvalue_capture_writes(target, &scoped, outer_env, captures, writes);
                 collect_expr_captures(value, &scoped, outer_env, captures, writes);
             }
-            Stmt::If { cond, then_block } => {
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+            } => {
                 collect_expr_captures(cond, &scoped, outer_env, captures, writes);
                 collect_block_captures(then_block, &scoped, outer_env, captures, writes);
+                if let Some(else_block) = else_block {
+                    collect_block_captures(else_block, &scoped, outer_env, captures, writes);
+                }
             }
             Stmt::While { cond, body } => {
                 collect_expr_captures(cond, &scoped, outer_env, captures, writes);
@@ -8321,7 +8360,14 @@ fn infer_expr(
 fn stmt_contains_return(st: &Stmt) -> bool {
     match st {
         Stmt::Return(_) => true,
-        Stmt::If { then_block, .. } => block_contains_return(then_block),
+        Stmt::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            block_contains_return(then_block)
+                || else_block.as_ref().is_some_and(block_contains_return)
+        }
         Stmt::While { body, .. } => block_contains_return(body),
         Stmt::Loop { body } => block_contains_return(body),
         Stmt::For { body, .. } => block_contains_return(body),
@@ -8334,7 +8380,11 @@ fn stmt_contains_return(st: &Stmt) -> bool {
 fn stmt_has_break(st: &Stmt) -> bool {
     match st {
         Stmt::Break => true,
-        Stmt::If { then_block, .. } => block_has_break(then_block),
+        Stmt::If {
+            then_block,
+            else_block,
+            ..
+        } => block_has_break(then_block) || else_block.as_ref().is_some_and(block_has_break),
         Stmt::While { body, .. }
         | Stmt::Loop { body }
         | Stmt::For { body, .. }
@@ -8505,7 +8555,11 @@ fn check_stmt(
                 return Err("`break` inside `while` / `for` is not supported yet".into());
             }
         }
-        Stmt::If { cond, then_block } => {
+        Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
             let t = infer_expr(
                 cond,
                 env,
@@ -8542,6 +8596,33 @@ fn check_stmt(
                     fn_sigs,
                     None,
                 )?;
+            }
+            if let Some(else_block) = else_block {
+                let mut else_env = env.clone();
+                for st in &else_block.stmts {
+                    check_stmt(
+                        st,
+                        &mut else_env,
+                        struct_fields,
+                        enums,
+                        vectors,
+                        fn_sigs,
+                        fn_ret,
+                        loop_depth,
+                        break_inside_while_or_for,
+                    )?;
+                }
+                if let Some(tail) = &else_block.tail {
+                    infer_expr(
+                        tail,
+                        &else_env,
+                        struct_fields,
+                        enums,
+                        vectors,
+                        fn_sigs,
+                        None,
+                    )?;
+                }
             }
         }
         Stmt::While { cond, body } => {

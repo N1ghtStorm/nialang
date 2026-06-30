@@ -336,8 +336,14 @@ fn stmt_contains_quantum(st: &Stmt) -> bool {
         Stmt::Assign { target, value } => {
             expr_contains_quantum(target) || expr_contains_quantum(value)
         }
-        Stmt::If { cond, then_block } => {
-            expr_contains_quantum(cond) || block_contains_quantum(then_block)
+        Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            expr_contains_quantum(cond)
+                || block_contains_quantum(then_block)
+                || else_block.as_ref().is_some_and(block_contains_quantum)
         }
         Stmt::While { cond, body } => expr_contains_quantum(cond) || block_contains_quantum(body),
         Stmt::Loop { body } | Stmt::Gpu { body } => block_contains_quantum(body),

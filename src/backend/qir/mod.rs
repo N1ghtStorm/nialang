@@ -225,7 +225,11 @@ fn collect_stmt(
         Stmt::Return(e) if !in_quant => {
             collect_expr(e, false, plan, resources, fns, fn_sigs, call_stack)
         }
-        Stmt::If { cond, then_block } if !in_quant => {
+        Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } if !in_quant => {
             collect_expr(cond, false, plan, resources, fns, fn_sigs, call_stack)?;
             let mut then_resources = resources.clone();
             collect_block(
@@ -236,7 +240,20 @@ fn collect_stmt(
                 fns,
                 fn_sigs,
                 call_stack,
-            )
+            )?;
+            if let Some(else_block) = else_block {
+                let mut else_resources = resources.clone();
+                collect_block(
+                    else_block,
+                    false,
+                    plan,
+                    &mut else_resources,
+                    fns,
+                    fn_sigs,
+                    call_stack,
+                )?;
+            }
+            Ok(())
         }
         Stmt::While { cond, body } if !in_quant => {
             collect_expr(cond, false, plan, resources, fns, fn_sigs, call_stack)?;

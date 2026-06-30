@@ -296,6 +296,7 @@ pub enum Stmt {
     If {
         cond: Expr,
         then_block: Block,
+        else_block: Option<Block>,
     },
     While {
         cond: Expr,

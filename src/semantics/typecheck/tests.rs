@@ -25,6 +25,7 @@ fn typecheck_ok_fixtures() {
     let ok_files = [
         include_str!("../../../examples/tests/ok_minimal.nia"),
         include_str!("../../../examples/tests/ok_if_return.nia"),
+        include_str!("../../../examples/tests/ok_if_else.nia"),
         include_str!("../../../examples/tests/ok_tuple_struct.nia"),
         include_str!("../../../examples/tests/ok_struct_named.nia"),
         include_str!("../../../examples/tests/ok_impl_methods.nia"),
@@ -2756,6 +2757,30 @@ fn main() i32 {
 }
 "#;
     check_all(src).expect("copy values should not move on assignment");
+}
+
+#[test]
+fn typecheck_allows_moving_same_value_in_if_else_branches() {
+    let src = r#"
+struct Token {
+    id: i32,
+}
+
+fn take(t: Token) {
+    println(t.id);
+}
+
+fn main(flag: bool) i32 {
+    let token = Token { id: 1 };
+    if flag {
+        take(token);
+    } else {
+        take(token);
+    }
+    0
+}
+"#;
+    check_all(src).expect("each if/else path should start from the same move state");
 }
 
 #[test]
