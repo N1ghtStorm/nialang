@@ -15,7 +15,7 @@ Add Go-style typed channels to Nia as a first-class synchronization primitive:
 
 - `chan[T]` for a bidirectional channel handle;
 - `<- chan[T]` for a receive-only channel handle;
-- `chan[T] <-` for a send-only channel handle;
+- `-> chan[T]` for a send-only channel handle;
 - `ch <- value` for blocking send;
 - `<-ch` for blocking receive;
 - `close(ch)` for sender-side close;
@@ -41,7 +41,7 @@ compiler-known type constructor.
 - Receiving owns the value that comes out of the channel.
 - Channel direction is part of the static type and is enforced at compile time.
 - Directional channel types are views over the same runtime handle, not different heap objects.
-- `chan[T]` may coerce to `<- chan[T]` or `chan[T] <-`; the reverse direction is rejected.
+- `chan[T]` may coerce to `<- chan[T]` or `-> chan[T]`; the reverse direction is rejected.
 - Channel handles are shallow-cloned reference-counted handles. Cloning does not clone queued
   values.
 - Element type `T` must be `send`. This keeps the MVP focused on cross-thread communication.
@@ -69,14 +69,14 @@ Constructors:
 ### Directional Handles
 
 ```nia
-fn producer(out: chan[i32] <-) {
+fn producer(out: -> chan[i32]) {
     out <- 1;
     out <- 2;
     close(out);
 }
 
 fn consumer(input: <- chan[i32]) {
-    match <-input {
+    match input.recv() {
         Some(value) => println(value),
         None => println(0),
     };
@@ -88,29 +88,29 @@ Direction rules:
 | Type | Can send | Can receive | Can close |
 | --- | --- | --- | --- |
 | `chan[T]` | yes | yes | yes |
-| `chan[T] <-` | yes | no | yes |
+| `-> chan[T]` | yes | no | yes |
 | `<- chan[T]` | no | yes | no |
 
 Implicit direction narrowing:
 
 ```nia
 let ch: chan[i32] = chan_new[i32]();
-let tx: chan[i32] <- = ch.clone();
+let tx: -> chan[i32] = ch.clone();
 let rx: <- chan[i32] = ch;
 ```
 
 Allowed:
 
-- `chan[T]` to `chan[T] <-`;
+- `chan[T]` to `-> chan[T]`;
 - `chan[T]` to `<- chan[T]`;
 - exact direction-preserving assignment or parameter passing.
 
 Rejected:
 
 - `<- chan[T]` to `chan[T]`;
-- `chan[T] <-` to `chan[T]`;
-- `<- chan[T]` to `chan[T] <-`;
-- `chan[T] <-` to `<- chan[T]`.
+- `-> chan[T]` to `chan[T]`;
+- `<- chan[T]` to `-> chan[T]`;
+- `-> chan[T]` to `<- chan[T]`.
 
 ### Send
 
@@ -131,7 +131,7 @@ println(xs.len()); // error: use after move
 
 Rules:
 
-- `ch <- value` requires `ch: chan[T]` or `ch: chan[T] <-`.
+- `ch <- value` requires `ch: chan[T]` or `ch: -> chan[T]`.
 - `value` must be assignable to `T`.
 - if `T` is not `copy`, the value is moved.
 - send blocks until a receiver accepts the value or a buffered channel has space.
@@ -140,15 +140,28 @@ Rules:
 ### Receive
 
 ```nia
-let maybe: Option[i32] = <-ch;
+let value: i32 = <-ch;
 
-match <-ch {
+let maybe: Option[i32] = ch.recv();
+match maybe {
     Some(value) => println(value),
     None => println(0),
 };
 ```
 
-Receive returns `Option[T]`:
+The receive operator returns `T`:
+
+- `<-ch` blocks until a value is available.
+- if the channel is closed and drained, `<-ch` aborts instead of inventing a zero value for `T`.
+- this is the concise form for protocols that know exactly how many values will arrive.
+
+Close-aware receive is explicit:
+
+```nia
+let maybe: Option[i32] = ch.recv();
+```
+
+`ch.recv()` returns `Option[T]`:
 
 - `Some(value)` means a value was received and ownership moved to the receiver.
 - `None` means the channel is closed and empty.
@@ -156,27 +169,30 @@ Receive returns `Option[T]`:
 Rules:
 
 - `<-ch` requires `ch: chan[T]` or `ch: <- chan[T]`.
-- receive blocks until a value is available or the channel is closed and drained.
+- `<-ch` has type `T`.
+- `ch.recv()` requires `ch: chan[T]` or `ch: <- chan[T]`.
+- `ch.recv()` has type `Option[T]`.
 - receiving from a closed but non-empty channel drains queued values first.
-- receiving from a closed and empty channel returns `None` immediately.
+- `ch.recv()` on a closed and empty channel returns `None` immediately.
 
-This deliberately differs from Go's single-value receive, which returns the element zero value after
-close. Nia should not invent zero values for arbitrary `T`; `Option[T]` makes close visible in the
-type.
+This deliberately differs from Go's single-value receive-after-close behavior. Go returns the
+element zero value; Nia should not invent zero values for arbitrary `T`. Use `<-ch` when the protocol
+guarantees a value, and `ch.recv()` when closure is part of the protocol.
 
 ### Close
 
 ```nia
-let tx: chan[i32] <- = chan_new[i32]();
+let tx: -> chan[i32] = chan_new[i32]();
 close(tx);
 ```
 
 `close(ch)`:
 
-- requires a send-capable handle (`chan[T]` or `chan[T] <-`);
+- requires a send-capable handle (`chan[T]` or `-> chan[T]`);
 - consumes that handle;
 - wakes blocked receivers;
-- makes future receives drain buffered values and then return `None`;
+- makes future `ch.recv()` calls drain buffered values and then return `None`;
+- makes future `<-ch` calls drain buffered values and then abort once the channel is empty;
 - aborts on double close;
 - aborts blocked or future sends.
 
@@ -187,7 +203,7 @@ a protocol rule rather than a fully static guarantee in the MVP.
 
 ```nia
 let ch: chan[i32] = chan_new[i32]();
-let tx: chan[i32] <- = ch.clone();
+let tx: -> chan[i32] = ch.clone();
 let rx: <- chan[i32] = ch;
 ```
 
@@ -196,7 +212,7 @@ let rx: <- chan[i32] = ch;
 | Receiver | Result |
 | --- | --- |
 | `chan[T]` | `chan[T]` |
-| `chan[T] <-` | `chan[T] <-` |
+| `-> chan[T]` | `-> chan[T]` |
 | `<- chan[T]` | `<- chan[T]` |
 
 Dropping a handle decrements the runtime reference count. Dropping the last handle frees channel
@@ -206,7 +222,8 @@ forever if the program drops or loses all send-capable handles without calling `
 ### Worker Fan-In Example
 
 This example starts several OS threads, runs a small computation in each thread, sends every result
-back through one buffered channel, and sums the returned values on the main thread.
+back through one buffered channel, and sums the returned values on the main thread. It intentionally
+does not use `WaitGroup`: receiving exactly four values is the synchronization point.
 
 ```nia
 fn compute(limit: i32) i32 {
@@ -217,40 +234,23 @@ fn compute(limit: i32) i32 {
     acc
 }
 
+fn start_compute(out: -> chan[i32], limit: i32) {
+    spawn move || {
+        out <- compute(limit);
+    };
+}
+
 fn main() i32 {
     let results: chan[i32] = chan_with_capacity[i32](4);
 
-    let tx1: chan[i32] <- = results.clone();
-    let t1: Thread = spawn move || {
-        tx1 <- compute(100);
-    };
-
-    let tx2: chan[i32] <- = results.clone();
-    let t2: Thread = spawn move || {
-        tx2 <- compute(200);
-    };
-
-    let tx3: chan[i32] <- = results.clone();
-    let t3: Thread = spawn move || {
-        tx3 <- compute(300);
-    };
-
-    let tx4: chan[i32] <- = results.clone();
-    let t4: Thread = spawn move || {
-        tx4 <- compute(400);
-    };
-
-    join(t1);
-    join(t2);
-    join(t3);
-    join(t4);
+    start_compute(results.clone(), 100);
+    start_compute(results.clone(), 200);
+    start_compute(results.clone(), 300);
+    start_compute(results.clone(), 400);
 
     let total = 0;
     for _ in 0..4 {
-        total = total + match <-results {
-            Some(value) => value,
-            None => 0,
-        };
+        total += <-results;
     }
 
     println(total);
@@ -258,70 +258,22 @@ fn main() i32 {
 }
 ```
 
-The channel capacity is equal to the worker count, so every worker can send its result even if the
-main thread waits for all `join` calls before receiving. The program receives exactly four values,
-so it does not need to close the channel to terminate the receive loop.
+The channel capacity is equal to the worker count, so every worker can send its result without
+blocking on the main thread. The program receives exactly four values, so it does not need to close
+the channel to terminate the receive loop.
 
-There is no `WaitGroup` in this MVP example because the implemented concurrency surface already has
-`Thread` handles and `join(t)`. A `WaitGroup` should still be added as a follow-up synchronization
-helper: it is not a channel feature by itself, but it is the ergonomic way to coordinate a dynamic
-set of workers that all send into one channel.
-
-Target `WaitGroup` shape for the same worker fan-in:
+`start_compute` uses `spawn move || { ... };` as a detached worker statement. If the language wants a
+more Go-like surface later, add a small sugar form:
 
 ```nia
-let results: chan[i32] = chan_with_capacity[i32](4);
-let wg: WaitGroup = waitgroup_new();
-wg.add(4);
-
-let tx1: chan[i32] <- = results.clone();
-let wg1 = wg.clone();
-let t1: Thread = spawn move || {
-    tx1 <- compute(100);
-    wg1.done();
+go move || {
+    out <- compute(limit);
 };
-
-let tx2: chan[i32] <- = results.clone();
-let wg2 = wg.clone();
-let t2: Thread = spawn move || {
-    tx2 <- compute(200);
-    wg2.done();
-};
-
-let tx3: chan[i32] <- = results.clone();
-let wg3 = wg.clone();
-let t3: Thread = spawn move || {
-    tx3 <- compute(300);
-    wg3.done();
-};
-
-let tx4: chan[i32] <- = results.clone();
-let wg4 = wg.clone();
-let t4: Thread = spawn move || {
-    tx4 <- compute(400);
-    wg4.done();
-};
-
-wg.wait();
-
-let total = 0;
-for _ in 0..4 {
-    total = total + match <-results {
-        Some(value) => value,
-        None => 0,
-    };
-}
-
-join(t1);
-join(t2);
-join(t3);
-join(t4);
 ```
 
-This keeps `join` as the operation that consumes OS thread handles, while `WaitGroup` coordinates
-"all workers have sent their result". If Nia later supports detached task spawning, the same
-`WaitGroup` shape becomes even more useful because callers will not need to store every `Thread`
-handle just to wait for a worker set.
+`WaitGroup` is still useful for worker sets that do not produce exactly one result each, or when a
+separate closer thread needs to wait for all senders before calling `close(results)`. It should not
+be required for fixed-count fan-in like the example above.
 
 ## Select
 
@@ -334,11 +286,8 @@ select {
     case out <- value => {
         println(1);
     }
-    case msg = <-input => {
-        match msg {
-            Some(value) => println(value),
-            None => println(0),
-        };
+    case value = (<-input) => {
+        println(value);
     }
     case <-done => {
         println(2);
@@ -353,7 +302,7 @@ Rules:
 
 - send cases require send-capable channels;
 - receive cases require receive-capable channels;
-- `case name = <-ch` binds `name: Option[T]`;
+- `case name = (<-ch)` binds `name: T`;
 - `case <-ch` is allowed when the received value is intentionally ignored;
 - `default` runs only when no channel operation is ready;
 - if multiple cases are ready, the runtime should choose pseudo-randomly or rotate fairly enough to
@@ -368,7 +317,7 @@ move checker can represent "moved only if this arm was selected".
 | Type | `copy` | `clone` | `drop` | `send` | `sync` |
 | --- | --- | --- | --- | --- | --- |
 | `chan[T]` | no | yes | yes | if `T: send` | if `T: send` |
-| `chan[T] <-` | no | yes | yes | if `T: send` | if `T: send` |
+| `-> chan[T]` | no | yes | yes | if `T: send` | if `T: send` |
 | `<- chan[T]` | no | yes | yes | if `T: send` | if `T: send` |
 
 Element rules:
@@ -433,7 +382,7 @@ Receive algorithm:
 
 1. lock `mutex`;
 2. if a value is buffered or in the rendezvous slot, move it out and wake one sender;
-3. otherwise, if `closed`, return `None`;
+3. otherwise, if `closed`, report closed-and-empty to the caller;
 4. otherwise, block on `recv_cv`;
 5. retry after wakeup.
 
@@ -443,7 +392,7 @@ Close algorithm:
 2. if already `closed`, abort;
 3. set `closed = true`;
 4. wake all receivers and senders;
-5. receivers drain buffered values, then return `None`;
+5. receivers drain buffered values, then observe closed-and-empty;
 6. senders abort when they observe closure.
 
 The pthread mutex and condition variables provide the memory ordering guarantees for values sent
@@ -456,7 +405,8 @@ through the channel.
 Add:
 
 - `chan` keyword;
-- `<-` token for both channel type direction and expressions.
+- `<-` token for receive direction and expressions;
+- reuse the existing `->` token for send-only channel types.
 
 The parser can still treat `chan` as contextual in type positions if preserving old identifiers is
 valuable, but the compiler is early enough that making it reserved is acceptable.
@@ -508,7 +458,7 @@ Type grammar additions:
 Ty :=
   | "chan" "[" Ty "]"
   | "<-" "chan" "[" Ty "]"
-  | "chan" "[" Ty "]" "<-"
+  | "->" "chan" "[" Ty "]"
 ```
 
 Expression grammar additions:
@@ -524,7 +474,7 @@ Precedence notes:
 - `<-ch.method()` should parse as `<-(ch.method())`;
 - `ch <- f(x)` should parse as `ch <- (f(x))`;
 - send is valid only as a statement expression returning `()`;
-- receive is a normal expression returning `Option[T]`.
+- receive is a normal expression returning `T`.
 
 ### Typechecker
 
@@ -542,7 +492,7 @@ Wire into:
 - ability queries for `clone`, `drop`, `send`, and `sync`;
 - assignment and parameter passing for direction narrowing;
 - send expression checking;
-- receive expression checking;
+- receive expression and `.recv()` method checking;
 - move checking for values consumed by send;
 - `close(ch)` as a consuming builtin.
 
@@ -550,7 +500,7 @@ Diagnostics should name both the operation and the direction mismatch:
 
 ```text
 cannot send on receive-only channel `<- chan[i32]`
-cannot receive from send-only channel `chan[i32] <-`
+cannot receive from send-only channel `-> chan[i32]`
 cannot close receive-only channel `<- chan[i32]`
 channel element type `Thread` is not send
 ```
@@ -570,7 +520,9 @@ Emit or call runtime helpers:
 @nialang.chan.close(ptr)
 ```
 
-`recv` returns `true` for `Some` and `false` for `None`; the caller constructs `Option[T]`.
+`@nialang.chan.recv` returns `true` when a value was written to `out_ptr`, and `false` when the
+channel is closed and empty. The `<-ch` operator aborts on `false`; `ch.recv()` constructs
+`Option[T]`.
 
 For values with drop glue, the channel runtime must store a drop callback or use monomorphized
 wrappers so queued values are destroyed correctly when the channel is freed.
@@ -602,7 +554,7 @@ Goal: reserve the surface shape before runtime work starts.
 - parse channel types:
   - `chan[T]`;
   - `<- chan[T]`;
-  - `chan[T] <-`;
+  - `-> chan[T]`;
 - parse send and receive expressions;
 - add parser tests for accepted syntax and ambiguity cases.
 
@@ -617,7 +569,8 @@ Goal: make channels meaningful in the type system.
 - implement channel ability rules;
 - typecheck `chan_new[T]` and `chan_with_capacity[T]`;
 - typecheck `ch <- value`;
-- typecheck `<-ch` as `Option[T]`;
+- typecheck `<-ch` as `T`;
+- typecheck `ch.recv()` as `Option[T]`;
 - typecheck consuming `close(ch)`;
 - reject non-`send` element types.
 
@@ -639,7 +592,8 @@ Acceptance examples:
 - single-thread buffered FIFO;
 - unbuffered producer/consumer using `spawn move ||`;
 - close then drain;
-- receive from closed empty channel returns `None`;
+- `ch.recv()` from closed empty channel returns `None`;
+- `<-ch` from closed empty channel aborts;
 - send on closed channel aborts.
 
 ### Phase 3: Directional API Polish
@@ -648,7 +602,7 @@ Goal: make producer/consumer APIs pleasant and hard to misuse.
 
 - support directional channel types in function parameters and return types;
 - ensure `.clone()` preserves direction;
-- add examples with explicit `chan[T] <-` producer endpoints and `<- chan[T]` consumer endpoints;
+- add examples with explicit `-> chan[T]` producer endpoints and `<- chan[T]` consumer endpoints;
 - update README and spec once the behavior is implemented.
 
 ### Phase 4: Select
@@ -670,7 +624,9 @@ These should wait until the core semantics are solid:
 - `len(ch)` and `cap(ch)` for buffered channels;
 - timer channels or sleep integration;
 - select timeouts;
+- `go move || { ... };` as detached-spawn sugar for channel worker fan-in;
 - `WaitGroup` / `TaskGroup` helper for coordinating worker sets that report through channels;
+- close-aware receive cases in `select`, if `case value = (<-ch)` staying `T` is not enough;
 - channel iteration sugar after `for` / iterator design exists;
 - typed close protocols that make double close and multi-producer close safer.
 
@@ -680,7 +636,7 @@ Parser tests:
 
 - `chan[i32]`;
 - `<- chan[i32]`;
-- `chan[i32] <-`;
+- `-> chan[i32]`;
 - nested directional channels;
 - `ch <- value`;
 - `<-ch`;
@@ -689,17 +645,18 @@ Parser tests:
 Typechecker accept tests:
 
 - send/receive on `chan[T]`;
-- send on `chan[T] <-`;
+- send on `-> chan[T]`;
 - receive on `<- chan[T]`;
 - direction narrowing from bidirectional to send-only and receive-only;
 - send moves non-`copy` values;
-- receive returns `Option[T]`;
+- `<-ch` returns `T`;
+- `ch.recv()` returns `Option[T]`;
 - close consumes a send-capable handle.
 
 Typechecker reject tests:
 
 - send on `<- chan[T]`;
-- receive from `chan[T] <-`;
+- receive from `-> chan[T]`;
 - close on `<- chan[T]`;
 - channel element type without `send`;
 - using a non-`copy` value after sending it;
@@ -712,7 +669,7 @@ Runtime tests:
 - blocking send wakes after receive;
 - blocking receive wakes after send;
 - close wakes blocked receivers;
-- close drains buffered values before `None`;
+- close drains buffered values before `ch.recv()` returns `None`;
 - double close aborts;
 - send after close aborts;
 - queued values are dropped when the last handle drops.
@@ -722,7 +679,7 @@ Runtime tests:
 1. Should `close(ch)` consume the handle forever, as proposed here, or borrow it like Go?
 2. Should dropping the last send-capable handle implicitly close the channel, or stay Go-like and
    require explicit close?
-3. Should send-only type syntax remain postfix (`chan[T] <-`), or should the language introduce a
+3. Should send-only type syntax stay prefix (`-> chan[T]`), or should the language introduce a
    more Go-like spelling if a better one appears?
 4. Should the first `select` implementation support moving send payloads, or start with `copy`
    payloads only?
