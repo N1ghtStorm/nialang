@@ -68,8 +68,8 @@ out of scope; this plan owns those APIs and links back to
 - Prefer RAII guards (`MutexGuard`, `RwLockReadGuard`, `RwLockWriteGuard`) over manual unlock calls.
 - `Arc::clone` bumps a reference count; it does **not** deep-clone `T`.
 - QIR / GPU shared memory is out of scope.
-- Channels (`mpsc`, `select`) are a separate future plan; this document covers mutex-based sharing
-  and OS-thread spawning only.
+- Channels (`mpsc`, `select`) are covered by [channels-plan.md](channels-plan.md); this document
+  covers mutex-based sharing and OS-thread spawning only.
 
 ## Send and Sync
 
