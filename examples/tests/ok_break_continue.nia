@@ -1,0 +1,37 @@
+fn main() i32 {
+    let i = 0;
+    let sum = 0;
+
+    while i < 6 {
+        i = i + 1;
+        if i == 2 {
+            continue;
+        }
+        if i == 5 {
+            break;
+        }
+        sum = sum + i;
+    }
+
+    for j in 0..6 {
+        if j == 1 {
+            continue;
+        }
+        if j == 4 {
+            break;
+        }
+        sum = sum + j;
+    }
+
+    let k = 0;
+    loop {
+        k = k + 1;
+        if k < 2 {
+            continue;
+        }
+        break;
+    }
+
+    println(sum + k);
+    0
+}

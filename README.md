@@ -556,6 +556,9 @@ fn main() i32 {
     }
 
     for value in 0..3 {
+        if value == 1 {
+            continue;
+        }
         println(value);
     }
 
@@ -569,8 +572,8 @@ fn main() i32 {
 }
 ```
 
-`if` supports `else` blocks and `else if` chains. `break` is supported by
-`loop`; breaking from `while` or `for` is not implemented yet.
+`if` supports `else` blocks and `else if` chains. `break` exits the innermost
+`while`, `loop`, or `for`; `continue` skips to the next iteration.
 
 ### Scoped Blocks
 
@@ -1042,7 +1045,7 @@ Currently available:
 
 - signed and unsigned integer types, floating-point types, strings, and booleans
 - scalar arithmetic, `%`, bitwise operators, shifts, logical `!`, and compound assignment
-- functions, `if`, `while`, static range `for`, and `loop` with `break`
+- functions, `if`, `while`, static range `for`, and `loop` with `break` / `continue`
 - fixed arrays with indexing and mutation
 - structs, tuple structs, enums, pattern matching, pointers, and heap allocation
 - `extern fn` C ABI exports and shared-library builds
@@ -1060,7 +1063,6 @@ Currently available:
 
 Still intentionally small or unfinished:
 
-- `break` works only with `loop`, not `while` or `for`
 - no sparse matrices
 - no eigenvalues, QR, SVD, or advanced decomposition APIs
 - no list index syntax or explicit list cleanup yet

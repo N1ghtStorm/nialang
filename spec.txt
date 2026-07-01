@@ -288,17 +288,24 @@ while c {
 }
 ```
 
-`loop` with `break`:
+`break` exits the innermost `while`, `loop`, or `for`.
+`continue` skips to the next iteration of the innermost `while`, `loop`, or `for`.
+
+`loop` with `break` / `continue`:
 
 ```
+let i = 0;
 loop {
+    i = i + 1;
+    if i < 3 {
+        continue;
+    }
     println(1);
     break;
 }
 ```
 
 The body of `loop` must contain at least one `break`.
-`break` inside `while` / `for` is not yet supported.
 
 ## Ownership Abilities
 

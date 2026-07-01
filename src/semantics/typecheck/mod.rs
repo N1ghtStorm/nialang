@@ -1848,7 +1848,7 @@ fn stmt_contains_direct_self_clone(st: &Stmt) -> bool {
         | Stmt::For { body, .. }
         | Stmt::Quant { body }
         | Stmt::Gpu { body } => block_contains_direct_self_clone(body),
-        Stmt::Break => false,
+        Stmt::Break | Stmt::Continue => false,
     }
 }
 
@@ -2481,7 +2481,6 @@ pub fn check_fn(
             fn_sigs,
             sig.ret.as_ref(),
             0,
-            false,
         )?;
     }
     if let Some(ret_ty) = &sig.ret {
@@ -2811,7 +2810,7 @@ fn check_moves_stmt(
                 ExprMoveMode::Consume(MoveReason::Returned),
             )?;
         }
-        Stmt::Break => {}
+        Stmt::Break | Stmt::Continue => {}
         Stmt::If {
             cond,
             then_block,
@@ -5876,7 +5875,7 @@ fn collect_block_captures(
             Stmt::Quant { body } | Stmt::Gpu { body } => {
                 collect_block_captures(body, &scoped, outer_env, captures, writes);
             }
-            Stmt::Break => {}
+            Stmt::Break | Stmt::Continue => {}
             Stmt::For {
                 var,
                 start,
@@ -6151,7 +6150,6 @@ fn infer_closure_expr(
             fns,
             Some(&ret_ty),
             0,
-            false,
         )?;
     }
     if let Some(tail) = &body.tail {
@@ -8047,17 +8045,7 @@ fn infer_expr(
             }
             let mut body_env = enter_quant_scope(env);
             for st in &body.stmts {
-                check_stmt(
-                    st,
-                    &mut body_env,
-                    structs,
-                    enums,
-                    vectors,
-                    fns,
-                    None,
-                    0,
-                    false,
-                )?;
+                check_stmt(st, &mut body_env, structs, enums, vectors, fns, None, 0)?;
             }
             if let Some(tail) = &body.tail {
                 let tail_ty = infer_expr(tail, &body_env, structs, enums, vectors, fns, hint)?;
@@ -8080,17 +8068,7 @@ fn infer_expr(
             }
             let mut body_env = env.clone();
             for st in &body.stmts {
-                check_stmt(
-                    st,
-                    &mut body_env,
-                    structs,
-                    enums,
-                    vectors,
-                    fns,
-                    None,
-                    0,
-                    false,
-                )?;
+                check_stmt(st, &mut body_env, structs, enums, vectors, fns, None, 0)?;
             }
             if let Some(tail) = &body.tail {
                 infer_expr(tail, &body_env, structs, enums, vectors, fns, hint)
@@ -8373,7 +8351,9 @@ fn stmt_contains_return(st: &Stmt) -> bool {
         Stmt::For { body, .. } => block_contains_return(body),
         Stmt::Quant { body } => block_contains_return(body),
         Stmt::Gpu { body } => block_contains_return(body),
-        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Break => false,
+        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Break | Stmt::Continue => {
+            false
+        }
     }
 }
 
@@ -8390,7 +8370,11 @@ fn stmt_has_break(st: &Stmt) -> bool {
         | Stmt::For { body, .. }
         | Stmt::Quant { body }
         | Stmt::Gpu { body } => block_has_break(body),
-        Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Assign { .. } | Stmt::Return(_) => false,
+        Stmt::Let { .. }
+        | Stmt::Expr(_)
+        | Stmt::Assign { .. }
+        | Stmt::Return(_)
+        | Stmt::Continue => false,
     }
 }
 
@@ -8407,9 +8391,8 @@ fn block_contains_return(b: &Block) -> bool {
 /// Statement order matters: `let` bindings become available only after they are checked.
 /// `return` checks against function declared return type.
 ///
-/// `loop_depth` counts enclosing `loop` bodies; `break` requires `loop_depth > 0`.
-/// `break_inside_while_or_for` is true inside `while` / `for` bodies (`break` is not
-/// supported there yet — unlike Rust).
+/// `loop_depth` counts enclosing `while` / `loop` / `for` bodies.
+/// `break` and `continue` require `loop_depth > 0`.
 fn check_stmt(
     st: &Stmt,
     env: &mut HashMap<String, Ty>,
@@ -8419,7 +8402,6 @@ fn check_stmt(
     fn_sigs: &HashMap<String, FnSig>,
     fn_ret: Option<&Ty>,
     loop_depth: u32,
-    break_inside_while_or_for: bool,
 ) -> Result<(), String> {
     match st {
         Stmt::Let {
@@ -8549,10 +8531,12 @@ fn check_stmt(
         }
         Stmt::Break => {
             if loop_depth == 0 {
-                return Err("`break` is only allowed inside a `loop` body".into());
+                return Err("`break` is only allowed inside a loop body".into());
             }
-            if break_inside_while_or_for {
-                return Err("`break` inside `while` / `for` is not supported yet".into());
+        }
+        Stmt::Continue => {
+            if loop_depth == 0 {
+                return Err("`continue` is only allowed inside a loop body".into());
             }
         }
         Stmt::If {
@@ -8583,7 +8567,6 @@ fn check_stmt(
                     fn_sigs,
                     fn_ret,
                     loop_depth,
-                    break_inside_while_or_for,
                 )?;
             }
             if let Some(tail) = &then_block.tail {
@@ -8609,7 +8592,6 @@ fn check_stmt(
                         fn_sigs,
                         fn_ret,
                         loop_depth,
-                        break_inside_while_or_for,
                     )?;
                 }
                 if let Some(tail) = &else_block.tail {
@@ -8648,8 +8630,7 @@ fn check_stmt(
                     vectors,
                     fn_sigs,
                     fn_ret,
-                    loop_depth,
-                    true,
+                    loop_depth.saturating_add(1),
                 )?;
             }
             if let Some(tail) = &body.tail {
@@ -8682,7 +8663,6 @@ fn check_stmt(
                     fn_sigs,
                     fn_ret,
                     loop_depth.saturating_add(1),
-                    false,
                 )?;
             }
             if let Some(tail) = &body.tail {
@@ -8734,8 +8714,7 @@ fn check_stmt(
                     vectors,
                     fn_sigs,
                     fn_ret,
-                    loop_depth,
-                    true,
+                    loop_depth.saturating_add(1),
                 )?;
             }
             if let Some(tail) = &body.tail {
@@ -8762,7 +8741,6 @@ fn check_stmt(
                     fn_sigs,
                     fn_ret,
                     loop_depth,
-                    break_inside_while_or_for,
                 )?;
             }
             if let Some(tail) = &body.tail {
@@ -8789,7 +8767,6 @@ fn check_stmt(
                     fn_sigs,
                     fn_ret,
                     loop_depth,
-                    break_inside_while_or_for,
                 )?;
             }
             if let Some(tail) = &body.tail {

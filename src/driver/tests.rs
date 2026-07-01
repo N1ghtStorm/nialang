@@ -49,6 +49,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_for_range.nia",
         "examples/tests/ok_while.nia",
         "examples/tests/ok_loop.nia",
+        "examples/tests/ok_break_continue.nia",
         "examples/tests/ok_compound_assign.nia",
         "examples/tests/ok_bitwise.nia",
         "examples/tests/ok_atomic_bool.nia",
@@ -120,7 +121,7 @@ fn compile_multiple_error_fixtures() {
         "examples/tests/err_while_cond_int.nia",
         "examples/tests/err_loop_no_break.nia",
         "examples/tests/err_break_outside_loop.nia",
-        "examples/tests/err_break_in_while.nia",
+        "examples/tests/err_continue_outside_loop.nia",
         "examples/tests/err_div_by_zero.nia",
     ];
     for f in err_files {

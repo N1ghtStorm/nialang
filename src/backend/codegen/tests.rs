@@ -2244,3 +2244,16 @@ fn codegen_loop_emits_iter_and_exit_labels() {
     assert!(ll.contains("loop.iter."), "IR:\n{ll}");
     assert!(ll.contains("loop.exit."), "IR:\n{ll}");
 }
+
+#[test]
+fn codegen_break_continue_emits_loop_targets() {
+    let ll = emit(include_str!(
+        "../../../examples/tests/ok_break_continue.nia"
+    ));
+    assert!(ll.contains("while.cond."), "IR:\n{ll}");
+    assert!(ll.contains("while.exit."), "IR:\n{ll}");
+    assert!(ll.contains("for.latch."), "IR:\n{ll}");
+    assert!(ll.contains("for.exit."), "IR:\n{ll}");
+    assert!(ll.contains("loop.iter."), "IR:\n{ll}");
+    assert!(ll.contains("loop.exit."), "IR:\n{ll}");
+}

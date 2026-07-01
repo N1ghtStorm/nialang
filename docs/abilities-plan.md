@@ -772,12 +772,12 @@ Implemented notes:
 - custom-drop locals are automatically dropped in reverse declaration order on
   normal function/block exit
 - early `return` drops all currently live custom-drop locals before returning
-- `break` from `loop` drops locals declared inside the loop body before
+- `break` from `while`, `loop`, or `for` drops locals declared inside the loop body before
   branching to the loop exit
+- `continue` from `while`, `loop`, or `for` drops locals declared inside the loop body before
+  branching to the next iteration target
 - `if`, `while`, `loop`, `for`, `quant`, and `gpu` statement bodies clean up
   locals declared inside the body on normal block exit
-- `continue` is still future work because Nia does not currently expose a
-  `continue` statement
 - runtime primitives such as `Matrix`, `T<>`, and `List[T]` are still excluded
   from language-level auto-drop
 

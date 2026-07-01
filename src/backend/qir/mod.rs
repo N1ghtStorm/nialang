@@ -278,6 +278,7 @@ fn collect_stmt(
         | Stmt::While { .. }
         | Stmt::Loop { .. }
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::For { .. }
         | Stmt::Gpu { .. } => Err(
             "QIR lowering currently supports only `let q = qubit();`, static `for` loops, quantum gates, `let r = q_measure(q);`, `let b = q_read(r);`, and `q_record(...)` inside `quant` blocks"

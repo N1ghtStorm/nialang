@@ -134,14 +134,16 @@ fn lex_while_keyword() {
 }
 
 #[test]
-fn lex_loop_and_break() {
-    let toks = collect("loop { break; }");
+fn lex_loop_break_and_continue() {
+    let toks = collect("loop { break; continue; }");
     assert_eq!(
         toks,
         vec![
             Token::Loop,
             Token::LBrace,
             Token::Break,
+            Token::Semi,
+            Token::Continue,
             Token::Semi,
             Token::RBrace,
         ]

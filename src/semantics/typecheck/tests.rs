@@ -57,6 +57,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_for_range.nia"),
         include_str!("../../../examples/tests/ok_while.nia"),
         include_str!("../../../examples/tests/ok_loop.nia"),
+        include_str!("../../../examples/tests/ok_break_continue.nia"),
         include_str!("../../../examples/tests/ok_compound_assign.nia"),
         include_str!("../../../examples/tests/ok_bitwise.nia"),
         include_str!("../../../examples/tests/ok_atomic_bool.nia"),
@@ -4474,8 +4475,8 @@ fn typecheck_rejects_break_outside_loop_fixture() {
 }
 
 #[test]
-fn typecheck_rejects_break_inside_while_fixture() {
-    let src = include_str!("../../../examples/tests/err_break_in_while.nia");
+fn typecheck_rejects_continue_outside_loop_fixture() {
+    let src = include_str!("../../../examples/tests/err_continue_outside_loop.nia");
     let r = check_all(src);
     assert!(r.is_err(), "{r:?}");
 }

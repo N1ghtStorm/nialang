@@ -355,7 +355,7 @@ fn stmt_contains_quantum(st: &Stmt) -> bool {
                 || block_contains_quantum(body)
         }
         Stmt::Quant { .. } => true,
-        Stmt::Break => false,
+        Stmt::Break | Stmt::Continue => false,
     }
 }
 
@@ -654,6 +654,7 @@ fn token_lexeme(token: &str) -> Option<&'static str> {
         "While" => Some("while"),
         "Loop" => Some("loop"),
         "Break" => Some("break"),
+        "Continue" => Some("continue"),
         "For" => Some("for"),
         "In" => Some("in"),
         "Match" => Some("match"),

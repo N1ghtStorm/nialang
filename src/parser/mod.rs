@@ -729,6 +729,9 @@ impl Parser {
                 Token::Break => {
                     stmts.push(self.parse_break_stmt()?);
                 }
+                Token::Continue => {
+                    stmts.push(self.parse_continue_stmt()?);
+                }
                 Token::For => {
                     stmts.push(self.parse_for_stmt()?);
                 }
@@ -865,6 +868,13 @@ impl Parser {
         self.expect(&Token::Break)?;
         self.expect(&Token::Semi)?;
         Ok(Stmt::Break)
+    }
+
+    /// Parses `continue;`
+    fn parse_continue_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Continue)?;
+        self.expect(&Token::Semi)?;
+        Ok(Stmt::Continue)
     }
 
     /// Parses `for <ident> in <expr>..<expr> { ... }` (half-open range).

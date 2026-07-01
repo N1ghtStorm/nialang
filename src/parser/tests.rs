@@ -364,6 +364,11 @@ fn parse_fixture_loop() {
 }
 
 #[test]
+fn parse_fixture_break_continue() {
+    parse_ok(include_str!("../../examples/tests/ok_break_continue.nia"));
+}
+
+#[test]
 fn parse_fixture_compound_assign() {
     parse_ok(include_str!("../../examples/tests/ok_compound_assign.nia"));
 }

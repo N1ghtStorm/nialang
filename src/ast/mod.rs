@@ -306,8 +306,10 @@ pub enum Stmt {
     Loop {
         body: Block,
     },
-    /// Exit the innermost enclosing `loop` (Nia: only `loop`, not `while`/`for`).
+    /// Exit the innermost enclosing loop-like statement (`while`, `loop`, or `for`).
     Break,
+    /// Skip to the next iteration of the innermost enclosing loop-like statement.
+    Continue,
     /// `for name in start..end { ... }` — half-open numeric range (like Rust `..`).
     For {
         var: String,

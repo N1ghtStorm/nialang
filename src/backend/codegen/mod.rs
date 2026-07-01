@@ -187,7 +187,7 @@ fn collect_string_literals_stmt(st: &Stmt, out: &mut BTreeSet<String>) {
         }
         Stmt::Quant { body } => collect_string_literals_block(body, out),
         Stmt::Gpu { body } => collect_string_literals_block(body, out),
-        Stmt::Break => {}
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -1251,9 +1251,11 @@ struct Gen<'a> {
     mode: CodegenMode,
     qir_next_result: usize,
     terminated: bool,
-    /// Labels of `loop.exit` for nested `loop`; `break` branches to the top.
+    /// Exit labels for nested `while` / `loop` / `for`; `break` branches to the top.
     loop_exit_stack: Vec<String>,
-    /// Visible-order index where each active `loop` body scope starts.
+    /// Iteration labels for nested `while` / `loop` / `for`; `continue` branches to the top.
+    loop_continue_stack: Vec<String>,
+    /// Visible-order index where each active loop-like body scope starts.
     loop_scope_start_stack: Vec<usize>,
     closures: Rc<RefCell<ClosureState>>,
 }
@@ -1282,6 +1284,7 @@ impl<'a> Gen<'a> {
             qir_next_result: 0,
             terminated: false,
             loop_exit_stack: Vec::new(),
+            loop_continue_stack: Vec::new(),
             loop_scope_start_stack: Vec::new(),
             closures,
         }
@@ -3041,7 +3044,7 @@ impl<'a> Gen<'a> {
                     self.clear_consumed_custom_drop_locals_stmt(st, locals, drop_flags);
                 }
             }
-            Stmt::Let { init: None, .. } | Stmt::Break => {}
+            Stmt::Let { init: None, .. } | Stmt::Break | Stmt::Continue => {}
         }
     }
 
@@ -9094,12 +9097,22 @@ impl<'a> Gen<'a> {
             }
             Stmt::Break => {
                 let Some(exit) = self.loop_exit_stack.last() else {
-                    panic!("internal: `break` should be rejected by typecheck outside `loop`");
+                    panic!("internal: `break` should be rejected by typecheck outside loops");
                 };
                 let exit = exit.clone();
                 let start = *self.loop_scope_start_stack.last().unwrap_or(&0);
                 self.emit_drop_scope_from(start, visible_order, locals, drop_flags);
                 writeln!(self.out, "  br label %{}", exit).unwrap();
+                self.terminated = true;
+            }
+            Stmt::Continue => {
+                let Some(target) = self.loop_continue_stack.last() else {
+                    panic!("internal: `continue` should be rejected by typecheck outside loops");
+                };
+                let target = target.clone();
+                let start = *self.loop_scope_start_stack.last().unwrap_or(&0);
+                self.emit_drop_scope_from(start, visible_order, locals, drop_flags);
+                writeln!(self.out, "  br label %{}", target).unwrap();
                 self.terminated = true;
             }
             Stmt::If {
@@ -9232,6 +9245,9 @@ impl<'a> Gen<'a> {
                 let mut body_drop_flags = drop_flags.clone();
                 let mut body_visible_order = visible_order.clone();
                 let body_scope_start = body_visible_order.len();
+                self.loop_exit_stack.push(exit_lbl.clone());
+                self.loop_continue_stack.push(cond_lbl.clone());
+                self.loop_scope_start_stack.push(body_scope_start);
                 self.terminated = false;
                 for st in &body.stmts {
                     self.emit_stmt(
@@ -9263,6 +9279,9 @@ impl<'a> Gen<'a> {
                     );
                     writeln!(self.out, "  br label %{}", cond_lbl).unwrap();
                 }
+                self.loop_scope_start_stack.pop();
+                self.loop_continue_stack.pop();
+                self.loop_exit_stack.pop();
                 self.terminated = false;
                 writeln!(self.out, "{}:", exit_lbl).unwrap();
             }
@@ -9273,6 +9292,7 @@ impl<'a> Gen<'a> {
                 let iter_lbl = self.fresh_label("loop.iter");
                 let exit_lbl = self.fresh_label("loop.exit");
                 self.loop_exit_stack.push(exit_lbl.clone());
+                self.loop_continue_stack.push(iter_lbl.clone());
 
                 writeln!(self.out, "  br label %{}", iter_lbl).unwrap();
                 writeln!(self.out, "{}:", iter_lbl).unwrap();
@@ -9313,6 +9333,7 @@ impl<'a> Gen<'a> {
                     writeln!(self.out, "  br label %{}", iter_lbl).unwrap();
                 }
                 self.loop_scope_start_stack.pop();
+                self.loop_continue_stack.pop();
                 self.loop_exit_stack.pop();
                 self.terminated = false;
                 writeln!(self.out, "{}:", exit_lbl).unwrap();
@@ -9373,6 +9394,9 @@ impl<'a> Gen<'a> {
                 let mut body_visible_order = visible_order.clone();
                 let body_scope_start = body_visible_order.len();
                 body_locals.insert(var.clone(), (t_ev.clone(), var_ptr));
+                self.loop_exit_stack.push(exit.clone());
+                self.loop_continue_stack.push(latch.clone());
+                self.loop_scope_start_stack.push(body_scope_start);
                 self.terminated = false;
                 for st in &body.stmts {
                     self.emit_stmt(
@@ -9404,11 +9428,7 @@ impl<'a> Gen<'a> {
                     );
                     writeln!(self.out, "  br label %{}", latch).unwrap();
                 }
-                let body_term = self.terminated;
                 self.terminated = false;
-                if body_term {
-                    panic!("internal: `return` inside `for` should be rejected by typecheck");
-                }
 
                 writeln!(self.out, "{}:", latch).unwrap();
                 match &t_ev {
@@ -9478,6 +9498,9 @@ impl<'a> Gen<'a> {
                 }
                 writeln!(self.out, "  br label %{}", header).unwrap();
 
+                self.loop_scope_start_stack.pop();
+                self.loop_continue_stack.pop();
+                self.loop_exit_stack.pop();
                 writeln!(self.out, "{}:", exit).unwrap();
             }
             Stmt::Quant { body } => {
