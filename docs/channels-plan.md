@@ -203,6 +203,126 @@ Dropping a handle decrements the runtime reference count. Dropping the last hand
 storage and drops any queued values. Drop does not close the channel; a receiver can still block
 forever if the program drops or loses all send-capable handles without calling `close`.
 
+### Worker Fan-In Example
+
+This example starts several OS threads, runs a small computation in each thread, sends every result
+back through one buffered channel, and sums the returned values on the main thread.
+
+```nia
+fn compute(limit: i32) i32 {
+    let acc = 0;
+    for i in 0..limit {
+        acc = acc + i;
+    }
+    acc
+}
+
+fn main() i32 {
+    let results: chan[i32] = chan_with_capacity[i32](4);
+
+    let tx1: chan[i32] <- = results.clone();
+    let t1: Thread = spawn move || {
+        tx1 <- compute(100);
+    };
+
+    let tx2: chan[i32] <- = results.clone();
+    let t2: Thread = spawn move || {
+        tx2 <- compute(200);
+    };
+
+    let tx3: chan[i32] <- = results.clone();
+    let t3: Thread = spawn move || {
+        tx3 <- compute(300);
+    };
+
+    let tx4: chan[i32] <- = results.clone();
+    let t4: Thread = spawn move || {
+        tx4 <- compute(400);
+    };
+
+    join(t1);
+    join(t2);
+    join(t3);
+    join(t4);
+
+    let total = 0;
+    for _ in 0..4 {
+        total = total + match <-results {
+            Some(value) => value,
+            None => 0,
+        };
+    }
+
+    println(total);
+    0
+}
+```
+
+The channel capacity is equal to the worker count, so every worker can send its result even if the
+main thread waits for all `join` calls before receiving. The program receives exactly four values,
+so it does not need to close the channel to terminate the receive loop.
+
+There is no `WaitGroup` in this MVP example because the implemented concurrency surface already has
+`Thread` handles and `join(t)`. A `WaitGroup` should still be added as a follow-up synchronization
+helper: it is not a channel feature by itself, but it is the ergonomic way to coordinate a dynamic
+set of workers that all send into one channel.
+
+Target `WaitGroup` shape for the same worker fan-in:
+
+```nia
+let results: chan[i32] = chan_with_capacity[i32](4);
+let wg: WaitGroup = waitgroup_new();
+wg.add(4);
+
+let tx1: chan[i32] <- = results.clone();
+let wg1 = wg.clone();
+let t1: Thread = spawn move || {
+    tx1 <- compute(100);
+    wg1.done();
+};
+
+let tx2: chan[i32] <- = results.clone();
+let wg2 = wg.clone();
+let t2: Thread = spawn move || {
+    tx2 <- compute(200);
+    wg2.done();
+};
+
+let tx3: chan[i32] <- = results.clone();
+let wg3 = wg.clone();
+let t3: Thread = spawn move || {
+    tx3 <- compute(300);
+    wg3.done();
+};
+
+let tx4: chan[i32] <- = results.clone();
+let wg4 = wg.clone();
+let t4: Thread = spawn move || {
+    tx4 <- compute(400);
+    wg4.done();
+};
+
+wg.wait();
+
+let total = 0;
+for _ in 0..4 {
+    total = total + match <-results {
+        Some(value) => value,
+        None => 0,
+    };
+}
+
+join(t1);
+join(t2);
+join(t3);
+join(t4);
+```
+
+This keeps `join` as the operation that consumes OS thread handles, while `WaitGroup` coordinates
+"all workers have sent their result". If Nia later supports detached task spawning, the same
+`WaitGroup` shape becomes even more useful because callers will not need to store every `Thread`
+handle just to wait for a worker set.
+
 ## Select
 
 `select` should be a later phase, after basic channels are implemented and tested.
@@ -550,6 +670,7 @@ These should wait until the core semantics are solid:
 - `len(ch)` and `cap(ch)` for buffered channels;
 - timer channels or sleep integration;
 - select timeouts;
+- `WaitGroup` / `TaskGroup` helper for coordinating worker sets that report through channels;
 - channel iteration sugar after `for` / iterator design exists;
 - typed close protocols that make double close and multi-producer close safer.
 
