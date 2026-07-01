@@ -501,7 +501,6 @@ Sample: `examples/sample_atomic_i128.nia`.
   tested
 - document the stable subset in `spec.txt`
 - add the stable subset to `README.md`
-- keep QIR/GPU atomics explicitly out of scope
 
 ## Tests
 
