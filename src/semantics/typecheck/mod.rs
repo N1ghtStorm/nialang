@@ -1757,6 +1757,7 @@ fn expr_contains_direct_self_clone(e: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::String(_)
+        | Expr::HexBytes(_)
         | Expr::Ident(_)
         | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => false,
@@ -4340,7 +4341,12 @@ fn check_moves_expr(
 ) -> Result<Ty, String> {
     let inferred = infer_expr(e, env, ctx.structs, ctx.enums, ctx.vectors, ctx.fns, hint)?;
     match e {
-        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) | Expr::Spawn { .. } => {}
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::HexBytes(_)
+        | Expr::Spawn { .. } => {}
         Expr::SpawnClosure { closure } => {
             let entry_ty = thread_entry_fn_ty();
             check_moves_expr(
@@ -5919,6 +5925,7 @@ fn collect_expr_captures(
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::String(_)
+        | Expr::HexBytes(_)
         | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => {}
         Expr::SpawnClosure { closure } => {
@@ -6347,6 +6354,25 @@ fn infer_expr(
             Some(Ty::String) | None => Ok(Ty::String),
             Some(other) => Err(format!("string literal cannot satisfy {other:?}")),
         },
+        Expr::HexBytes(bytes) => {
+            let ty = Ty::Array(Box::new(Ty::U8), bytes.len());
+            match hint {
+                Some(Ty::Array(elem_ty, n)) if matches!(elem_ty.as_ref(), Ty::U8) => {
+                    if bytes.len() != *n {
+                        return Err(format!(
+                            "hex literal length mismatch: expected {n} bytes, got {}",
+                            bytes.len()
+                        ));
+                    }
+                    Ok(ty)
+                }
+                Some(Ty::Array(elem_ty, _)) => Err(format!(
+                    "hex literal cannot satisfy array element type {elem_ty:?}; expected u8"
+                )),
+                Some(other) => Err(format!("hex literal cannot satisfy {other:?}")),
+                None => Ok(ty),
+            }
+        }
         Expr::Ident(name) => {
             if name == OPTION_NONE {
                 return infer_option_none(hint);

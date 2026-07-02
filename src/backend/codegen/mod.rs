@@ -52,6 +52,7 @@ fn collect_string_literals_expr(e: &Expr, out: &mut BTreeSet<String>) {
         Expr::Int(_)
         | Expr::Float(_)
         | Expr::Bool(_)
+        | Expr::HexBytes(_)
         | Expr::Ident(_)
         | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => {}
@@ -2699,6 +2700,7 @@ impl<'a> Gen<'a> {
                 other => other,
             },
             Expr::Field(inner, _) => self.expr_codegen_ty(inner, locals),
+            Expr::HexBytes(bytes) => Ty::Array(Box::new(Ty::U8), bytes.len()),
             _ => Ty::Unit,
         }
     }
@@ -2751,6 +2753,7 @@ impl<'a> Gen<'a> {
             | Expr::Float(_)
             | Expr::Bool(_)
             | Expr::String(_)
+            | Expr::HexBytes(_)
             | Expr::Spawn { .. }
             | Expr::EnumVariant { .. } => {}
             Expr::SpawnClosure { closure } => {
@@ -9700,6 +9703,14 @@ impl<'a> Gen<'a> {
                 )
                 .unwrap();
                 (Ty::String, format!("%{tmp}"))
+            }
+            Expr::HexBytes(bytes) => {
+                let elems = bytes
+                    .iter()
+                    .map(|byte| Expr::Int(i128::from(*byte)))
+                    .collect::<Vec<_>>();
+                let ty = Ty::Array(Box::new(Ty::U8), bytes.len());
+                self.emit_expr(&Expr::ArrayLit(elems), locals, Some(&ty))
             }
             Expr::Ident(name) => {
                 if name == OPTION_NONE {

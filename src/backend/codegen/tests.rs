@@ -1902,6 +1902,15 @@ fn codegen_contains_array_type_and_insertvalue() {
 }
 
 #[test]
+fn codegen_hex_literal_lowers_to_u8_array() {
+    let ll = emit(include_str!("../../../examples/tests/ok_hex_literal.nia"));
+    assert!(ll.contains("[4 x i8]"), "IR:\n{ll}");
+    assert!(ll.contains("insertvalue [4 x i8]"), "IR:\n{ll}");
+    assert!(ll.contains("i8 222"), "IR:\n{ll}");
+    assert!(ll.contains("i8 239"), "IR:\n{ll}");
+}
+
+#[test]
 fn codegen_contains_array_index_gep() {
     let ll = emit(include_str!("../../../examples/tests/ok_array_index.nia"));
     assert!(ll.contains("getelementptr inbounds [8 x i8]"), "IR:\n{ll}");

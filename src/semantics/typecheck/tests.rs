@@ -43,6 +43,7 @@ fn typecheck_ok_fixtures() {
         include_str!("../../../examples/tests/ok_array_to_vec.nia"),
         include_str!("../../../examples/tests/ok_vector_to_array.nia"),
         include_str!("../../../examples/tests/ok_array_matrix_conversions.nia"),
+        include_str!("../../../examples/tests/ok_hex_literal.nia"),
         include_str!("../../../examples/tests/ok_print_array.nia"),
         include_str!("../../../examples/tests/ok_print_structs.nia"),
         include_str!("../../../examples/tests/ok_alloc_heap.nia"),
@@ -4430,6 +4431,13 @@ fn typecheck_detects_array_len_mismatch_fixture() {
     let src = include_str!("../../../examples/tests/err_array_len_mismatch.nia");
     let r = check_all(src);
     assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn typecheck_detects_hex_literal_len_mismatch_fixture() {
+    let src = include_str!("../../../examples/tests/err_hex_literal_len_mismatch.nia");
+    let err = check_all(src).expect_err("hex literal length mismatch");
+    assert!(err.contains("hex literal length mismatch"), "{err}");
 }
 
 #[test]

@@ -37,6 +37,7 @@ fn compile_fixtures_pipeline() {
         "examples/tests/ok_array_to_vec.nia",
         "examples/tests/ok_vector_to_array.nia",
         "examples/tests/ok_array_matrix_conversions.nia",
+        "examples/tests/ok_hex_literal.nia",
         "examples/tests/ok_alloc_heap.nia",
         "examples/tests/ok_ptr_write.nia",
         "examples/tests/ok_ptr_array_write.nia",
@@ -122,6 +123,8 @@ fn compile_multiple_error_fixtures() {
         "examples/tests/err_loop_no_break.nia",
         "examples/tests/err_break_outside_loop.nia",
         "examples/tests/err_continue_outside_loop.nia",
+        "examples/tests/err_hex_literal_len_mismatch.nia",
+        "examples/tests/err_hex_literal_odd_digits.nia",
         "examples/tests/err_div_by_zero.nia",
     ];
     for f in err_files {

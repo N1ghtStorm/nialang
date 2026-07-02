@@ -402,6 +402,8 @@ pub enum Expr {
     },
     AnonVectorLit(Vec<Expr>),
     ArrayLit(Vec<Expr>),
+    /// Compile-time byte array literal, written as `hex"0xdead_beef"`.
+    HexBytes(Vec<u8>),
     EnumVariant {
         enum_name: String,
         variant: String,

@@ -143,6 +143,15 @@ let ratio = 3.141_592;
 let scale = 1.0e1_0;
 ```
 
+Hex byte literals use the `hex"..."` prefix and compile directly to fixed
+`[u8; N]` arrays. The optional `0x` / `0X` prefix and `_` separators are
+ignored while parsing.
+
+```nia
+let digest_prefix: [u8; 4] = hex"0xdead_beef";
+let tag = hex"0102_0304"; // inferred as [u8; 4]
+```
+
 ```nia
 let flags: u8 = 12;
 let masked = flags & 10;
@@ -523,6 +532,7 @@ Arrays:
 
 ```nia
 let xs = [1, 2, 3, 4];
+let bytes: [u8; 4] = hex"0x01020304";
 println(xs[0]);
 ```
 

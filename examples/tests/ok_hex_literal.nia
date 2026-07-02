@@ -1,0 +1,7 @@
+fn main() i32 {
+    let tagged: [u8; 4] = hex"0xdead_beef";
+    let plain = hex"0102_0304";
+    println(tagged);
+    println(plain);
+    0
+}

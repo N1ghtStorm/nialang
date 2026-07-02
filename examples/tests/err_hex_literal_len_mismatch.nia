@@ -1,0 +1,5 @@
+fn main() i32 {
+    let bytes: [u8; 3] = hex"0xdead_beef";
+    println(bytes);
+    0
+}

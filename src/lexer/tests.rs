@@ -353,3 +353,32 @@ fn lex_string_type_and_literals() {
         ]
     );
 }
+
+#[test]
+fn lex_hex_byte_literals() {
+    let src = r#"hex"0xdead_beef" hex"0102_03" hex"0XFF""#;
+    assert_eq!(
+        collect(src),
+        vec![
+            Token::HexBytes(vec![0xde, 0xad, 0xbe, 0xef]),
+            Token::HexBytes(vec![0x01, 0x02, 0x03]),
+            Token::HexBytes(vec![0xff]),
+        ]
+    );
+}
+
+#[test]
+fn lex_rejects_malformed_hex_byte_literals() {
+    assert_eq!(
+        collect(r#"hex"0xabc""#),
+        vec![Token::Invalid(
+            "hex literal has odd number of digits: 3".into()
+        )]
+    );
+    assert_eq!(
+        collect(r#"hex"0xzz""#),
+        vec![Token::Invalid(
+            "hex literal contains non-hex digit `z`".into()
+        )]
+    );
+}

@@ -39,6 +39,10 @@ pub enum Token {
     Bool(bool),
     /// Decoded UTF-8 contents (no surrounding quotes).
     StrLit(String),
+    /// Compile-time parsed byte array literal, written as `hex"dead_beef"`.
+    HexBytes(Vec<u8>),
+    /// Lexer-level error token used for malformed prefixed literals.
+    Invalid(String),
     Colon,
     Comma,
     Semi,
@@ -143,6 +147,48 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn parse_hex_byte_string(raw: &str) -> Result<Vec<u8>, String> {
+        let body = raw
+            .strip_prefix("0x")
+            .or_else(|| raw.strip_prefix("0X"))
+            .unwrap_or(raw);
+        let mut digits = Vec::new();
+        for ch in body.chars() {
+            if ch == '_' {
+                continue;
+            }
+            if !ch.is_ascii_hexdigit() {
+                return Err(format!("hex literal contains non-hex digit `{ch}`"));
+            }
+            digits.push(ch);
+        }
+        if digits.len() % 2 != 0 {
+            return Err(format!(
+                "hex literal has odd number of digits: {}",
+                digits.len()
+            ));
+        }
+
+        let mut bytes = Vec::with_capacity(digits.len() / 2);
+        for pair in digits.chunks_exact(2) {
+            let hi = pair[0].to_digit(16).expect("validated hex digit");
+            let lo = pair[1].to_digit(16).expect("validated hex digit");
+            bytes.push(((hi << 4) | lo) as u8);
+        }
+        Ok(bytes)
+    }
+
+    /// Reads a `hex"..."` byte array literal; opening `"` already consumed.
+    fn lex_hex_bytes_literal(&mut self) -> Token {
+        let Token::StrLit(raw) = self.lex_string_literal() else {
+            unreachable!("string lexer always returns StrLit")
+        };
+        match Self::parse_hex_byte_string(&raw) {
+            Ok(bytes) => Token::HexBytes(bytes),
+            Err(msg) => Token::Invalid(msg),
+        }
+    }
+
     /// Appends decimal digits while allowing `_` only between two digits.
     ///
     /// Separators are omitted from `buf`, so the result can be parsed directly
@@ -206,6 +252,7 @@ impl<'a> Lexer<'a> {
     /// - Skips whitespace/comments first.
     /// - Parses decimal numeric literals with optional `_` digit separators.
     /// - Parses double-quoted string literals with escapes (`\\`, `\"`, `\n`, `\t`, `\r`, `\0`).
+    /// - Parses byte-array hex literals written as `hex"0xdead_beef"`.
     /// - Parses identifiers/keywords with ASCII alnum + `_` rule.
     /// - On unknown characters returns `Token::Eof` (simple fail-stop behavior).
     ///
@@ -362,6 +409,10 @@ impl<'a> Lexer<'a> {
                     } else {
                         break;
                     }
+                }
+                if s == "hex" && matches!(self.src.peek(), Some('"')) {
+                    self.src.next();
+                    return self.lex_hex_bytes_literal();
                 }
                 match s.as_str() {
                     "extern" => Token::Extern,

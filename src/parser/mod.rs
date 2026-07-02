@@ -1515,6 +1515,8 @@ impl Parser {
                 Token::Float(x) => Ok(Expr::Float(x)),
                 Token::Bool(b) => Ok(Expr::Bool(b)),
                 Token::StrLit(s) => Ok(Expr::String(s)),
+                Token::HexBytes(bytes) => Ok(Expr::HexBytes(bytes)),
+                Token::Invalid(msg) => Err(msg),
                 Token::Ident(first) => {
                     let mut segments = vec![first];
                     while matches!(self.peek(), Token::DoubleColon) {

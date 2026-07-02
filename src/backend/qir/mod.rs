@@ -424,6 +424,7 @@ fn collect_expr(
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::String(_)
+        | Expr::HexBytes(_)
         | Expr::Ident(_)
         | Expr::Spawn { .. }
         | Expr::EnumVariant { .. } => Ok(()),
